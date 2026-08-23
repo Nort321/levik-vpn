@@ -19,6 +19,14 @@ name: Android production release
         options:
           - blocked
           - approved-current-direct-play-identities
+      release_scope:
+        description: Build Direct only now, or Direct plus Play after Play Integrity is configured
+        required: true
+        default: direct-only
+        type: choice
+        options:
+          - direct-only
+          - direct-and-play
       changelog_en:
         description: Stable release notes in English
         required: true
@@ -37,7 +45,7 @@ concurrency:
 
 jobs:
   release:
-    name: Build signed Direct and Play release candidates
+    name: Build signed Android release candidate
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     environment: production-release
@@ -57,6 +65,7 @@ jobs:
         shell: bash
         env:
           SIGNING_IDENTITY_DECISION: ${{ inputs.signing_identity_decision }}
+          RELEASE_SCOPE: ${{ inputs.release_scope }}
           VERSION_CODE: ${{ inputs.version_code }}
           VERSION_NAME: ${{ inputs.version_name }}
           CHANGELOG_EN: ${{ inputs.changelog_en }}
@@ -80,6 +89,11 @@ jobs:
 
           if [[ "${SIGNING_IDENTITY_DECISION}" != "approved-current-direct-play-identities" ]]; then
             printf 'ERROR: production signing identity decision is still blocked.\n' >&2
+            exit 1
+          fi
+          if [[ "${RELEASE_SCOPE}" != "direct-only" &&
+                "${RELEASE_SCOPE}" != "direct-and-play" ]]; then
+            printf 'ERROR: invalid release scope.\n' >&2
             exit 1
           fi
           if [[ "${RELEASE_ACTOR}" != "${REPOSITORY_OWNER}" ]]; then
@@ -149,15 +163,19 @@ jobs:
             DIRECT_SIGNING_STORE_PASSWORD
             DIRECT_SIGNING_KEY_ALIAS
             DIRECT_SIGNING_KEY_PASSWORD
-            PLAY_SIGNING_KEYSTORE_BASE64
-            PLAY_SIGNING_STORE_PASSWORD
-            PLAY_SIGNING_KEY_ALIAS
-            PLAY_SIGNING_KEY_PASSWORD
             DIRECT_UPDATE_MANIFEST_PUBLIC_KEY
             DIRECT_UPDATE_SIGNING_CERTIFICATE_SHA256
             DIRECT_OTA_PRIVATE_KEY_PEM
-            PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER
           )
+          if [[ "${RELEASE_SCOPE}" == "direct-and-play" ]]; then
+            required_secrets+=(
+              PLAY_SIGNING_KEYSTORE_BASE64
+              PLAY_SIGNING_STORE_PASSWORD
+              PLAY_SIGNING_KEY_ALIAS
+              PLAY_SIGNING_KEY_PASSWORD
+              PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER
+            )
+          fi
           for secret_name in "${required_secrets[@]}"; do
             if [[ -z "${!secret_name}" ]]; then
               printf 'ERROR: protected environment value is missing: %s\n' "${secret_name}" >&2
@@ -168,7 +186,8 @@ jobs:
             printf 'ERROR: Direct signing certificate pin must be 64 hexadecimal characters.\n' >&2
             exit 1
           fi
-          if [[ ! "${PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+          if [[ "${RELEASE_SCOPE}" == "direct-and-play" &&
+                ! "${PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
             printf 'ERROR: Play Integrity Cloud project number is invalid.\n' >&2
             exit 1
           fi
@@ -178,11 +197,10 @@ jobs:
             printf 'NOTICE: repository is private; unauthenticated Direct OTA remains unavailable to installed apps.\n'
           fi
 
-      - name: Materialize protected signing inputs
+      - name: Materialize protected Direct signing inputs
         shell: bash
         env:
           DIRECT_SIGNING_KEYSTORE_BASE64: ${{ secrets.DIRECT_SIGNING_KEYSTORE_BASE64 }}
-          PLAY_SIGNING_KEYSTORE_BASE64: ${{ secrets.PLAY_SIGNING_KEYSTORE_BASE64 }}
           DIRECT_OTA_PRIVATE_KEY_PEM: ${{ secrets.DIRECT_OTA_PRIVATE_KEY_PEM }}
         run: |
           set -euo pipefail
@@ -190,11 +208,21 @@ jobs:
           mkdir -m 700 -- "${secret_directory}"
           printf '%s' "${DIRECT_SIGNING_KEYSTORE_BASE64}" |
             base64 --decode >"${secret_directory}/direct-release.keystore"
-          printf '%s' "${PLAY_SIGNING_KEYSTORE_BASE64}" |
-            base64 --decode >"${secret_directory}/play-release.keystore"
           printf '%s' "${DIRECT_OTA_PRIVATE_KEY_PEM}" \
             >"${secret_directory}/direct-update-private.pem"
           chmod 600 -- "${secret_directory}"/*
+
+      - name: Materialize protected Play signing input
+        if: inputs.release_scope == 'direct-and-play'
+        shell: bash
+        env:
+          PLAY_SIGNING_KEYSTORE_BASE64: ${{ secrets.PLAY_SIGNING_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          readonly play_keystore="${RUNNER_TEMP}/levik-release-secrets/play-release.keystore"
+          printf '%s' "${PLAY_SIGNING_KEYSTORE_BASE64}" |
+            base64 --decode >"${play_keystore}"
+          chmod 600 -- "${play_keystore}"
 
       - name: Set up JDK 17
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
@@ -245,17 +273,30 @@ jobs:
           LEVIK_UPDATE_MANIFEST_PUBLIC_KEY: ${{ secrets.DIRECT_UPDATE_MANIFEST_PUBLIC_KEY }}
           LEVIK_UPDATE_SIGNING_CERTIFICATE_SHA256: ${{ secrets.DIRECT_UPDATE_SIGNING_CERTIFICATE_SHA256 }}
           PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER: ${{ secrets.PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER }}
+          RELEASE_SCOPE: ${{ inputs.release_scope }}
         run: |
+          set -euo pipefail
+          build_tasks=(assembleDirectRelease)
+          if [[ "${RELEASE_SCOPE}" == "direct-and-play" ]]; then
+            build_tasks+=(bundlePlayRelease)
+          fi
           ./gradlew \
             --no-daemon \
             --stacktrace \
-            -Plevik.playIntegrityCloudProjectNumber="${PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER}" \
-            assembleDirectRelease \
-            bundlePlayRelease
+            -Plevik.playIntegrityCloudProjectNumber="${PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER:-0}" \
+            "${build_tasks[@]}"
 
       - name: Run release unit tests
         working-directory: levik_vpn_android
-        run: ./gradlew --no-daemon --stacktrace testDirectReleaseUnitTest testPlayReleaseUnitTest
+        env:
+          RELEASE_SCOPE: ${{ inputs.release_scope }}
+        run: |
+          set -euo pipefail
+          test_tasks=(testDirectReleaseUnitTest)
+          if [[ "${RELEASE_SCOPE}" == "direct-and-play" ]]; then
+            test_tasks+=(testPlayReleaseUnitTest)
+          fi
+          ./gradlew --no-daemon --stacktrace "${test_tasks[@]}"
 
       - name: Generate Gradle CycloneDX SBOM
         working-directory: levik_vpn_android
@@ -286,6 +327,7 @@ jobs:
           CHANGELOG_RU: ${{ inputs.changelog_ru }}
           DIRECT_UPDATE_MANIFEST_PUBLIC_KEY: ${{ secrets.DIRECT_UPDATE_MANIFEST_PUBLIC_KEY }}
           DIRECT_UPDATE_SIGNING_CERTIFICATE_SHA256: ${{ secrets.DIRECT_UPDATE_SIGNING_CERTIFICATE_SHA256 }}
+          RELEASE_SCOPE: ${{ inputs.release_scope }}
         run: |
           set -euo pipefail
           readonly output_directory="${RUNNER_TEMP}/levik-release-output"
@@ -306,12 +348,14 @@ jobs:
             printf 'ERROR: Direct APK package or version metadata does not match release inputs.\n' >&2
             exit 1
           fi
-          ./scripts/release/validate-play-bundle-metadata.sh \
-            "${play_aab}" \
-            com.leviknet.vpn \
-            "${VERSION_CODE}" \
-            "${VERSION_NAME}"
-          jarsigner -verify -strict "${play_aab}" >/dev/null
+          if [[ "${RELEASE_SCOPE}" == "direct-and-play" ]]; then
+            ./scripts/release/validate-play-bundle-metadata.sh \
+              "${play_aab}" \
+              com.leviknet.vpn \
+              "${VERSION_CODE}" \
+              "${VERSION_NAME}"
+            jarsigner -verify "${play_aab}" >/dev/null
+          fi
 
           ./scripts/release/generate-direct-update-manifest.sh \
             "${direct_apk}" \
@@ -325,7 +369,9 @@ jobs:
             "${DIRECT_UPDATE_MANIFEST_PUBLIC_KEY}" \
             "${output_directory}"
 
-          cp -- "${play_aab}" "${output_directory}/LevikVPN-play-${VERSION_NAME}.aab"
+          if [[ "${RELEASE_SCOPE}" == "direct-and-play" ]]; then
+            cp -- "${play_aab}" "${output_directory}/LevikVPN-play-${VERSION_NAME}.aab"
+          fi
           cp -- \
             "${RUNNER_TEMP}/levik-native-sbom/levik-vpn-native.cdx.json" \
             "${RUNNER_TEMP}/levik-native-sbom/levik-vpn-native.cdx.xml" \
@@ -369,6 +415,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION_NAME: ${{ inputs.version_name }}
+          RELEASE_SCOPE: ${{ inputs.release_scope }}
         run: |
           set -euo pipefail
           readonly release_tag="v${VERSION_NAME}"
@@ -382,7 +429,7 @@ jobs:
             --draft \
             --verify-tag \
             --title "Levik VPN ${VERSION_NAME}" \
-            --notes "Signed Direct and Play release candidates. Review every attached checksum, SBOM, source bundle, signing decision, and test result before any publication. Direct OTA will not work for unauthenticated installed apps while this repository remains private."
+            --notes "Signed ${RELEASE_SCOPE} release candidate. Review every attached checksum, SBOM, source bundle, signing decision, and test result before publication. Direct OTA will not work for unauthenticated installed apps while this repository remains private."
 
       - name: Remove protected signing inputs
         if: always()
