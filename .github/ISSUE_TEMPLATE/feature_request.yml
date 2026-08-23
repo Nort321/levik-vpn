@@ -1,47 +1,46 @@
-name: Feature request
-description: Propose a scoped product or engineering improvement.
+name: Предложение функции (Feature Request)
+description: Предложите улучшение или новую возможность для приложения.
 title: "feat: "
 body:
   - type: dropdown
     id: component
     attributes:
-      label: Component
+      label: Компонент
       options:
-        - Web application
-        - Android application
-        - Database or server behavior
-        - Deployment or observability
-        - Repository tooling or documentation
-        - Cross-component contract
+        - Android-приложение (Levik VPN)
+        - VPN-протоколы и маршрутизация
+        - Авторизация и безопасность
+        - Пользовательский интерфейс (UI/UX)
+        - Инструменты сборки и CI/CD
     validations:
       required: true
   - type: textarea
     id: problem
     attributes:
-      label: Problem
-      description: Describe the user or operational problem without prescribing implementation.
+      label: Проблема или потребность
+      description: Опишите пользовательскую задачу или проблему, которую необходимо решить.
     validations:
       required: true
   - type: textarea
     id: outcome
     attributes:
-      label: Desired outcome
-      description: State observable acceptance criteria.
+      label: Ожидаемый результат
+      description: Каким должен быть результат реализации фичи.
     validations:
       required: true
   - type: textarea
     id: constraints
     attributes:
-      label: Constraints and risks
-      description: Note compatibility, privacy, security, performance, migration, or release constraints.
+      label: Ограничения и риски
+      description: Укажите требования к совместимости, безопасности или производительности.
   - type: textarea
     id: alternatives
     attributes:
-      label: Alternatives considered
+      label: Рассмотренные альтернативы
   - type: checkboxes
     id: confirmation
     attributes:
-      label: Confirmation
+      label: Подтверждение
       options:
-        - label: This request contains no credentials, personal data, or private infrastructure details.
+        - label: Предложение не содержит секретов, личных данных или приватных адресов.
           required: true

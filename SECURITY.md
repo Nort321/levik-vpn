@@ -1,58 +1,46 @@
-# Security Policy
+# Политика безопасности (Security Policy)
 
-## Supported scope
+## Область действия
 
-Security fixes apply to the latest maintained Android source revision and to
-release lines explicitly identified as supported in release notes. Root policy,
-dependency-fetch, and release-governance files are also in scope.
+Исправления безопасности применяются к актуальной поддерживаемой версии исходного кода Android-клиента и к релизным веткам, явно указанным как поддерживаемые в описании релизов. Правила репозитория, механизмы загрузки зависимостей и скрипты релизного процесса также входят в область действия.
 
-The website, backend, mobile BFF, bot, bridge, deployment infrastructure,
-production data, local backups, and untracked binaries are not included in this
-repository. References to external API behavior in Android code are contracts
-consumed by the client, not proof that the corresponding service source is
-present or covered by this policy.
+Веб-сайт, серверная часть, Mobile BFF, Telegram-бот, bridge-сервисы, инфраструктура развертывания, производственные данные, локальные резервные копии и неотслеживаемые бинарные файлы не входят в состав этого репозитория. Ссылки на внешние API в коде Android представляют собой клиентские контракты взаимодействия, а не исходный код соответствующих сервисов.
 
-## Reporting a vulnerability
+## Сообщение об уязвимости
 
-Do not place vulnerability details in a public issue. Use the repository's
-private GitHub security-advisory channel when it is enabled. Otherwise contact
-the maintainer through a previously verified private channel and request a
-secure reporting method before sending technical evidence.
+Пожалуйста, **не публикуйте** информацию об уязвимостях в открытых GitHub Issues. Используйте приватные уведомления о безопасности GitHub (Security Advisories), если они включены для репозитория. В противном случае свяжитесь с мейнтейнером через проверенный приватный канал связи и запросите безопасный способ передачи технических деталей.
 
-Do not include credentials, tokens, signing keys, session material, user data,
-VPN profiles, production host details, or complete production logs in the
-initial report. Provide the affected Android version or source revision,
-impact, prerequisites, and minimal reproduction steps. Sensitive evidence must
-use the agreed private channel.
+**В первичном отчете не должны содержаться**:
+- Пароли, токены, приватные ключи подписи, сессионные данные
+- Персональные данные пользователей или конфигурации рабочих VPN-профилей
+- Адреса и учетные данные производственных серверов, полные production-логи
 
-Maintainers coordinate validation, remediation, and disclosure on a
-best-effort basis. No public bounty or response-time SLA is offered unless a
-separate written program states otherwise.
+Укажите затронутую версию Android-приложения или хэш коммита, степень влияния, предварительные условия и минимальные шаги для воспроизведения проблемы. Конфиденциальные доказательства передавайте только по согласованному приватному каналу.
 
-## Credential exposure
+Мейнтейнеры координируют проверку, исправление и раскрытие информации по мере возможностей. Публичные вознаграждения (bug bounty) и SLA по времени ответа не предоставляются, если иное не установлено отдельной письменной программой.
 
-Treat a credential pasted into chat, logs, source, an issue, a build artifact,
-or broadly readable storage as compromised. Deleting the visible value is not
-sufficient: revoke or rotate it, invalidate affected sessions, review access,
-and remove it from retained artifacts and Git history before any publication.
+## Утечка учетных данных и секретов
 
-Repository examples contain names and placeholders only. Signing material and
-production values belong in an approved secrets system. Pull-request workflows
-must not receive release signing or production credentials.
+Любые учетные данные, попавшие в чат, логи, исходный код, задачи, артефакты сборки или общедоступные хранилища, считаются скомпрометированными. Простого удаления видимого значения недостаточно:
+1. Немедленно отзовите или ротируйте скомпрометированный ключ/токен.
+2. Аннулируйте затронутые активные сессии.
+3. Проведите аудит прав доступа.
+4. Удалите секреты из артефактов и истории Git до публикации.
 
-## Security-sensitive changes
+Примеры в репозитории содержат исключительно шаблоны и плейсхолдеры. Ключи подписи и производственные секреты должны храниться исключительно в защищенном хранилище секретов CI. Ворклоу для pull request не должны иметь доступа к production-секретам и ключам подписи релизов.
 
-Changes to Android Keystore use, request signing, profile encryption, VPN
-configuration, `VpnService`, native/JNI integration, update verification, Play
-Integrity handling, release signing, dependency acquisition, CI permissions,
-or secret handling require explicit security and recovery analysis in the pull
-request.
+## Изменения, чувствительные к безопасности
 
-Client checks cannot make the device authoritative for authentication,
-entitlement, revocation, or integrity decisions. A compromised device can
-observe runtime VPN configuration; external services must enforce their own
-authorization and lifetime controls independently.
+Любые изменения, затрагивающие:
+- Использование Android Keystore и подпись запросов
+- Шифрование локальных профилей и конфигурацию VPN
+- Работу `VpnService` и нативную JNI-интеграцию (`libXray`)
+- Проверку целостности и подписи OTA-обновлений
+- Обработку Google Play Integrity
+- Подпись релизных сборок, загрузку зависимостей и права CI
 
-Third-party vulnerabilities should also be reported to the relevant upstream
-project when appropriate. This repository's license does not change upstream
-security or disclosure policies.
+требуют явного описания аспектов безопасности и сценариев восстановления в описании pull request.
+
+Клиентские проверки не могут делать мобильное устройство доверенным источником для принятия решений об аутентификации, подписке, отзыве прав или целостности. Скомпрометированное устройство может получить доступ к рабочей конфигурации VPN во время выполнения; внешние серверные сервисы обязаны независимо применять собственные механизмы авторизации и контроля времени жизни сессий.
+
+Об уязвимостях в сторонних компонентах также следует сообщать разработчикам соответствующих upstream-проектов. Лицензия данного репозитория не изменяет политики безопасности сторонних проектов.

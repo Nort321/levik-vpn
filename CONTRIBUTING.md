@@ -1,36 +1,25 @@
-# Contributing
+# Руководство по внесению изменений (Contributing)
 
-Changes must be narrowly scoped, reviewable, and safe for an Android
-production project. Do not combine unrelated refactors with a feature, fix, or
-release change.
+Все предлагаемые изменения должны иметь четкую область действия, легко проходить ревью и быть безопасными для Android production-проекта. Не объединяйте несвязанные рефакторинги с добавлением фич, исправлениями багов или релизными изменениями.
 
-## Repository scope
+## Область репозитория
 
-Contributions may change the Android project under `levik_vpn_android/` and the
-root policy, CI-support, governance, or Android documentation files needed to
-maintain it.
+Вклад участников может затрагивать Android-проект в `levik_vpn_android/`, а также корневые политики безопасности, CI-скрипты и документацию, необходимую для сопровождения приложения.
 
-Do not add `levik_vpn_landing/` or any website, backend, mobile BFF, bot,
-bridge, database, deployment snapshot, production configuration, credential,
-session, or backup material. Those components are outside this Android-only
-repository and are not made open source by being present elsewhere on a local
-machine.
+Не добавляйте в коммиты `levik_vpn_landing/`, а также файлы веб-сайта, бэкенда, Mobile BFF, Telegram-бота, баз данных, производственных конфигураций, учетных данных, сессий или бэкапов. Эти компоненты вынесены за пределы данного Android-репозитория.
 
-Before making a change:
+Перед внесением изменений:
 
-1. Read `README.md`, `SECURITY.md`, and the relevant document under `docs/`.
-2. Follow the existing Kotlin, Compose, Gradle, validation, and error-handling
-   patterns.
-3. Check for an existing component or utility before adding another one.
-4. Keep signing material, local configuration, profiles, account state, and
-   generated binaries outside Git.
+1. Ознакомьтесь с `README.md`, `SECURITY.md` и соответствующими документами в `docs/`.
+2. Следуйте принятым в проекте паттернам Kotlin, Jetpack Compose, Gradle, валидации данных и обработки ошибок.
+3. Проверяйте наличие существующих компонентов и утилит перед добавлением новых.
+4. Храните ключи подписи, локальные профили, сессии и сгенерированные бинарные файлы вне Git.
 
-## Validation
+## Проверка и валидация
 
-Use JDK 17, Android SDK 36, and the committed Gradle wrapper. Obtain the pinned
-native input through the repository downloader, then run checks in this order:
+Для сборки используйте JDK 17, Android SDK 36 и Gradle Wrapper из репозитория. Загрузите зафиксированное нативное ядро через загрузчик репозитория и выполните проверки в следующем порядке:
 
-```text
+```bash
 ./scripts/ci/fetch-libxray.sh
 cd levik_vpn_android
 ./gradlew lintDirectDebug lintPlayDebug
@@ -38,56 +27,37 @@ cd levik_vpn_android
 ./gradlew testDirectDebugUnitTest testPlayDebugUnitTest
 ```
 
-From the repository root also run:
+Из корня репозитория также выполните:
 
-```text
+```bash
 ./scripts/ci/check-repository-policy.sh
 ./scripts/ci/check-action-pins.sh
 ```
 
-If a check cannot run, explain why in the pull request. Do not hide failures,
-weaken assertions, or delete tests to make a change pass.
+Если какую-то проверку невозможно запустить локально, укажите причину в описании pull request. Не скрывайте ошибки сборки, не ослабляйте утверждения тестов и не удаляйте тесты для прохождения CI.
 
-## Change requirements
+## Требования к коду
 
-- Preserve strict typing and explicit error handling; do not suppress compiler
-  or lint diagnostics without a documented reason.
-- Validate external API and native-library data at the boundary.
-- Keep Android UI, state, networking, cryptography, storage, and VPN lifecycle
-  responsibilities separated according to existing architecture.
-- Add or update tests for logic, validation, persistence, and critical edge
-  cases.
-- Do not add a dependency when the Android platform or existing dependency set
-  already provides the capability.
-- Do not commit APK/AAB/AAR files, signing files, generated source, caches, or
-  local backups.
-- Update architecture, release, security, signing, and third-party notices when
-  a change affects those contracts.
+- Сохраняйте строгую типизацию и явную обработку ошибок; не подавляйте предупреждения компилятора или linter без задокументированной причины.
+- Валидируйте все входящие данные от внешних API и нативных библиотек на границе слоев.
+- Разделяйте ответственность между UI, состоянием, сетевым взаимодействием, криптографией, хранилищем данных и жизненным циклом VPN в соответствии с архитектурой.
+- Добавляйте или обновляйте юнит-тесты для бизнес-логики, валидации, персистентности и критических краевых случаев.
+- Не добавляйте внешние зависимости, если стандартные средства Android SDK или уже подключенные библиотеки решают задачу.
+- Никогда не коммитьте файлы `.apk`, `.aab`, `.aar`, ключи подписи, кэши или локальные резервные копии.
+- Обновляйте документы по архитектуре, релизам, безопасности и уведомления сторонних лицензий при изменении соответствующих контрактов.
 
-A production release additionally requires verified libXray input, production
-signing without debug fallback, certificate verification, an SBOM, complete
-notices and corresponding source, checksums, provenance, and closed-track test
-evidence.
+## Коммиты и Pull Requests
 
-## Commits and pull requests
-
-Use Conventional Commits:
+Используйте формат Conventional Commits:
 
 ```text
-type(scope): concise description
+тип(область): краткое описание изменений
 ```
 
-Examples include `fix(android): reject expired device grants` and
-`test(vpn): cover service restart recovery`.
+Примеры: `fix(android): reject expired device grants` или `test(vpn): cover service restart recovery`.
 
-Pull requests must explain the behavior change, risk, compatibility or recovery
-considerations, and checks performed. Screenshots or recordings are required
-for material UI changes. Never paste secrets, personal data, production logs,
-or private infrastructure details into commits, issues, or pull requests.
+В описании Pull Request обязательно укажите: суть изменений, потенциальные риски, соображения обратной совместимости и выполненные проверки. Для заметных изменений в интерфейсе прикладывайте скриншоты или видеозаписи. Никогда не вставляйте секреты, персональные данные, production-логи или внутренние адреса инфраструктуры в коммиты или PR.
 
-## Licensing
+## Лицензирование
 
-By contributing original code, you agree that it is licensed under
-`AGPL-3.0-only` unless the file clearly states another license and the project
-owner has approved that exception. Identify third-party material and preserve
-its notices; you cannot relicense material you do not own.
+Внося оригинальный код в проект, вы соглашаетесь с тем, что он лицензируется на условиях **AGPL-3.0-only**, если в файле явно не указана иная лицензия, согласованная с владельцем проекта. Обязательно указывайте сторонние заимствованные материалы и сохраняйте их лицензионные уведомления.

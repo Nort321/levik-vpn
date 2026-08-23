@@ -1,29 +1,20 @@
-# Code of Conduct
+# Кодекс поведения (Code of Conduct)
 
-## Our standard
+## Наши стандарты
 
-Project participation must be professional, respectful, and focused on the
-technical work. Contributors are expected to:
+Участие в проекте должно быть профессиональным, уважительным и сосредоточенным на технической работе. От участников ожидается:
 
-- discuss ideas and review code without personal attacks;
-- assume good faith while still asking for evidence and clear reasoning;
-- accept constructive feedback and correct mistakes openly;
-- protect private user, contributor, and infrastructure information;
-- make room for different experience levels, backgrounds, and perspectives;
-- avoid harassment, discrimination, threats, sexualized conduct, stalking, and
-  deliberate disruption.
+- Обсуждение идей и ревью кода без перехода на личности и оскорблений.
+- Презумпция добросовестности с сохранением требований к аргументации и доказательствам.
+- Конструктивное восприятие обратной связи и открытое исправление ошибок.
+- Защита конфиденциальных данных пользователей, участников и инфраструктуры.
+- Уважение к различному уровню опыта, бэкграунду и точкам зрения.
+- Недопущение преследования, дискриминации, угроз, нежелательного внимания и намеренного срыва работы сообщества.
 
-These expectations apply in repository discussions, reviews, project chat,
-release coordination, and other spaces where someone represents the project.
+Эти правила действуют во всех обсуждениях репозитория, код-ревью, проектных чатах, координации релизов и других пространствах, где участники представляют проект.
 
-## Enforcement
+## Соблюдение правил
 
-Report conduct concerns privately to the repository owner or maintainers. Do
-not publish sensitive evidence in an issue. Maintainers may edit or remove
-content, issue a warning, restrict participation, or permanently remove someone
-from project spaces when needed to protect participants and the project.
+О нарушениях кодекса поведения сообщайте приватно владельцу репозитория или мейнтейнерам. Не публикуйте конфиденциальные данные в открытых задачах (Issues). Мейнтейнеры вправе редактировать или удалять неприемлемый контент, выносить предупреждения, ограничивать участие или исключать нарушителей из пространств проекта для защиты участников и сообщества.
 
-Reports will be handled as confidentially as practical. Retaliation against a
-reporter or participant in an investigation is itself a violation. Enforcement
-decisions should be proportionate, documented privately, and free of conflicts
-of interest.
+Обращения рассматриваются с максимальной практической конфиденциальностью. Любые ответные меры против заявителя или участников расследования являются самостоятельным нарушением. Решения принимаются соразмерно нарушению и без конфликта интересов.
