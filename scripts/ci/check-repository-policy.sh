@@ -56,10 +56,7 @@ while IFS= read -r -d '' path; do
   fi
 
   case "${path}" in
-    levik_vpn_landing|levik_vpn_landing/*)
-      reject_path "${path}" "website and server files are outside the Android-only repository scope"
-      ;;
-    .env.example|.env.*.example|*.env.example|*.env.template|*/.env.example|*/.env.*.example|*/secrets/README.md|*/secrets/*.example)
+    .env.example|.env.*.example|*.env.example|*.env.template|*/.env.example|*/.env.*.example|*/secrets/README.md|*/secrets/*.example|*/config.example.json|config.example.json)
       ;;
     .env|.env.*|*/.env|*/.env.*|*/secrets/*)
       reject_path "${path}" "environment or secret material"
