@@ -17,6 +17,8 @@ required_literals=(
   'environment: production-release'
   'cancel-in-progress: false'
   'signing_identity_decision:'
+  'release_scope:'
+  'direct-only'
   'approved-current-direct-play-identities'
   'refs/tags/${release_tag}'
   'refs/remotes/origin/main'
