@@ -1,78 +1,116 @@
-# LevikVPN Monorepo
+# 🛡️ Levik VPN — Быстрый, стабильный и безопасный доступ в интернет
 
-Production monorepo for LevikVPN, containing the native Android client, Next.js web cabinet and mobile BFF, Telegram bridge service, and CI/CD release automation.
+<p align="center">
+  <img src="levik_vpn_landing/public/assets/levik-logo.png" alt="Levik VPN Logo" width="120" height="120" />
+</p>
 
-## Project Structure
+<p align="center">
+  <b>Современный VPN нового поколения, который работает там, где другие бессильны.</b><br/>
+  Без рекламы, без сбора данных, с надежной защитой на мобильных и домашних сетях.
+</p>
 
-- `levik_vpn_android/`: Native Android application built with Kotlin and Jetpack Compose.
-  - **`direct` flavor**: Independent distribution build with cryptographic GitHub Releases OTA updater and web billing links.
-  - **`play` flavor**: Google Play compliance build (consumption-only, zero Play Billing dependencies, no in-app payment links/buttons, hardware-backed Play Integrity verification).
-- `levik_vpn_landing/`: Next.js 16 (App Router) web application, user cabinet, legal pages, and mobile BFF.
-  - Independent Levik Account model with Sign in with Google (`sub`-based), WebAuthn Passkeys, Levik ID + Argon2id passwords, and single-use Recovery Codes.
-  - Mobile activation device challenge flow (`/activate`).
-  - Account security management, sessions, active devices, and account deletion (`/account/delete`).
-  - Zero email dependency (support tickets and recovery operate without SMTP).
-- `levik_vpn_bridge/`: Python / aiogram / aiohttp integration service connecting the web cabinet, mobile activations, and Telegram identities with the Remnawave VPN core.
-- `scripts/`: CI validation and release automation scripts.
-- `docs/`: Architecture documentation, security model, Android signing policy, and release process.
+<p align="center">
+  <a href="https://leviknet.com"><img src="https://img.shields.io/badge/Сайт-leviknet.com-blue?style=flat-square&logo=googlechrome&logoColor=white" alt="Website" /></a>
+  <a href="https://t.me/levikvpnbot"><img src="https://img.shields.io/badge/Telegram_Бот-@levikvpnbot-2CA5E0?style=flat-square&logo=telegram&logoColor=white" alt="Telegram Bot" /></a>
+  <a href="https://t.me/leviksupportbot"><img src="https://img.shields.io/badge/Поддержка-@leviksupportbot-24A1DE?style=flat-square&logo=telegram&logoColor=white" alt="Support" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/Лицензия-AGPL--3.0-green?style=flat-square" alt="License" /></a>
+</p>
 
-## Architecture & Security Principles
+---
 
-1. **Independent Identity (Levik Account)**:
-   - Accounts are identified by canonical internal UUIDs (`account_id`).
-   - Telegram and Google serve as optional attached identities rather than primary keys.
-   - Recovery without email via high-entropy cryptographic recovery codes and passkeys.
-2. **Compile-Time Flavor Separation**:
-   - `play` build excludes `REQUEST_INSTALL_PACKAGES`, updater logic, payment routes, and billing libraries at compile time.
-   - `direct` build verifies signed update manifests (`SHA256withECDSA` P-256) and APK signing certificate fingerprints before triggering installation.
-3. **Hardened Keystore & Cryptography**:
-   - Android client signs device requests using hardware-backed Android Keystore keys (RS256/ECDSA).
-   - Local VPN profiles are encrypted with Keystore keys before persisting to disk.
-4. **Server Security**:
-   - Production servers operate with password authentication disabled (Ed25519 SSH keys only).
-   - Least-privilege database roles and isolated Docker bridge networks.
+## 🌟 Почему выбирают Levik VPN?
 
-## Local Validation
+Большинство привычных VPN-сервисов страдают от постоянных сбоев, блокировок протоколов провайдерами и медленной скорости в мобильных сетях (LTE/4G). **Levik VPN** создан для того, чтобы интернет оставался быстрым, свободным и надежным в любой ситуации.
 
-### 1. Repository Policy & Linting
+### 🚀 Работает даже при жестких ограничениях
+Мы используем передовые устойчивые протоколы маскировки трафика (**VLESS / Reality**), которые невозможно отличить от обычного зашифрованного веб-серфинга (HTTPS). Соединение не «залипает» и не сбрасывается мобильными операторами.
+
+### 📱 Умная Мультиподписка — один ключ для всех устройств
+- **Обычный безлимитный режим** для домашнего интернета, Wi-Fi и компьютеров: скачивайте файлы, смотрите YouTube в 4K и стримы без ограничений.
+- **Выделенный мобильный режим** для поездок и нестабильного LTE/4G: гарантированная отзывчивость и быстрая загрузка нужных сервисов.
+- **До 5 устройств** на одной подписке: телефон, планшет, ноутбук и роутер.
+
+### ⚡ Высокая скорость и низкий пинг
+Серверы расположены на быстрых 1–10 Гбит/с каналах в проверенных европейских дата-центрах (**Германия, Швеция, Финляндия, Нидерланды** и др.). Идеально подходит для:
+- 🎬 Просмотра видео в максимальном качестве (YouTube, Twitch, онлайн-кинотеатры)
+- 🎮 Онлайн-игр и голосовых звонков (Discord, Telegram, WhatsApp)
+- 💼 Работы с зарубежными сервисами и удаленными серверами
+
+### 🔒 Полная приватность и защита (No-Logs Policy)
+- **Строгая политика без логов**: мы не сохраняем историю посещений, DNS-запросы и IP-адреса.
+- **Шифрование военного уровня**: весь трафик защищен сквозным шифрованием. Вы в полной безопасности даже в открытых публичных Wi-Fi сетях (кафе, метро, аэропорты).
+- **Независимый аккаунт**: вам не нужно оставлять свою электронную почту или телефон. Вход доступен по Passkeys (отпечатку пальца / Face ID), Google или защищенному коду.
+
+### 💬 Бесплатный вход в Telegram (MTProto Proxy)
+Если мессенджер не загружается или заблокирован у оператора, Levik VPN предоставляет бесплатный встроенный Telegram Proxy, позволяющий зайти в Telegram и активировать VPN в один клик.
+
+---
+
+## 📲 Поддерживаемые платформы
+
+Levik VPN работает на всех популярных устройствах и операционных системах:
+
+| Платформа | Способ подключения | Описание |
+| :--- | :--- | :--- |
+| **Android** | Фирменное приложение **Levik VPN** или клиенты Happ / v2rayNG | Удобный переключатель, автоподключение, защита в фоне без нагрева батареи |
+| **iOS / iPadOS** | Happ / FoXray / Streisand / V2Box | Подключение через личный кабинет или бота за 1 минуту по QR-коду |
+| **Windows** | Hiddify / Nekoray / v2rayN | Полноценный туннель для всего ПК или отдельных приложений |
+| **macOS** | Happ / FoXray / Hiddify / V2Box | Быстрая работа на процессорах Apple Silicon (M1/M2/M3/M4) и Intel |
+| **Linux / Роутеры** | Sing-box / Xray-core / OpenWrt | Настройка для всей домашней сети без необходимости ставить VPN на каждый гаджет |
+
+---
+
+## 🚀 Как начать пользоваться?
+
+Подключение занимает меньше двух минут:
+
+1. **Зайдите в личный кабинет или Telegram-бот**:
+   - На сайте: [leviknet.com](https://leviknet.com)
+   - В Telegram: [@levikvpnbot](https://t.me/levikvpnbot)
+2. **Получите тестовый период или выберите тариф**:
+   - Оцените скорость и стабильность в бесплатном пробном периоде.
+   - Оплата российскими картами (МИР, Visa, Mastercard, СБП) и другими удобными способами.
+3. **Нажмите одну кнопку для подключения**:
+   - Скачайте приложение для вашего устройства, нажмите «Подключить» по ссылке или отсканируйте QR-код.
+
+---
+
+## 🛠️ Полезные ссылки и сервисы экосистемы
+
+- 🌐 **Официальный сайт и Кабинет**: [leviknet.com](https://leviknet.com)
+- 🤖 **Telegram-бот**: [@levikvpnbot](https://t.me/levikvpnbot)
+- 💬 **Круглосуточная поддержка**: [@leviksupportbot](https://t.me/leviksupportbot)
+- 🔍 **Проверка IP и сетевой диагностический монитор**: [check.leviknet.com](https://check.leviknet.com)
+- 📜 **Политика конфиденциальности**: [leviknet.com/legal/privacy](https://leviknet.com/legal/privacy)
+- 📄 **Условия использования**: [leviknet.com/legal/terms](https://leviknet.com/legal/terms)
+
+---
+
+## 💻 Для разработчиков и энтузиастов
+
+Levik VPN придерживается принципов открытости и прозрачности. В этом репозитории опубликован исходный код основных модулей экосистемы:
+- `levik_vpn_android/` — Нативный Android-клиент на Kotlin и Jetpack Compose с интеграцией аппаратного Keystore и VpnService.
+- `levik_vpn_landing/` — Веб-сайт, личный кабинет пользователя и Mobile BFF на Next.js 16.
+- `levik_vpn_bridge/` — Сервис интеграции Telegram-бота и API личного кабинета на Python 3.12 (aiogram / aiohttp).
+
+### Сборка и запуск тестов:
 ```bash
+# Проверка политик репозитория и workflow-пинов
 ./scripts/ci/check-repository-policy.sh
 ./scripts/ci/check-action-pins.sh
-./scripts/ci/check-android-release-workflow.sh
+
+# Тестирование веб-части
+cd levik_vpn_landing && npm test && npm run lint
+
+# Тестирование bridge-сервиса
+cd ../levik_vpn_bridge && pytest tests
+
+# Сборка Android-клиента
+cd ../levik_vpn_android && ./gradlew assembleDirectDebug assemblePlayDebug
 ```
 
-### 2. Web Application (Landing / Cabinet / BFF)
-```bash
-cd levik_vpn_landing
-npm ci
-npm run lint
-npm run typecheck
-npm test
-npm run build
-```
+---
 
-### 3. Bridge Service
-```bash
-cd levik_vpn_bridge
-pip install -r requirements.txt pytest
-PYTHONPATH=. pytest tests
-```
+## 📄 Лицензия
 
-### 4. Android Client
-Use JDK 17 and Android SDK 36:
-```bash
-./scripts/ci/fetch-libxray.sh
-cd levik_vpn_android
-./gradlew verifyAllDependencyLocks
-./gradlew lintDirectDebug lintPlayDebug
-./gradlew assembleDirectDebug assemblePlayDebug
-./gradlew testDirectDebugUnitTest testPlayDebugUnitTest
-```
-
-## Releases
-
-Release workflows are automated via GitHub Actions using the protected `production-release` environment with manual approval gates. See [`docs/release-process.md`](docs/release-process.md) and [`docs/android-signing.md`](docs/android-signing.md).
-
-## Licensing
-
-Original source code in this repository is licensed under `AGPL-3.0-only`. Third-party dependencies and native libraries maintain their respective open-source licenses. See [`LICENSE`](LICENSE) and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+Исходный код проекта распространяется под свободной лицензией **GNU AGPLv3**. Подробности в файле [LICENSE](LICENSE).
