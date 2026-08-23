@@ -89,7 +89,10 @@ readonly EVIDENCE_DIRECTORY="${BUNDLE_ROOT}/evidence"
 readonly TEMPORARY_ARCHIVE="${TEMPORARY_DIRECTORY}/${OUTPUT_NAME}"
 
 cleanup() {
-  rm -rf -- "${TEMPORARY_DIRECTORY}"
+  # Go deliberately makes module-cache files read-only. Restore owner write
+  # permission so cleanup cannot turn an otherwise valid release into a failure.
+  chmod -R u+w -- "${TEMPORARY_DIRECTORY}" 2>/dev/null || true
+  rm -rf -- "${TEMPORARY_DIRECTORY}" || true
 }
 trap cleanup EXIT
 
