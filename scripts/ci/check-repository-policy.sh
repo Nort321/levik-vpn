@@ -56,7 +56,10 @@ while IFS= read -r -d '' path; do
   fi
 
   case "${path}" in
-    .env.example|.env.*.example|*.env.example|*.env.template|*/.env.example|*/.env.*.example|*/secrets/README.md|*/secrets/*.example|*/config.example.json|config.example.json)
+    levik_vpn_landing|levik_vpn_landing/*|levik_vpn_bridge|levik_vpn_bridge/*)
+      reject_path "${path}" "website, backend, and bridge files are outside the Android-only repository scope"
+      ;;
+    .env.example|.env.*.example|*.env.example|*.env.template|*/.env.example|*/.env.*.example|*/secrets/README.md|*/secrets/*.example)
       ;;
     .env|.env.*|*/.env|*/.env.*|*/secrets/*)
       reject_path "${path}" "environment or secret material"

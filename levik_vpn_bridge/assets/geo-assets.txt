@@ -1,6 +1,0 @@
-Upstream: https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest
-Levik Shield RU source: https://raw.githubusercontent.com/AdguardTeam/FiltersRegistry/master/filters/filter_1_Russian/filter.txt
-Levik Shield RU domains: 1910
-Updated: 2026-08-14T11:59:46Z
-geoip.dat sha256: 53dc90b50877d2ed974ea81fb0fbdcbac84e189c0ac7fdcab7a966bb5e36b6e6
-geosite.dat sha256: ebc15bdc70be0289085743bb453da08122b8dd735a2ec054680b5a6350844f98

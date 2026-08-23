@@ -13,8 +13,11 @@
 .agents/
 .codegraph/
 
-# Runtime and local state for bridge and landing
-/levik_vpn_bridge/data/
+# Repository scope: the website and bridge worktrees are not part of this
+# Android-only repository
+/levik_vpn_landing/
+/levik_vpn_bridge/
+
 
 
 # Environment files and secrets
