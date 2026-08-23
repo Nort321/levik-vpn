@@ -1,0 +1,71 @@
+name: Bug report
+description: Report a reproducible problem in a supported repository component.
+title: "bug: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report vulnerabilities or include credentials, account sessions,
+        personal data, production logs, or private infrastructure details here.
+        Follow SECURITY.md for security reports.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Web application
+        - Android application
+        - Database migration
+        - Caddy or Docker Compose
+        - Monitoring or maintenance worker
+        - Repository tooling or documentation
+        - External bridge dependency
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or source revision
+      description: Use a release version or commit identifier; do not paste a private URL.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Provide relevant OS, browser, device, or runtime versions without host credentials.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest deterministic reproduction with sensitive values replaced.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Redacted evidence
+      description: Include only the minimum safe logs or screenshots needed to diagnose the issue.
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmation
+      options:
+        - label: I removed secrets, sessions, personal data, and private infrastructure details.
+          required: true
+        - label: This is not a vulnerability report.
+          required: true

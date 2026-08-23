@@ -1,0 +1,47 @@
+name: Feature request
+description: Propose a scoped product or engineering improvement.
+title: "feat: "
+body:
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Web application
+        - Android application
+        - Database or server behavior
+        - Deployment or observability
+        - Repository tooling or documentation
+        - Cross-component contract
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the user or operational problem without prescribing implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: State observable acceptance criteria.
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints and risks
+      description: Note compatibility, privacy, security, performance, migration, or release constraints.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Confirmation
+      options:
+        - label: This request contains no credentials, personal data, or private infrastructure details.
+          required: true

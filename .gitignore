@@ -1,0 +1,104 @@
+# Operating-system and editor files
+.DS_Store
+._*
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+*~
+
+# Local agent and index state
+.codex/
+.agents/
+.codegraph/
+
+# Repository scope: the website and server worktree is not part of this
+# Android-only repository
+/levik_vpn_landing/
+
+# Environment files and secrets
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.*.example
+!**/*.env.template
+**/secrets/*
+!**/secrets/README.md
+!**/secrets/*.example
+
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.mobileprovision
+keystore.properties
+local.properties
+**/*service-account*.json
+**/*credentials*.json
+**/config.json
+!**/config.example.json
+
+# Runtime, account, and database state
+**/*.session
+**/*.session-journal
+**/tdata/
+**/*.sqlite
+**/*.sqlite-*
+**/*.sqlite3
+**/*.sqlite3-*
+**/*.dump
+**/*.sql.gz
+**/*.rdb
+
+# JavaScript and Next.js output
+**/node_modules/
+**/.next/
+**/coverage/
+**/*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Android and Gradle output
+**/.gradle/
+**/.kotlin/
+**/build/
+**/.cxx/
+**/.externalNativeBuild/
+**/captures/
+**/*.aar
+**/*.apk
+**/*.aab
+**/*.apks
+**/mapping.txt
+**/native-debug-symbols*/
+**/*.symbols.zip
+**/dist/
+
+# Python output
+**/venv/
+**/.venv/
+**/__pycache__/
+**/.pytest_cache/
+**/.ruff_cache/
+*.py[cod]
+
+# Temporary and backup material
+/.secure-backups/
+*.bak
+*.bak-*
+*.orig
+*.tmp
+/tmp/
+/temp/
+
+# Historical service snapshots must be sanitized into a canonical source tree
+/primary_bot_patch/
+/tg_inviter/
+
+# CI obtains and verifies the pinned Android native dependency
+/levik_vpn_android/app/libs/*
+!/levik_vpn_android/app/libs/README.md
