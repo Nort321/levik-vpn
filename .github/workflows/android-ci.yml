@@ -1,0 +1,103 @@
+name: Android CI
+
+"on":
+  pull_request:
+    branches: [main, dev]
+  push:
+    branches: [main, dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    name: Android checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          cache-provider: basic
+          cache-read-only: ${{ github.event_name == 'pull_request' || github.ref != 'refs/heads/main' }}
+
+      - name: Fetch and verify libXray
+        run: ./scripts/ci/fetch-libxray.sh
+
+      - name: Lint debug variants
+        working-directory: levik_vpn_android
+        run: ./gradlew --no-daemon --stacktrace lintDirectDebug lintPlayDebug
+
+      - name: Assemble debug variants
+        working-directory: levik_vpn_android
+        run: ./gradlew --no-daemon --stacktrace assembleDirectDebug assemblePlayDebug
+
+      - name: Run debug unit tests
+        working-directory: levik_vpn_android
+        run: ./gradlew --no-daemon --stacktrace testDirectDebugUnitTest testPlayDebugUnitTest
+
+      - name: Verify direct release excludes Google Play runtime dependencies
+        working-directory: levik_vpn_android
+        shell: bash
+        run: |
+          cat >"${RUNNER_TEMP}/verify-direct-runtime.init.gradle" <<'GRADLE'
+          gradle.projectsEvaluated {
+              def appProject = gradle.rootProject.project(':app')
+              appProject.tasks.register('verifyDirectReleaseRuntimeClasspath') {
+                  group = 'verification'
+                  description = 'Fails when the direct release runtime contains Google Play dependencies.'
+
+                  doLast {
+                      def configuration = appProject.configurations.getByName('directReleaseRuntimeClasspath')
+                      def forbidden = configuration.incoming.resolutionResult.allComponents
+                          .collect { component -> component.moduleVersion }
+                          .findAll { module ->
+                              module != null && (
+                                  module.group == 'com.google.android.play' ||
+                                  module.group == 'com.google.android.gms' ||
+                                  module.group == 'com.google.firebase' ||
+                                  (module.group == 'org.jetbrains.kotlinx' &&
+                                      module.name == 'kotlinx-coroutines-play-services')
+                              )
+                          }
+                          .collect { module -> "${module.group}:${module.name}:${module.version}" }
+                          .unique()
+                          .sort()
+
+                      if (!forbidden.isEmpty()) {
+                          throw new GradleException(
+                              "directReleaseRuntimeClasspath contains forbidden Google Play " +
+                                  "runtime dependencies:\n - ${forbidden.join('\n - ')}"
+                          )
+                      }
+
+                      logger.lifecycle(
+                          'directReleaseRuntimeClasspath contains no forbidden Google Play runtime dependencies.'
+                      )
+                  }
+              }
+          }
+          GRADLE
+
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            --init-script "${RUNNER_TEMP}/verify-direct-runtime.init.gradle" \
+            :app:verifyDirectReleaseRuntimeClasspath
