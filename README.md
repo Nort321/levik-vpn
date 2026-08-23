@@ -86,27 +86,27 @@ Levik VPN работает на всех популярных устройств
 
 ---
 
-## 💻 Для разработчиков и энтузиастов
+## 💻 Для разработчиков
 
-Levik VPN придерживается принципов открытости и прозрачности. В этом репозитории опубликован исходный код основных модулей экосистемы:
-- `levik_vpn_android/` — Нативный Android-клиент на Kotlin и Jetpack Compose с интеграцией аппаратного Keystore и VpnService.
-- `levik_vpn_landing/` — Веб-сайт, личный кабинет пользователя и Mobile BFF на Next.js 16.
-- `levik_vpn_bridge/` — Сервис интеграции Telegram-бота и API личного кабинета на Python 3.12 (aiogram / aiohttp).
+В этом репозитории опубликован открытый исходный код Android-клиента **Levik VPN** (`levik_vpn_android/`):
+- Нативный клиент на Kotlin и Jetpack Compose
+- Интеграция с Android `VpnService` и защищенным аппаратным хранилищем Android Keystore
+- Поддержка двух вариантов сборки: `direct` (прямая загрузка с безопасным OTA-обновлением) и `play` (для публикации в Google Play Store)
 
-### Сборка и запуск тестов:
+### Сборка и тестирование:
 ```bash
-# Проверка политик репозитория и workflow-пинов
+# Проверка политик репозитория
 ./scripts/ci/check-repository-policy.sh
 ./scripts/ci/check-action-pins.sh
 
-# Тестирование веб-части
-cd levik_vpn_landing && npm test && npm run lint
+# Загрузка и проверка нативного ядра libXray
+./scripts/ci/fetch-libxray.sh
 
-# Тестирование bridge-сервиса
-cd ../levik_vpn_bridge && pytest tests
-
-# Сборка Android-клиента
-cd ../levik_vpn_android && ./gradlew assembleDirectDebug assemblePlayDebug
+# Сборка и запуск тестов Android-приложения
+cd levik_vpn_android
+./gradlew lintDirectDebug lintPlayDebug
+./gradlew testDirectDebugUnitTest testPlayDebugUnitTest
+./gradlew assembleDirectDebug assemblePlayDebug
 ```
 
 ---
