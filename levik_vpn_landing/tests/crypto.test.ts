@@ -35,7 +35,8 @@ describe("security crypto primitives", () => {
   it("rejects tampered ciphertext", () => {
     const encrypted = encryptString("sensitive-value", KEY, "test-purpose");
     const parts = encrypted.split(".");
-    parts[2] = `${parts[2]?.slice(0, -1)}A`;
+    const firstChar = parts[2]?.[0];
+    parts[2] = `${firstChar === "a" ? "b" : "a"}${parts[2]?.slice(1)}`;
     expect(() =>
       decryptString(parts.join("."), KEY, "test-purpose"),
     ).toThrow();
