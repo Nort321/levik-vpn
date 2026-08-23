@@ -1,0 +1,9 @@
+Russian IPv4 and IPv6 CIDR data
+
+Original project: https://github.com/herrbischoff/country-ip-blocks
+Raw snapshot used (direct fork, 2025-05-16):
+https://raw.githubusercontent.com/Uniswap/country-ip-blocks/master/ipv4/ru.cidr
+https://raw.githubusercontent.com/Uniswap/country-ip-blocks/master/ipv6/ru.cidr
+
+License: CC0 1.0 Universal
+https://creativecommons.org/publicdomain/zero/1.0/

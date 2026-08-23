@@ -45,9 +45,9 @@ before building:
 ```text
 ./scripts/ci/fetch-libxray.sh
 cd levik_vpn_android
-./gradlew lint
-./gradlew assembleDebug
-./gradlew testDebugUnitTest
+./gradlew lintDirectDebug lintPlayDebug
+./gradlew assembleDirectDebug assemblePlayDebug
+./gradlew testDirectDebugUnitTest testPlayDebugUnitTest
 ```
 
 The downloader verifies both the official release archive and the extracted

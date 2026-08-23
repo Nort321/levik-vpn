@@ -33,9 +33,9 @@ native input through the repository downloader, then run checks in this order:
 ```text
 ./scripts/ci/fetch-libxray.sh
 cd levik_vpn_android
-./gradlew lint
-./gradlew assembleDebug
-./gradlew testDebugUnitTest
+./gradlew lintDirectDebug lintPlayDebug
+./gradlew assembleDirectDebug assemblePlayDebug
+./gradlew testDirectDebugUnitTest testPlayDebugUnitTest
 ```
 
 From the repository root also run:

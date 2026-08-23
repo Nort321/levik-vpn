@@ -37,9 +37,9 @@ order is:
 ./scripts/ci/check-action-pins.sh
 ./scripts/ci/fetch-libxray.sh
 cd levik_vpn_android
-./gradlew lint
-./gradlew bundleRelease
-./gradlew test
+./gradlew lintDirectRelease lintPlayRelease
+./gradlew assembleDirectRelease bundlePlayRelease
+./gradlew testDirectReleaseUnitTest testPlayReleaseUnitTest
 ```
 
 Run instrumentation and physical-device tests for release-relevant VPN,

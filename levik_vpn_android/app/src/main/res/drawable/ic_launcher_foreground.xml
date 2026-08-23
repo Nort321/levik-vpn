@@ -1,0 +1,20 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Compact artwork stays well inside every adaptive-icon mask safe zone. -->
+    <path
+        android:fillColor="#16365F"
+        android:pathData="M54,30C61,35 67,38 75,39V54C75,66 67,75 54,81C41,75 33,66 33,54V39C41,38 47,35 54,30z" />
+    <path
+        android:fillColor="#2F80FF"
+        android:pathData="M54,33C60,37 65,39 71,41V54C71,63 64,70 54,76C44,70 37,63 37,54V41C43,39 48,37 54,33z" />
+    <path
+        android:fillColor="#20D4F5"
+        android:pathData="M57,42L46,52H52L49,66L63,50H57z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.92"
+        android:pathData="M54,35C59,38 64,40 69,42V44C63,42 58,40 54,37C50,40 45,42 39,44V42C44,40 49,38 54,35z" />
+</vector>
