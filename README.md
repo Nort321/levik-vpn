@@ -1,7 +1,7 @@
 # 🛡️ Levik VPN — Быстрый, стабильный и безопасный доступ в интернет
 
 <p align="center">
-  <img src="levik_vpn_landing/public/assets/levik-logo.png" alt="Levik VPN Logo" width="120" height="120" />
+  <img src="https://leviknet.com/assets/levik-logo.png" alt="Levik VPN Logo" width="120" height="120" />
 </p>
 
 <p align="center">
