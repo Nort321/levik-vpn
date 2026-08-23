@@ -14,12 +14,14 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.leviknet.vpn.core.auth.ExternalUriPolicy
+import com.leviknet.vpn.core.auth.DeepLinkRouter
 import com.leviknet.vpn.ui.AppEffect
 import com.leviknet.vpn.ui.AppViewModel
 import com.leviknet.vpn.ui.LevikVpnApp
@@ -80,6 +82,7 @@ class MainActivity : ComponentActivity() {
 
     private fun handleEffect(effect: AppEffect) {
         when (effect) {
+            is AppEffect.OpenAuthorization -> openAuthorization(effect.uri)
             is AppEffect.OpenExternal -> openAllowedUri(effect.uri)
             is AppEffect.ShareText -> {
                 val sendIntent = Intent().apply {
@@ -134,6 +137,15 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    private fun openAuthorization(rawUri: String) {
+        if (DeepLinkRouter.activationCode(rawUri) == null) return
+        val uri = runCatching { rawUri.toUri() }.getOrNull() ?: return
+        val customTabsIntent = CustomTabsIntent.Builder()
+            .setShareState(CustomTabsIntent.SHARE_STATE_OFF)
+            .build()
+        runCatching { customTabsIntent.launchUrl(this, uri) }
     }
 
     private fun openAllowedUri(rawUri: String) {

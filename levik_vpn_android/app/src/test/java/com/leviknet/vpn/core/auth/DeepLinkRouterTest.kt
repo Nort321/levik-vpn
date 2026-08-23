@@ -11,6 +11,10 @@ class DeepLinkRouterTest {
             DeepLinkDestination.ACTIVATION,
             DeepLinkRouter.route("https://leviknet.com/activate?code=Abc_1234-xyz"),
         )
+        assertEquals(
+            "Abc_1234-xyz",
+            DeepLinkRouter.activationCode("https://leviknet.com/activate?code=Abc_1234-xyz"),
+        )
     }
 
     @Test

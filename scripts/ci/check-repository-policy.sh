@@ -125,7 +125,16 @@ if [[ "${INPUT_MODE}" == "git" ]]; then
     THIRD_PARTY_NOTICES.md
     scripts/ci/check-repository-policy.sh
     scripts/ci/check-action-pins.sh
+    scripts/ci/check-android-release-workflow.sh
     scripts/ci/fetch-libxray.sh
+    scripts/release/build-corresponding-source.sh
+    scripts/release/generate-direct-update-manifest.sh
+    scripts/release/generate-native-sbom.py
+    scripts/release/validate-play-bundle-metadata.sh
+    release/native-sources.lock.json
+    .github/workflows/android-release.yml
+    levik_vpn_android/gradle.lockfile
+    levik_vpn_android/app/gradle.lockfile
   )
 
   for required_path in "${required_paths[@]}"; do

@@ -1,0 +1,390 @@
+name: Android production release
+
+"on":
+  workflow_dispatch:
+    inputs:
+      version_code:
+        description: Android versionCode already committed in app/build.gradle.kts
+        required: true
+        type: string
+      version_name:
+        description: Android versionName and immutable tag suffix
+        required: true
+        type: string
+      signing_identity_decision:
+        description: Owner approval for the current Direct and Play signing identities
+        required: true
+        default: blocked
+        type: choice
+        options:
+          - blocked
+          - approved-current-direct-play-identities
+      changelog_en:
+        description: Stable release notes in English
+        required: true
+        type: string
+      changelog_ru:
+        description: Stable release notes in Russian
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-production-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build signed Direct and Play release candidates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    environment: production-release
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+
+    steps:
+      - name: Checkout immutable release revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fail closed before loading release tooling
+        shell: bash
+        env:
+          SIGNING_IDENTITY_DECISION: ${{ inputs.signing_identity_decision }}
+          VERSION_CODE: ${{ inputs.version_code }}
+          VERSION_NAME: ${{ inputs.version_name }}
+          CHANGELOG_EN: ${{ inputs.changelog_en }}
+          CHANGELOG_RU: ${{ inputs.changelog_ru }}
+          RELEASE_ACTOR: ${{ github.actor }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          DIRECT_SIGNING_KEYSTORE_BASE64: ${{ secrets.DIRECT_SIGNING_KEYSTORE_BASE64 }}
+          DIRECT_SIGNING_STORE_PASSWORD: ${{ secrets.DIRECT_SIGNING_STORE_PASSWORD }}
+          DIRECT_SIGNING_KEY_ALIAS: ${{ secrets.DIRECT_SIGNING_KEY_ALIAS }}
+          DIRECT_SIGNING_KEY_PASSWORD: ${{ secrets.DIRECT_SIGNING_KEY_PASSWORD }}
+          PLAY_SIGNING_KEYSTORE_BASE64: ${{ secrets.PLAY_SIGNING_KEYSTORE_BASE64 }}
+          PLAY_SIGNING_STORE_PASSWORD: ${{ secrets.PLAY_SIGNING_STORE_PASSWORD }}
+          PLAY_SIGNING_KEY_ALIAS: ${{ secrets.PLAY_SIGNING_KEY_ALIAS }}
+          PLAY_SIGNING_KEY_PASSWORD: ${{ secrets.PLAY_SIGNING_KEY_PASSWORD }}
+          DIRECT_UPDATE_MANIFEST_PUBLIC_KEY: ${{ secrets.DIRECT_UPDATE_MANIFEST_PUBLIC_KEY }}
+          DIRECT_UPDATE_SIGNING_CERTIFICATE_SHA256: ${{ secrets.DIRECT_UPDATE_SIGNING_CERTIFICATE_SHA256 }}
+          DIRECT_OTA_PRIVATE_KEY_PEM: ${{ secrets.DIRECT_OTA_PRIVATE_KEY_PEM }}
+          PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER: ${{ secrets.PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${SIGNING_IDENTITY_DECISION}" != "approved-current-direct-play-identities" ]]; then
+            printf 'ERROR: production signing identity decision is still blocked.\n' >&2
+            exit 1
+          fi
+          if [[ "${RELEASE_ACTOR}" != "${REPOSITORY_OWNER}" ]]; then
+            printf 'ERROR: only the repository owner may dispatch a production release.\n' >&2
+            exit 1
+          fi
+          if [[ ! "${VERSION_CODE}" =~ ^[1-9][0-9]*$ ||
+                ! "${VERSION_NAME}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            printf 'ERROR: invalid release version input.\n' >&2
+            exit 1
+          fi
+          readonly release_tag="v${VERSION_NAME}"
+          if [[ "${GITHUB_REF}" != "refs/tags/${release_tag}" ]]; then
+            printf 'ERROR: dispatch this workflow from immutable tag %s.\n' "${release_tag}" >&2
+            exit 1
+          fi
+          if [[ "$(git rev-parse --verify "${release_tag}^{commit}")" != "$(git rev-parse --verify HEAD)" ]]; then
+            printf 'ERROR: release tag does not identify the checked-out commit.\n' >&2
+            exit 1
+          fi
+          if ! git show-ref --verify --quiet refs/remotes/origin/main; then
+            printf 'ERROR: origin/main was not fetched by the immutable checkout.\n' >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor HEAD refs/remotes/origin/main; then
+            printf 'ERROR: stable release tag commit is not contained in origin/main.\n' >&2
+            exit 1
+          fi
+
+          # The existing distributed APK is versionCode 19. Stable tags then
+          # become the authoritative monotonic floor for every later release.
+          previous_version_code=19
+          while IFS= read -r stable_tag; do
+            if [[ "${stable_tag}" == "${release_tag}" ||
+                  ! "${stable_tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              continue
+            fi
+            stable_commit="$(git rev-parse --verify "${stable_tag}^{commit}")"
+            if ! git merge-base --is-ancestor "${stable_commit}" HEAD; then
+              continue
+            fi
+            tagged_version_code="$(
+              git show "${stable_tag}:levik_vpn_android/app/build.gradle.kts" |
+                sed -nE 's/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*([0-9]+).*$/\1/p' |
+                head -n 1
+            )"
+            if [[ ! "${tagged_version_code}" =~ ^[1-9][0-9]*$ ]]; then
+              printf 'ERROR: stable tag %s has no valid Android versionCode.\n' "${stable_tag}" >&2
+              exit 1
+            fi
+            if (( tagged_version_code > previous_version_code )); then
+              previous_version_code="${tagged_version_code}"
+            fi
+          done < <(git tag --list 'v*' --sort=version:refname)
+          if (( VERSION_CODE <= previous_version_code )); then
+            printf 'ERROR: versionCode %s must be greater than previously published %s.\n' \
+              "${VERSION_CODE}" "${previous_version_code}" >&2
+            exit 1
+          fi
+          if [[ -z "${CHANGELOG_EN}" || -z "${CHANGELOG_RU}" ]]; then
+            printf 'ERROR: both release changelogs are required.\n' >&2
+            exit 1
+          fi
+
+          required_secrets=(
+            DIRECT_SIGNING_KEYSTORE_BASE64
+            DIRECT_SIGNING_STORE_PASSWORD
+            DIRECT_SIGNING_KEY_ALIAS
+            DIRECT_SIGNING_KEY_PASSWORD
+            PLAY_SIGNING_KEYSTORE_BASE64
+            PLAY_SIGNING_STORE_PASSWORD
+            PLAY_SIGNING_KEY_ALIAS
+            PLAY_SIGNING_KEY_PASSWORD
+            DIRECT_UPDATE_MANIFEST_PUBLIC_KEY
+            DIRECT_UPDATE_SIGNING_CERTIFICATE_SHA256
+            DIRECT_OTA_PRIVATE_KEY_PEM
+            PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER
+          )
+          for secret_name in "${required_secrets[@]}"; do
+            if [[ -z "${!secret_name}" ]]; then
+              printf 'ERROR: protected environment value is missing: %s\n' "${secret_name}" >&2
+              exit 1
+            fi
+          done
+          if [[ ! "${DIRECT_UPDATE_SIGNING_CERTIFICATE_SHA256,,}" =~ ^[0-9a-f]{64}$ ]]; then
+            printf 'ERROR: Direct signing certificate pin must be 64 hexadecimal characters.\n' >&2
+            exit 1
+          fi
+          if [[ ! "${PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+            printf 'ERROR: Play Integrity Cloud project number is invalid.\n' >&2
+            exit 1
+          fi
+          printf '%s' "${DIRECT_UPDATE_MANIFEST_PUBLIC_KEY}" | base64 --decode >/dev/null
+
+          if [[ "${{ github.event.repository.private }}" == "true" ]]; then
+            printf 'NOTICE: repository is private; unauthenticated Direct OTA remains unavailable to installed apps.\n'
+          fi
+
+      - name: Materialize protected signing inputs
+        shell: bash
+        env:
+          DIRECT_SIGNING_KEYSTORE_BASE64: ${{ secrets.DIRECT_SIGNING_KEYSTORE_BASE64 }}
+          PLAY_SIGNING_KEYSTORE_BASE64: ${{ secrets.PLAY_SIGNING_KEYSTORE_BASE64 }}
+          DIRECT_OTA_PRIVATE_KEY_PEM: ${{ secrets.DIRECT_OTA_PRIVATE_KEY_PEM }}
+        run: |
+          set -euo pipefail
+          readonly secret_directory="${RUNNER_TEMP}/levik-release-secrets"
+          mkdir -m 700 -- "${secret_directory}"
+          printf '%s' "${DIRECT_SIGNING_KEYSTORE_BASE64}" |
+            base64 --decode >"${secret_directory}/direct-release.keystore"
+          printf '%s' "${PLAY_SIGNING_KEYSTORE_BASE64}" |
+            base64 --decode >"${secret_directory}/play-release.keystore"
+          printf '%s' "${DIRECT_OTA_PRIVATE_KEY_PEM}" \
+            >"${secret_directory}/direct-update-private.pem"
+          chmod 600 -- "${secret_directory}"/*
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Go 1.26.5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.5"
+          cache: false
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          cache-provider: basic
+          cache-read-only: true
+
+      - name: Verify repository policy and action pins
+        run: |
+          ./scripts/ci/check-repository-policy.sh
+          ./scripts/ci/check-action-pins.sh
+          ./scripts/ci/check-android-release-workflow.sh
+
+      - name: Fetch and verify libXray
+        run: ./scripts/ci/fetch-libxray.sh
+
+      - name: Verify strict dependency locks
+        working-directory: levik_vpn_android
+        run: ./gradlew --no-daemon --stacktrace verifyAllDependencyLocks
+
+      - name: Lint release variants
+        working-directory: levik_vpn_android
+        run: ./gradlew --no-daemon --stacktrace lintDirectRelease lintPlayRelease
+
+      - name: Build independently signed release artifacts
+        working-directory: levik_vpn_android
+        env:
+          LEVIK_DIRECT_SIGNING_STORE_FILE: ${{ runner.temp }}/levik-release-secrets/direct-release.keystore
+          LEVIK_DIRECT_SIGNING_STORE_PASSWORD: ${{ secrets.DIRECT_SIGNING_STORE_PASSWORD }}
+          LEVIK_DIRECT_SIGNING_KEY_ALIAS: ${{ secrets.DIRECT_SIGNING_KEY_ALIAS }}
+          LEVIK_DIRECT_SIGNING_KEY_PASSWORD: ${{ secrets.DIRECT_SIGNING_KEY_PASSWORD }}
+          LEVIK_PLAY_SIGNING_STORE_FILE: ${{ runner.temp }}/levik-release-secrets/play-release.keystore
+          LEVIK_PLAY_SIGNING_STORE_PASSWORD: ${{ secrets.PLAY_SIGNING_STORE_PASSWORD }}
+          LEVIK_PLAY_SIGNING_KEY_ALIAS: ${{ secrets.PLAY_SIGNING_KEY_ALIAS }}
+          LEVIK_PLAY_SIGNING_KEY_PASSWORD: ${{ secrets.PLAY_SIGNING_KEY_PASSWORD }}
+          LEVIK_UPDATE_MANIFEST_PUBLIC_KEY: ${{ secrets.DIRECT_UPDATE_MANIFEST_PUBLIC_KEY }}
+          LEVIK_UPDATE_SIGNING_CERTIFICATE_SHA256: ${{ secrets.DIRECT_UPDATE_SIGNING_CERTIFICATE_SHA256 }}
+          PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER: ${{ secrets.PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER }}
+        run: |
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            -Plevik.playIntegrityCloudProjectNumber="${PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER}" \
+            assembleDirectRelease \
+            bundlePlayRelease
+
+      - name: Run release unit tests
+        working-directory: levik_vpn_android
+        run: ./gradlew --no-daemon --stacktrace testDirectReleaseUnitTest testPlayReleaseUnitTest
+
+      - name: Generate Gradle CycloneDX SBOM
+        working-directory: levik_vpn_android
+        run: ./gradlew --no-daemon --stacktrace :app:cyclonedxDirectBom
+
+      - name: Generate native AAR and Go CycloneDX inventory
+        run: |
+          python3 scripts/release/generate-native-sbom.py \
+            --aar levik_vpn_android/app/libs/libXray.aar \
+            --source-lock release/native-sources.lock.json \
+            --output-directory "${RUNNER_TEMP}/levik-native-sbom"
+
+      - name: Build corresponding-source bundle
+        env:
+          VERSION_NAME: ${{ inputs.version_name }}
+        run: |
+          mkdir -p -- "${RUNNER_TEMP}/levik-release-output"
+          ./scripts/release/build-corresponding-source.sh \
+            "${VERSION_NAME}" \
+            "${RUNNER_TEMP}/levik-release-output"
+
+      - name: Assemble and validate release evidence
+        shell: bash
+        env:
+          VERSION_CODE: ${{ inputs.version_code }}
+          VERSION_NAME: ${{ inputs.version_name }}
+          CHANGELOG_EN: ${{ inputs.changelog_en }}
+          CHANGELOG_RU: ${{ inputs.changelog_ru }}
+          DIRECT_UPDATE_MANIFEST_PUBLIC_KEY: ${{ secrets.DIRECT_UPDATE_MANIFEST_PUBLIC_KEY }}
+          DIRECT_UPDATE_SIGNING_CERTIFICATE_SHA256: ${{ secrets.DIRECT_UPDATE_SIGNING_CERTIFICATE_SHA256 }}
+        run: |
+          set -euo pipefail
+          readonly output_directory="${RUNNER_TEMP}/levik-release-output"
+          readonly direct_apk="levik_vpn_android/app/build/outputs/apk/direct/release/app-direct-release.apk"
+          readonly play_aab="levik_vpn_android/app/build/outputs/bundle/playRelease/app-play-release.aab"
+          readonly changelog_en="${RUNNER_TEMP}/levik-changelog-en.txt"
+          readonly changelog_ru="${RUNNER_TEMP}/levik-changelog-ru.txt"
+
+          printf '%s\n' "${CHANGELOG_EN}" >"${changelog_en}"
+          printf '%s\n' "${CHANGELOG_RU}" >"${changelog_ru}"
+
+          actual_application_id="$(apkanalyzer manifest application-id "${direct_apk}")"
+          actual_version_code="$(apkanalyzer manifest version-code "${direct_apk}")"
+          actual_version_name="$(apkanalyzer manifest version-name "${direct_apk}")"
+          if [[ "${actual_application_id}" != "com.leviknet.vpn" ||
+                "${actual_version_code}" != "${VERSION_CODE}" ||
+                "${actual_version_name}" != "${VERSION_NAME}" ]]; then
+            printf 'ERROR: Direct APK package or version metadata does not match release inputs.\n' >&2
+            exit 1
+          fi
+          ./scripts/release/validate-play-bundle-metadata.sh \
+            "${play_aab}" \
+            com.leviknet.vpn \
+            "${VERSION_CODE}" \
+            "${VERSION_NAME}"
+          jarsigner -verify -strict "${play_aab}" >/dev/null
+
+          ./scripts/release/generate-direct-update-manifest.sh \
+            "${direct_apk}" \
+            "${VERSION_CODE}" \
+            "${VERSION_NAME}" \
+            "v${VERSION_NAME}" \
+            "${DIRECT_UPDATE_SIGNING_CERTIFICATE_SHA256}" \
+            "${changelog_ru}" \
+            "${changelog_en}" \
+            "${RUNNER_TEMP}/levik-release-secrets/direct-update-private.pem" \
+            "${DIRECT_UPDATE_MANIFEST_PUBLIC_KEY}" \
+            "${output_directory}"
+
+          cp -- "${play_aab}" "${output_directory}/LevikVPN-play-${VERSION_NAME}.aab"
+          cp -- \
+            "${RUNNER_TEMP}/levik-native-sbom/levik-vpn-native.cdx.json" \
+            "${RUNNER_TEMP}/levik-native-sbom/levik-vpn-native.cdx.xml" \
+            release/native-sources.lock.json \
+            "${output_directory}/"
+          cp -- \
+            levik_vpn_android/app/build/reports/cyclonedx-direct/bom.json \
+            "${output_directory}/levik-vpn-android.cdx.json"
+          cp -- \
+            levik_vpn_android/app/build/reports/cyclonedx-direct/bom.xml \
+            "${output_directory}/levik-vpn-android.cdx.xml"
+          cp -- THIRD_PARTY_NOTICES.md "${output_directory}/THIRD_PARTY_NOTICES-root.md"
+          cp -- \
+            levik_vpn_android/THIRD_PARTY_NOTICES.md \
+            "${output_directory}/THIRD_PARTY_NOTICES-android.md"
+          cp -- levik_vpn_android/gradle.lockfile "${output_directory}/gradle-root.lockfile"
+          cp -- levik_vpn_android/app/gradle.lockfile "${output_directory}/gradle-app.lockfile"
+
+          for distribution in direct play; do
+            mapping="levik_vpn_android/app/build/outputs/mapping/${distribution}Release/mapping.txt"
+            if [[ -f "${mapping}" ]]; then
+              cp -- "${mapping}" "${output_directory}/mapping-${distribution}-${VERSION_NAME}.txt"
+            fi
+          done
+
+          (
+            cd "${output_directory}"
+            find . -maxdepth 1 -type f ! -name ARTIFACT-SHA256SUMS -print0 |
+              sort -z |
+              xargs -0 sha256sum |
+              sed 's#  \./#  #'
+          ) >"${output_directory}/ARTIFACT-SHA256SUMS"
+
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/levik-release-output/*
+
+      - name: Create draft GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_NAME: ${{ inputs.version_name }}
+        run: |
+          set -euo pipefail
+          readonly release_tag="v${VERSION_NAME}"
+          if gh release view "${release_tag}" >/dev/null 2>&1; then
+            printf 'ERROR: refusing to replace an existing GitHub release.\n' >&2
+            exit 1
+          fi
+          gh release create \
+            "${release_tag}" \
+            "${RUNNER_TEMP}/levik-release-output"/* \
+            --draft \
+            --verify-tag \
+            --title "Levik VPN ${VERSION_NAME}" \
+            --notes "Signed Direct and Play release candidates. Review every attached checksum, SBOM, source bundle, signing decision, and test result before any publication. Direct OTA will not work for unauthenticated installed apps while this repository remains private."
+
+      - name: Remove protected signing inputs
+        if: always()
+        shell: bash
+        run: rm -rf -- "${RUNNER_TEMP}/levik-release-secrets"

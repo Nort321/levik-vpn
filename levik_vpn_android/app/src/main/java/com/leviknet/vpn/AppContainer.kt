@@ -8,6 +8,7 @@ import com.leviknet.vpn.core.network.createAppAttestationProvider
 import com.leviknet.vpn.core.security.DeviceIdentity
 import com.leviknet.vpn.core.security.HybridProfileDecryptor
 import com.leviknet.vpn.core.security.SecureFileStore
+import com.leviknet.vpn.core.update.createAppUpdateManager
 import com.leviknet.vpn.data.AppRepository
 import com.leviknet.vpn.data.AppSettings
 import com.leviknet.vpn.data.SessionStatus
@@ -58,7 +59,7 @@ class AppContainer(application: Application) {
         ),
         json = json,
     )
-    val updateManager = com.leviknet.vpn.core.update.AppUpdateManager(application, apiClient)
+    val updateManager = createAppUpdateManager(application)
     private val profileDecryptor = HybridProfileDecryptor(deviceIdentity)
 
     val repository = AppRepository(

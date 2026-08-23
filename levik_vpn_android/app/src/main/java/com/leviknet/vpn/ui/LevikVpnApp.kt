@@ -128,9 +128,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
-import com.leviknet.vpn.core.network.AppUpdateDto
 import com.leviknet.vpn.core.network.ReferralSummary
-import com.leviknet.vpn.core.update.UpdateState
 
 @Composable
 fun LevikVpnApp(viewModel: AppViewModel) {
@@ -188,6 +186,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     onRefresh = viewModel::refreshAccount,
                     onSupport = viewModel::openSupport,
                     onPrivacyPolicy = viewModel::openPrivacyPolicy,
+                    onDeleteAccount = viewModel::openAccountDeletion,
                     onRelinkAccount = viewModel::beginLogin,
                     onLogout = viewModel::requestLogout,
                     onRoutingPresetSelected = viewModel::setRoutingPreset,
@@ -226,7 +225,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     onAutoFallbackChanged = viewModel::setAutoFallbackServer,
                     onAnonymousTelemetryChanged = viewModel::setAnonymousTelemetryEnabled,
                     onShareReferralLink = viewModel::shareReferralLink,
-                    onOpenPlans = { viewModel.openExternalUrl("https://leviknet.com/dashboard/plans") },
+                    onOpenPlans = { openDistributionPlans(viewModel) },
                     onRequestBatteryOptimization = viewModel::requestIgnoreBatteryOptimization,
                     onCheckForUpdates = viewModel::checkForUpdates,
                 )
@@ -411,19 +410,17 @@ fun LevikVpnApp(viewModel: AppViewModel) {
         )
     }
 
-    if (state.updateState !is UpdateState.Idle) {
-        UpdateDialog(
-            updateState = state.updateState,
-            onDownload = viewModel::downloadAndInstallUpdate,
-            onDismiss = viewModel::dismissUpdateDialog,
-        )
-    }
+    DistributionUpdateDialog(
+        updateState = state.updateState,
+        onDownload = viewModel::downloadAndInstallUpdate,
+        onDismiss = viewModel::dismissUpdateDialog,
+    )
 
     if (showDevicesDialog && selectedSubscriptionForDevices != null) {
         SubscriptionDevicesDialog(
             subscription = selectedSubscriptionForDevices!!,
             onRevokeDevice = viewModel::revokeDevice,
-            onOpenPlans = { viewModel.openExternalUrl("https://leviknet.com/dashboard/plans") },
+            onOpenPlans = { openDistributionPlans(viewModel) },
             onDismiss = {
                 showDevicesDialog = false
                 selectedSubscriptionForDevices = null
@@ -471,9 +468,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 clipboard.setPrimaryClip(ClipData.newPlainText("Levik VPN Support Note", url))
             },
-            onOpenTelegram = { url ->
-                viewModel.openExternalUrl("https://t.me/levikvpnbot")
-            },
+            onOpenSupport = viewModel::openSupport,
         )
     }
 
@@ -570,7 +565,7 @@ private fun LoginScreen(
                     border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                 ) {
                     Text(
-                        text = login.challenge.verificationCode,
+                        text = login.authorization.code,
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 3.sp,
@@ -613,7 +608,7 @@ private fun LoginScreen(
                         modifier = Modifier.size(20.dp),
                     )
                     Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.login_telegram), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(R.string.login_continue), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
             Spacer(Modifier.height(14.dp))
@@ -645,6 +640,7 @@ private fun MainContent(
     onRefresh: () -> Unit,
     onSupport: () -> Unit,
     onPrivacyPolicy: () -> Unit,
+    onDeleteAccount: () -> Unit,
     onRelinkAccount: () -> Unit,
     onLogout: () -> Unit,
     onRoutingPresetSelected: (RoutingPreset) -> Unit,
@@ -739,6 +735,7 @@ private fun MainContent(
                 onRefresh = onRefresh,
                 onSupport = onSupport,
                 onPrivacyPolicy = onPrivacyPolicy,
+                onDeleteAccount = onDeleteAccount,
                 onRelinkAccount = onRelinkAccount,
                 onLogout = onLogout,
                 routingPreset = state.routingPreset,
@@ -2397,6 +2394,7 @@ private fun ProfileScreen(
     onRefresh: () -> Unit,
     onSupport: () -> Unit,
     onPrivacyPolicy: () -> Unit,
+    onDeleteAccount: () -> Unit,
     onRelinkAccount: () -> Unit,
     onLogout: () -> Unit,
     routingPreset: RoutingPreset,
@@ -2553,35 +2551,15 @@ private fun ProfileScreen(
                         fontWeight = FontWeight.SemiBold,
                     )
                 }
-                Button(
-                    onClick = onOpenPlans,
+                DistributionRenewPlanButton(
+                    onOpenPlans = onOpenPlans,
                     modifier = Modifier
                         .weight(1f)
                         .height(LevikDimensions.ButtonHeight),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = LevikBlue,
-                        contentColor = Color.White,
-                    ),
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_crown),
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                        tint = Color.White,
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        stringResource(R.string.renew_plan_btn),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        fontWeight = FontWeight.SemiBold,
-                        color = Color.White,
-                    )
-                }
+                )
             }
 
-            account?.referrals?.let { referrals ->
+            referralSummaryForDisplay(account)?.let { referrals ->
                 ReferralCard(
                     referrals = referrals,
                     onShare = { onShareReferralLink(referrals.referralLink) },
@@ -3063,40 +3041,7 @@ private fun ProfileScreen(
                 }
             }
 
-            // In-App Updates Item
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onCheckForUpdates),
-                shape = RoundedCornerShape(18.dp),
-                color = MaterialTheme.colorScheme.surface,
-                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                shadowElevation = 1.dp,
-            ) {
-                Row(
-                    modifier = Modifier.padding(18.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            text = stringResource(R.string.update_title),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            text = stringResource(R.string.update_check_btn),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                    Icon(
-                        painter = painterResource(R.drawable.ic_chevron_down),
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
+            DistributionUpdateSettingsItem(onCheckForUpdates = onCheckForUpdates)
 
             // Theme Setting Item
             Surface(
@@ -3249,6 +3194,26 @@ private fun ProfileScreen(
                 Spacer(Modifier.width(8.dp))
                 Text(stringResource(R.string.profile_privacy_policy), fontWeight = FontWeight.SemiBold)
             }
+            OutlinedButton(
+                onClick = onDeleteAccount,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(LevikDimensions.ButtonHeight),
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                ),
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_delete_account),
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.profile_delete_account), fontWeight = FontWeight.SemiBold)
+            }
             if (session == SessionStatus.SignedOut) {
                 OutlinedButton(
                     onClick = onRelinkAccount,
@@ -3296,6 +3261,9 @@ private fun ProfileScreen(
         }
     }
 }
+
+internal fun referralSummaryForDisplay(account: MobileAccountResponse?): ReferralSummary? =
+    account?.referrals
 
 @Composable
 private fun RoutingPresetDialog(
@@ -4224,134 +4192,11 @@ private fun PauseVpnDialog(
 }
 
 @Composable
-private fun UpdateDialog(
-    updateState: UpdateState,
-    onDownload: (AppUpdateDto) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(24.dp),
-        title = {
-            Text(
-                when (updateState) {
-                    is UpdateState.Available -> stringResource(R.string.update_available_title)
-                    is UpdateState.Downloading -> stringResource(R.string.update_downloading_title)
-                    is UpdateState.ReadyToInstall -> stringResource(R.string.update_ready_title)
-                    is UpdateState.UpToDate -> stringResource(R.string.update_uptodate_title)
-                    is UpdateState.Error -> stringResource(R.string.update_error_title)
-                    else -> stringResource(R.string.update_title)
-                },
-                fontWeight = FontWeight.Bold,
-            )
-        },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                when (updateState) {
-                    is UpdateState.Available -> {
-                        val changelog = updateState.info.changelogRu ?: updateState.info.changelogEn
-                        Text(
-                            text = stringResource(R.string.update_version_label, updateState.info.latestVersionName),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        if (!changelog.isNullOrBlank()) {
-                            Text(
-                                text = changelog,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                    is UpdateState.Downloading -> {
-                        Text(
-                            text = stringResource(R.string.update_progress_label, updateState.progressPercent),
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                        LinearProgressIndicator(
-                            progress = { updateState.progressPercent / 100f },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                    is UpdateState.ReadyToInstall -> {
-                        Text(
-                            text = stringResource(R.string.update_ready_desc),
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
-                    is UpdateState.UpToDate -> {
-                        Text(
-                            text = stringResource(R.string.update_uptodate_desc),
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
-                    is UpdateState.Error -> {
-                        Text(
-                            text = updateState.message,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
-                    else -> {}
-                }
-            }
-        },
-        confirmButton = {
-            when (updateState) {
-                is UpdateState.Available -> {
-                    Button(
-                        onClick = { onDownload(updateState.info) },
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.height(LevikDimensions.ButtonHeight),
-                    ) {
-                        Text(stringResource(R.string.update_download_btn), fontWeight = FontWeight.SemiBold)
-                    }
-                }
-                is UpdateState.ReadyToInstall -> {
-                    Button(
-                        onClick = { onDownload(updateState.info) },
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.height(LevikDimensions.ButtonHeight),
-                    ) {
-                        Text(stringResource(R.string.update_install_btn), fontWeight = FontWeight.SemiBold)
-                    }
-                }
-                else -> {
-                    Button(
-                        onClick = onDismiss,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.height(LevikDimensions.ButtonHeight),
-                    ) {
-                        Text(stringResource(R.string.close), fontWeight = FontWeight.SemiBold)
-                    }
-                }
-            }
-        },
-        dismissButton = {
-            if (updateState is UpdateState.Available || updateState is UpdateState.ReadyToInstall) {
-                TextButton(
-                    onClick = onDismiss,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.height(LevikDimensions.ButtonHeight),
-                ) {
-                    Text(stringResource(R.string.cancel), fontWeight = FontWeight.SemiBold)
-                }
-            }
-        },
-    )
-}
-
-@Composable
 private fun SupportNoteDialog(
     noteUrl: String,
     onDismiss: () -> Unit,
     onCopy: (String) -> Unit,
-    onOpenTelegram: (String) -> Unit,
+    onOpenSupport: () -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -4381,11 +4226,11 @@ private fun SupportNoteDialog(
         },
         confirmButton = {
             Button(
-                onClick = { onOpenTelegram(noteUrl) },
+                onClick = onOpenSupport,
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.height(LevikDimensions.ButtonHeight),
             ) {
-                Text(stringResource(R.string.support_note_open_tg), fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.support_note_open_support), fontWeight = FontWeight.SemiBold)
             }
         },
         dismissButton = {
@@ -4751,40 +4596,11 @@ private fun SubscriptionDevicesDialog(
                     }
                 }
 
-                if (subscription.actions.slotAddon || subscription.actions.trafficAddon) {
-                    Spacer(Modifier.height(4.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        if (subscription.actions.slotAddon) {
-                            OutlinedButton(
-                                onClick = onOpenPlans,
-                                modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(12.dp),
-                            ) {
-                                Text(
-                                    text = stringResource(R.string.subscription_buy_slots_btn),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.SemiBold,
-                                )
-                            }
-                        }
-                        if (subscription.actions.trafficAddon) {
-                            OutlinedButton(
-                                onClick = onOpenPlans,
-                                modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(12.dp),
-                            ) {
-                                Text(
-                                    text = stringResource(R.string.subscription_buy_traffic_btn),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.SemiBold,
-                                )
-                            }
-                        }
-                    }
-                }
+                DistributionAddonActions(
+                    slotAddon = subscription.actions.slotAddon,
+                    trafficAddon = subscription.actions.trafficAddon,
+                    onOpenPlans = onOpenPlans,
+                )
             }
         },
         confirmButton = {

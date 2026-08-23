@@ -31,3 +31,6 @@ jobs:
 
       - name: Validate immutable action references
         run: ./scripts/ci/check-action-pins.sh
+
+      - name: Validate fail-closed Android release workflow
+        run: ./scripts/ci/check-android-release-workflow.sh

@@ -6,12 +6,12 @@
     <string name="nav_stats">Stats</string>
     <string name="nav_profile">Profile</string>
     <string name="login_title">Private internet starts here</string>
-    <string name="login_description">Sign in through the Levik VPN Telegram bot. Your account and active subscription will be connected to this device.</string>
-    <string name="login_telegram">Continue in Telegram</string>
-    <string name="login_waiting">Confirm your sign-in through Telegram</string>
+    <string name="login_description">Sign in with Levik Account. Your account and active subscription will be connected to this device.</string>
+    <string name="login_continue">Continue with Levik Account</string>
+    <string name="login_waiting">Complete sign-in with Levik Account</string>
     <string name="login_waiting_description">Return to Levik VPN after confirming. This screen will update automatically.</string>
     <string name="login_retry">Try again</string>
-    <string name="login_open_again">Open Telegram again</string>
+    <string name="login_open_again">Open Levik Account again</string>
     <string name="login_expired">The sign-in request expired. Start a new one.</string>
     <string name="app_data_disclosure_title">Account and device protection</string>
     <string name="app_data_disclosure_body">Before sign-in, Levik VPN sends your device label, model, OS and app versions, plus an identifier derived from a non-exportable Android Keystore key, to bind the account and VPN profile to this device and prevent subscription sharing. The official Play build also asks Google Play Integrity to verify the app, license, and device integrity; Levik VPN receives those technical verdicts. This does not include your files, messages, or browsing content.</string>
@@ -73,10 +73,11 @@
     <string name="bypass_russian_traffic_description">Open Russian domains and IP addresses directly. Changing this while connected will reconnect the VPN.</string>
     <string name="profile_device_bound">Protected on this device</string>
     <string name="profile_device_bound_description">This session is bound to a non-exportable Android Keystore key.</string>
-    <string name="profile_support">Support in Telegram</string>
+    <string name="profile_support">Levik Account support</string>
     <string name="profile_privacy_policy">Privacy policy</string>
+    <string name="profile_delete_account">Delete Levik Account</string>
     <string name="profile_relink">Sign in to sync account</string>
-    <string name="profile_relink_waiting">Confirm your sign-in through Telegram</string>
+    <string name="profile_relink_waiting">Complete sign-in with Levik Account</string>
     <string name="profile_logout">Sign out on this device</string>
     <string name="profile_logout_confirm_title">Sign out?</string>
     <string name="profile_logout_confirm_body">The local session and encrypted VPN profile will be removed. The current connection will stop.</string>
@@ -113,7 +114,7 @@
     <string name="location_permission_denied">Location permission is required to detect the Wi-Fi network name.</string>
     <string name="attestation_unavailable">Device integrity verification is unavailable. Install the official Play build and try again.</string>
     <string name="subscription_updated">Subscription updated.</string>
-    <string name="device_limit_reached">Device limit reached for this subscription. Switch subscription or manage devices in Telegram bot.</string>
+    <string name="device_limit_reached">Device limit reached for this subscription. Switch subscription or manage devices in Levik Account.</string>
     <string name="rate_limited">Too many requests. Please wait a moment and try again.</string>
     <string name="content_power_button">VPN power</string>
     <string name="content_plan">Open subscription profile</string>
@@ -268,15 +269,13 @@
     <string name="devices_empty">No active devices recorded for this subscription</string>
     <string name="devices_manage_btn">Manage Devices</string>
     <string name="subscription_rotate_key_btn">Rotate Key</string>
-    <string name="subscription_buy_slots_btn">Add Device Slots</string>
-    <string name="subscription_buy_traffic_btn">Add Traffic Quota</string>
 
     <string name="notification_channel_alerts">Subscription &amp; Traffic Alerts</string>
     <string name="notification_channel_alerts_desc">Important alerts about subscription expiration, device revocation, and traffic quota</string>
     <string name="notification_expiry_title">Subscription Expiration Alert</string>
-    <string name="notification_expiry_7d">Your VPN subscription expires in 7 days. Renew to stay protected.</string>
-    <string name="notification_expiry_3d">Your VPN subscription expires in 3 days. Renew to avoid interruption.</string>
-    <string name="notification_expiry_1d">Your VPN subscription expires tomorrow! Renew now.</string>
+    <string name="notification_expiry_7d">Your VPN subscription expires in 7 days. Access will stop when the current period ends.</string>
+    <string name="notification_expiry_3d">Your VPN subscription expires in 3 days. Access will stop when the current period ends.</string>
+    <string name="notification_expiry_1d">Your VPN subscription expires tomorrow. Access will stop when the current period ends.</string>
     <string name="notification_expired">Your VPN subscription has expired. VPN connection stopped.</string>
     <string name="notification_traffic_title">Traffic Quota Alert</string>
     <string name="notification_traffic_80">You have used 80% of your subscription traffic quota.</string>
@@ -300,20 +299,6 @@
     <string name="pause_vpn_confirm">Pause</string>
     <string name="resume_vpn_btn">Resume VPN</string>
 
-    <string name="update_title">App Update</string>
-    <string name="update_check_btn">Check for updates</string>
-    <string name="update_available_title">Update Available</string>
-    <string name="update_downloading_title">Downloading Update…</string>
-    <string name="update_ready_title">Update Ready</string>
-    <string name="update_uptodate_title">App is Up to Date</string>
-    <string name="update_error_title">Update Error</string>
-    <string name="update_download_btn">Download &amp; Install</string>
-    <string name="update_install_btn">Install Now</string>
-    <string name="update_version_label">Version %1$s</string>
-    <string name="update_progress_label">Downloading: %1$d%%</string>
-    <string name="update_ready_desc">Update downloaded and verified. Tap Install to apply.</string>
-    <string name="update_uptodate_desc">You have the latest version of Levik VPN.</string>
-
     <string name="censorship_radar_title">Anonymous Censorship Radar</string>
     <string name="censorship_radar_desc">Anonymously monitor service availability (YouTube, Discord, Telegram) to help map blocks on leviknet.com.</string>
 
@@ -326,12 +311,11 @@
     <string name="referral_stats_rewarded">Rewarded: %1$d days</string>
     <string name="referral_share_btn">Share Link</string>
     <string name="referral_copy_btn">Copy Link</string>
-    <string name="renew_plan_btn">Renew</string>
 
     <string name="support_note_title">Encrypted Diagnostic Note</string>
     <string name="support_note_desc">Report is client-side encrypted with AES-GCM. Share this one-time link with support:</string>
     <string name="support_note_export_btn">Encrypt to Note</string>
     <string name="support_note_copy">Copy Link</string>
-    <string name="support_note_open_tg">Open in Telegram</string>
+    <string name="support_note_open_support">Open support</string>
     <string name="profile_local_never_expires">No expiration</string>
 </resources>

@@ -8,7 +8,6 @@ import android.content.pm.ServiceInfo
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -18,7 +17,7 @@ class VpnManifestInstrumentedTest {
     private val context = ApplicationProvider.getApplicationContext<Context>()
 
     @Test
-    fun vpnServiceRequiresSystemBindingPermissionAndOptsOutOfAlwaysOn() {
+    fun vpnServiceRequiresSystemBindingPermissionAndSupportsAlwaysOn() {
         val service = context.packageManager.getServiceInfo(
             ComponentName(context, LevikVpnService::class.java),
             PackageManager.GET_META_DATA,
@@ -28,7 +27,7 @@ class VpnManifestInstrumentedTest {
         assertEquals(Manifest.permission.BIND_VPN_SERVICE, service.permission)
         assertEquals(0, service.flags and ServiceInfo.FLAG_STOP_WITH_TASK)
         assertTrue(service.metaData.containsKey(ALWAYS_ON_METADATA))
-        assertFalse(service.metaData.getBoolean(ALWAYS_ON_METADATA))
+        assertTrue(service.metaData.getBoolean(ALWAYS_ON_METADATA))
     }
 
     private companion object {

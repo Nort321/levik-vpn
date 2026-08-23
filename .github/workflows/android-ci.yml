@@ -41,6 +41,10 @@ jobs:
       - name: Fetch and verify libXray
         run: ./scripts/ci/fetch-libxray.sh
 
+      - name: Verify dependency locks
+        working-directory: levik_vpn_android
+        run: ./gradlew --no-daemon --stacktrace verifyAllDependencyLocks
+
       - name: Lint debug variants
         working-directory: levik_vpn_android
         run: ./gradlew --no-daemon --stacktrace lintDirectDebug lintPlayDebug
@@ -55,49 +59,4 @@ jobs:
 
       - name: Verify direct release excludes Google Play runtime dependencies
         working-directory: levik_vpn_android
-        shell: bash
-        run: |
-          cat >"${RUNNER_TEMP}/verify-direct-runtime.init.gradle" <<'GRADLE'
-          gradle.projectsEvaluated {
-              def appProject = gradle.rootProject.project(':app')
-              appProject.tasks.register('verifyDirectReleaseRuntimeClasspath') {
-                  group = 'verification'
-                  description = 'Fails when the direct release runtime contains Google Play dependencies.'
-
-                  doLast {
-                      def configuration = appProject.configurations.getByName('directReleaseRuntimeClasspath')
-                      def forbidden = configuration.incoming.resolutionResult.allComponents
-                          .collect { component -> component.moduleVersion }
-                          .findAll { module ->
-                              module != null && (
-                                  module.group == 'com.google.android.play' ||
-                                  module.group == 'com.google.android.gms' ||
-                                  module.group == 'com.google.firebase' ||
-                                  (module.group == 'org.jetbrains.kotlinx' &&
-                                      module.name == 'kotlinx-coroutines-play-services')
-                              )
-                          }
-                          .collect { module -> "${module.group}:${module.name}:${module.version}" }
-                          .unique()
-                          .sort()
-
-                      if (!forbidden.isEmpty()) {
-                          throw new GradleException(
-                              "directReleaseRuntimeClasspath contains forbidden Google Play " +
-                                  "runtime dependencies:\n - ${forbidden.join('\n - ')}"
-                          )
-                      }
-
-                      logger.lifecycle(
-                          'directReleaseRuntimeClasspath contains no forbidden Google Play runtime dependencies.'
-                      )
-                  }
-              }
-          }
-          GRADLE
-
-          ./gradlew \
-            --no-daemon \
-            --stacktrace \
-            --init-script "${RUNNER_TEMP}/verify-direct-runtime.init.gradle" \
-            :app:verifyDirectReleaseRuntimeClasspath
+        run: ./gradlew --no-daemon --stacktrace :app:verifyDirectReleaseRuntimeClasspath

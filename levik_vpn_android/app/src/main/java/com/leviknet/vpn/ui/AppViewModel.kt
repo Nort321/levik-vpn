@@ -15,6 +15,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.leviknet.vpn.AppContainer
 import com.leviknet.vpn.BuildConfig
+import com.leviknet.vpn.core.auth.AuthorizationChallengePolicy
+import com.leviknet.vpn.core.auth.ChallengeAuthorization
 import com.leviknet.vpn.core.auth.DeepLinkDestination
 import com.leviknet.vpn.core.auth.DeepLinkRouter
 import com.leviknet.vpn.core.logger.AppLogger
@@ -64,9 +66,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
-import com.leviknet.vpn.core.network.AppUpdateDto
 import com.leviknet.vpn.core.network.MobileApiClient
 import com.leviknet.vpn.core.update.AppUpdateManager
+import com.leviknet.vpn.core.update.AppUpdateDto
 import com.leviknet.vpn.core.update.UpdateState
 
 class AppViewModel(
@@ -385,8 +387,15 @@ class AppViewModel(
             mutableState.update { it.copy(login = LoginUiState.Loading, message = null) }
             try {
                 val challenge = repository.beginLogin()
-                mutableState.update { it.copy(login = LoginUiState.Waiting(challenge)) }
-                effectChannel.send(AppEffect.OpenExternal(challenge.verificationUriComplete))
+                val authorization = requireNotNull(
+                    AuthorizationChallengePolicy.resolve(challenge),
+                ) {
+                    "Authentication challenge does not contain a supported authorization target."
+                }
+                mutableState.update {
+                    it.copy(login = LoginUiState.Waiting(challenge, authorization))
+                }
+                openChallengeAuthorization(authorization)
                 pollChallenge(challenge)
             } catch (error: Throwable) {
                 mutableState.update {
@@ -422,7 +431,18 @@ class AppViewModel(
     fun openLoginUriAgain() {
         val waiting = mutableState.value.login as? LoginUiState.Waiting ?: return
         viewModelScope.launch {
-            effectChannel.send(AppEffect.OpenExternal(waiting.challenge.verificationUriComplete))
+            openChallengeAuthorization(waiting.authorization)
+        }
+    }
+
+    private suspend fun openChallengeAuthorization(authorization: ChallengeAuthorization) {
+        when (authorization) {
+            is ChallengeAuthorization.AccountActivation -> {
+                effectChannel.send(AppEffect.OpenAuthorization(authorization.uri))
+            }
+            is ChallengeAuthorization.LegacyTelegram -> {
+                effectChannel.send(AppEffect.OpenExternal(authorization.uri))
+            }
         }
     }
 
@@ -824,6 +844,12 @@ class AppViewModel(
     fun openPrivacyPolicy() {
         viewModelScope.launch {
             effectChannel.send(AppEffect.OpenExternal(PRIVACY_POLICY_URL))
+        }
+    }
+
+    fun openAccountDeletion() {
+        viewModelScope.launch {
+            effectChannel.send(AppEffect.OpenExternal(ACCOUNT_DELETION_URL))
         }
     }
 
@@ -1420,7 +1446,8 @@ class AppViewModel(
             VpnConnectionState.DISCONNECTED,
             VpnConnectionState.ERROR,
         )
-        private const val SUPPORT_URL = "https://t.me/levikvpnbot"
+        private const val SUPPORT_URL = "https://leviknet.com/dashboard/support"
+        private const val ACCOUNT_DELETION_URL = "https://leviknet.com/account/delete"
         private const val PRIVACY_POLICY_URL = "https://leviknet.com/legal/privacy"
         private val ACTIVE_TUNNEL_STATES = setOf(
             VpnConnectionState.CONNECTED,
@@ -1580,7 +1607,10 @@ enum class AppTab {
 sealed interface LoginUiState {
     data object Idle : LoginUiState
     data object Loading : LoginUiState
-    data class Waiting(val challenge: AuthChallengeResponse) : LoginUiState
+    data class Waiting(
+        val challenge: AuthChallengeResponse,
+        val authorization: ChallengeAuthorization,
+    ) : LoginUiState
     data object Expired : LoginUiState
 }
 
@@ -1606,6 +1636,7 @@ enum class UiMessage {
 }
 
 sealed interface AppEffect {
+    data class OpenAuthorization(val uri: String) : AppEffect
     data class OpenExternal(val uri: String) : AppEffect
     data class ShareText(val title: String, val text: String) : AppEffect
     data object RequestBatteryOptimization : AppEffect

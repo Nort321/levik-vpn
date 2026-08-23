@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="update_title">App Update</string>
+    <string name="update_check_btn">Check for updates</string>
+    <string name="update_available_title">Update Available</string>
+    <string name="update_downloading_title">Downloading Update…</string>
+    <string name="update_ready_title">Update Ready</string>
+    <string name="update_uptodate_title">App is Up to Date</string>
+    <string name="update_error_title">Update Error</string>
+    <string name="update_download_btn">Download &amp; Install</string>
+    <string name="update_install_btn">Install Now</string>
+    <string name="update_version_label">Version %1$s</string>
+    <string name="update_progress_label">Downloading: %1$d%%</string>
+    <string name="update_ready_desc">Update downloaded and verified. Tap Install to apply.</string>
+    <string name="update_uptodate_desc">You have the latest version of Levik VPN.</string>
+    <string name="renew_plan_btn">Renew</string>
+    <string name="subscription_buy_slots_btn">Add Device Slots</string>
+    <string name="subscription_buy_traffic_btn">Add Traffic Quota</string>
+</resources>

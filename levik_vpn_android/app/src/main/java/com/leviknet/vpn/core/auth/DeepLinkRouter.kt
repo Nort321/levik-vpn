@@ -17,6 +17,14 @@ internal object DeepLinkRouter {
     private val ACTIVATION_CODE = Regex("[A-Za-z0-9._~-]{8,256}")
 
     fun route(rawUri: String): DeepLinkDestination? {
+        return if (activationCode(rawUri) != null) {
+            DeepLinkDestination.ACTIVATION
+        } else {
+            null
+        }
+    }
+
+    fun activationCode(rawUri: String): String? {
         if (rawUri.length > MAX_URI_LENGTH) return null
         val uri = runCatching { URI(rawUri) }.getOrNull() ?: return null
         if (!uri.scheme.equals("https", ignoreCase = true)) return null
@@ -35,7 +43,7 @@ internal object DeepLinkRouter {
         val code = decode(parameter[1]) ?: return null
         if (name != ACTIVATION_CODE_PARAMETER || !ACTIVATION_CODE.matches(code)) return null
 
-        return DeepLinkDestination.ACTIVATION
+        return code
     }
 
     private fun decode(value: String): String? = runCatching {

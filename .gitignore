@@ -16,6 +16,7 @@
 # Repository scope: the website and server worktree is not part of this
 # Android-only repository
 /levik_vpn_landing/
+/levik_vpn_bridge/
 
 # Environment files and secrets
 **/.env

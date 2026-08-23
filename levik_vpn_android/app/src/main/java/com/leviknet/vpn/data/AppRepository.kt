@@ -82,6 +82,7 @@ class AppRepository(
     suspend fun beginLogin(): AuthChallengeResponse = authMutex.withLock {
         val request = withContext(Dispatchers.IO) {
             AuthChallengeRequest(
+                accountActivationSupported = true,
                 publicKeySpki = deviceIdentity.publicKeySpkiBase64Url(),
                 deviceLabel = deviceLabel(),
                 deviceModel = Build.MODEL.sanitized(MAX_DEVICE_FIELD_LENGTH),

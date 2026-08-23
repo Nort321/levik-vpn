@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "nativeArtifact": {
+    "name": "libXray.aar",
+    "version": "v26.7.28",
+    "sha256": "4708a361a74f7e955635dbe3661cefb459bdc867423c3b1826a2c5a6ea4ac77d",
+    "embeddedGoVersion": "go1.26.5"
+  },
+  "sourceArchives": [
+    {
+      "name": "libXray",
+      "version": "v26.7.28",
+      "commit": "80263da83e96b2972455b0a94b13ee1a10e51391",
+      "url": "https://codeload.github.com/XTLS/libXray/tar.gz/80263da83e96b2972455b0a94b13ee1a10e51391",
+      "size": 63462,
+      "sha256": "1596603887679f7ac6cca99eb27ecb9153fb4ccc7828c1eacd4d07bcb6d94998",
+      "license": "MIT"
+    },
+    {
+      "name": "Xray-core",
+      "version": "v26.7.28",
+      "goModuleVersion": "v1.260327.1-0.20260728075948-5ca6f4b7d4dc",
+      "commit": "5ca6f4b7d4dc20a881d4330e498892697627ec0c",
+      "url": "https://codeload.github.com/XTLS/Xray-core/tar.gz/5ca6f4b7d4dc20a881d4330e498892697627ec0c",
+      "size": 932611,
+      "sha256": "45de3ead5186fea442b04c662c554a1ffd1d7bd9093a83410f2edabe74fb766e",
+      "license": "MPL-2.0"
+    },
+    {
+      "name": "sing",
+      "version": "v0.5.1",
+      "commit": "8c0bf1c05e576e854cb071ca1116958df7bf6692",
+      "url": "https://codeload.github.com/SagerNet/sing/tar.gz/8c0bf1c05e576e854cb071ca1116958df7bf6692",
+      "size": 135134,
+      "sha256": "a009f1344d9fa99b8a80c27a18ceaa48836a5e406cd714ff45f64d3fc81ba9f6",
+      "license": "GPL-3.0-or-later"
+    },
+    {
+      "name": "sing-shadowsocks",
+      "version": "v0.2.7",
+      "commit": "33d53914d77baed427af52075dceb4a9756183f4",
+      "url": "https://codeload.github.com/SagerNet/sing-shadowsocks/tar.gz/33d53914d77baed427af52075dceb4a9756183f4",
+      "size": 19496,
+      "sha256": "e14c7e22833979748eca66ade53cb0d2abebd1b7c42b429449d810d8729b64b1",
+      "license": "GPL-3.0-or-later"
+    },
+    {
+      "name": "Go toolchain source",
+      "version": "go1.26.5",
+      "url": "https://go.dev/dl/go1.26.5.src.tar.gz",
+      "size": 34140216,
+      "sha256": "495be4bc87176ac567392e5b4116abd98466d33d7b49d41e764ccc6976b2dc42",
+      "license": "BSD-3-Clause"
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="update_title">Обновление приложения</string>
+    <string name="update_check_btn">Проверить обновления</string>
+    <string name="update_available_title">Доступно обновление</string>
+    <string name="update_downloading_title">Загрузка обновления…</string>
+    <string name="update_ready_title">Обновление готово</string>
+    <string name="update_uptodate_title">Обновления не требуются</string>
+    <string name="update_error_title">Ошибка обновления</string>
+    <string name="update_download_btn">Скачать и установить</string>
+    <string name="update_install_btn">Установить сейчас</string>
+    <string name="update_version_label">Версия %1$s</string>
+    <string name="update_progress_label">Скачивание: %1$d%%</string>
+    <string name="update_ready_desc">Обновление скачано и проверено. Нажмите «Установить» для применения.</string>
+    <string name="update_uptodate_desc">У вас установлена самая свежая версия Levik VPN.</string>
+    <string name="renew_plan_btn">Продлить</string>
+    <string name="subscription_buy_slots_btn">Докупить слоты</string>
+    <string name="subscription_buy_traffic_btn">Докупить трафик</string>
+</resources>

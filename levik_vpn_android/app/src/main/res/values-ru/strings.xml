@@ -6,12 +6,12 @@
     <string name="nav_stats">Статистика</string>
     <string name="nav_profile">Профиль</string>
     <string name="login_title">Приватный интернет начинается здесь</string>
-    <string name="login_description">Войдите через Telegram-бот Levik VPN. Ваш аккаунт и активная подписка будут привязаны к этому устройству.</string>
-    <string name="login_telegram">Продолжить в Telegram</string>
-    <string name="login_waiting">Подтвердите вход в Telegram</string>
+    <string name="login_description">Войдите через Levik Account. Ваш аккаунт и активная подписка будут привязаны к этому устройству.</string>
+    <string name="login_continue">Продолжить в Levik Account</string>
+    <string name="login_waiting">Завершите вход в Levik Account</string>
     <string name="login_waiting_description">После подтверждения вернитесь в Levik VPN. Экран обновится автоматически.</string>
     <string name="login_retry">Попробовать снова</string>
-    <string name="login_open_again">Снова открыть Telegram</string>
+    <string name="login_open_again">Снова открыть Levik Account</string>
     <string name="login_expired">Запрос на вход истёк. Создайте новый.</string>
     <string name="app_data_disclosure_title">Защита аккаунта и устройства</string>
     <string name="app_data_disclosure_body">До входа Levik VPN отправляет название и модель устройства, версии ОС и приложения, а также идентификатор, вычисленный из неэкспортируемого ключа Android Keystore. Эти данные нужны, чтобы привязать аккаунт и VPN-профиль к этому устройству и предотвращать передачу подписки. Официальная версия из Google Play также запрашивает у Google Play Integrity технические результаты проверки приложения, лицензии и целостности устройства. Файлы, сообщения и содержимое посещаемых страниц не передаются.</string>
@@ -73,10 +73,11 @@
     <string name="bypass_russian_traffic_description">Открывать российские домены и IP-адреса напрямую. При изменении активный VPN переподключится.</string>
     <string name="profile_device_bound">Защищено на этом устройстве</string>
     <string name="profile_device_bound_description">Сессия привязана к неэкспортируемому ключу Android Keystore.</string>
-    <string name="profile_support">Поддержка в Telegram</string>
+    <string name="profile_support">Поддержка Levik Account</string>
     <string name="profile_privacy_policy">Политика конфиденциальности</string>
+    <string name="profile_delete_account">Удалить Levik Account</string>
     <string name="profile_relink">Войти для синхронизации аккаунта</string>
-    <string name="profile_relink_waiting">Подтвердите вход в Telegram</string>
+    <string name="profile_relink_waiting">Завершите вход в Levik Account</string>
     <string name="profile_logout">Выйти на этом устройстве</string>
     <string name="profile_logout_confirm_title">Выйти?</string>
     <string name="profile_logout_confirm_body">Локальная сессия и зашифрованный VPN-профиль будут удалены. Текущее подключение остановится.</string>
@@ -113,7 +114,7 @@
     <string name="location_permission_denied">Доступ к геолокации нужен для определения имени Wi-Fi сети.</string>
     <string name="attestation_unavailable">Проверка целостности устройства недоступна. Установите официальную версию из Google Play и повторите попытку.</string>
     <string name="subscription_updated">Подписка обновлена.</string>
-    <string name="device_limit_reached">Достигнут лимит устройств для этой подписки. Выберите другую подписку или отключите старые устройства в боте.</string>
+    <string name="device_limit_reached">Достигнут лимит устройств для этой подписки. Выберите другую подписку или отключите старые устройства в Levik Account.</string>
     <string name="rate_limited">Слишком много запросов. Подождите немного и повторите попытку.</string>
     <string name="content_power_button">Кнопка VPN</string>
     <string name="content_plan">Открыть профиль подписки</string>
@@ -268,15 +269,13 @@
     <string name="devices_empty">К подписке пока не привязано активных устройств</string>
     <string name="devices_manage_btn">Устройства</string>
     <string name="subscription_rotate_key_btn">Сменить ключ</string>
-    <string name="subscription_buy_slots_btn">Докупить слоты</string>
-    <string name="subscription_buy_traffic_btn">Докупить трафик</string>
 
     <string name="notification_channel_alerts">Уведомления о подписке и трафике</string>
     <string name="notification_channel_alerts_desc">Важные оповещения о сроке подписки, отзыве устройств и лимитах трафика</string>
     <string name="notification_expiry_title">Срок действия подписки</string>
-    <string name="notification_expiry_7d">Ваша подписка на VPN истекает через 7 дней. Продлите, чтобы оставаться под защитой.</string>
-    <string name="notification_expiry_3d">Ваша подписка на VPN истекает через 3 дня. Продлите для бесперебойного доступа.</string>
-    <string name="notification_expiry_1d">Ваша подписка на VPN истекает завтра! Продлите прямо сейчас.</string>
+    <string name="notification_expiry_7d">Ваша подписка на VPN истекает через 7 дней. После окончания текущего периода доступ остановится.</string>
+    <string name="notification_expiry_3d">Ваша подписка на VPN истекает через 3 дня. После окончания текущего периода доступ остановится.</string>
+    <string name="notification_expiry_1d">Ваша подписка на VPN истекает завтра. После окончания текущего периода доступ остановится.</string>
     <string name="notification_expired">Срок действия вашей подписки истёк. VPN-подключение отключено.</string>
     <string name="notification_traffic_title">Лимит трафика</string>
     <string name="notification_traffic_80">Израсходовано 80% предоплаченного трафика подписки.</string>
@@ -300,20 +299,6 @@
     <string name="pause_vpn_confirm">Приостановить</string>
     <string name="resume_vpn_btn">Возобновить VPN</string>
 
-    <string name="update_title">Обновление приложения</string>
-    <string name="update_check_btn">Проверить обновления</string>
-    <string name="update_available_title">Доступно обновление</string>
-    <string name="update_downloading_title">Загрузка обновления…</string>
-    <string name="update_ready_title">Обновление готово</string>
-    <string name="update_uptodate_title">Обновления не требуются</string>
-    <string name="update_error_title">Ошибка обновления</string>
-    <string name="update_download_btn">Скачать и установить</string>
-    <string name="update_install_btn">Установить сейчас</string>
-    <string name="update_version_label">Версия %1$s</string>
-    <string name="update_progress_label">Скачивание: %1$d%%</string>
-    <string name="update_ready_desc">Обновление скачано и проверено. Нажмите «Установить» для применения.</string>
-    <string name="update_uptodate_desc">У вас установлена самая свежая версия Levik VPN.</string>
-
     <string name="censorship_radar_title">Анонимный радар блокировок</string>
     <string name="censorship_radar_desc">Анонимно собирать статус доступности сервисов (YouTube, Discord, Telegram) для общей карты доступности на leviknet.com.</string>
 
@@ -326,12 +311,11 @@
     <string name="referral_stats_rewarded">Начислено: %1$d дней</string>
     <string name="referral_share_btn">Поделиться ссылкой</string>
     <string name="referral_copy_btn">Копировать ссылку</string>
-    <string name="renew_plan_btn">Продлить</string>
 
     <string name="support_note_title">Зашифрованный отчет</string>
     <string name="support_note_desc">Отчет безопасно зашифрован ключом AES-GCM. Передайте ссылку в поддержку:</string>
     <string name="support_note_export_btn">Зашифровать в заметку</string>
     <string name="support_note_copy">Копировать ссылку</string>
-    <string name="support_note_open_tg">Открыть Telegram</string>
+    <string name="support_note_open_support">Открыть поддержку</string>
     <string name="profile_local_never_expires">Бессрочно</string>
 </resources>

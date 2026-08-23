@@ -101,16 +101,6 @@ class MobileApiClient(
         checkSuccess(response.ok)
     }
 
-    suspend fun checkForUpdates(): AppUpdateResponse {
-        return request<AppUpdateResponse>(
-            method = METHOD_GET,
-            path = UPDATE_PATH,
-            body = EMPTY_BODY,
-            accessToken = null,
-            requiresIntegrity = false,
-        )
-    }
-
     suspend fun checkIp(): IpCheckResponse {
         return request<IpCheckResponse>(
             method = METHOD_GET,
@@ -317,7 +307,6 @@ class MobileApiClient(
         private const val REVOKE_DEVICE_PATH = "/api/mobile/v1/devices/revoke"
         private const val ACCOUNT_PATH = "/api/mobile/v1/account"
         private const val TUNNEL_PROFILE_PATH = "/api/mobile/v1/tunnel-profile"
-        private const val UPDATE_PATH = "/api/mobile/v1/update"
         private const val CHECK_IP_PATH = "/api/check"
         private const val NOTES_PATH = "/api/notes"
         private const val BROWSER_CHECKS_PATH = "/api/monitor/v1/browser-checks"

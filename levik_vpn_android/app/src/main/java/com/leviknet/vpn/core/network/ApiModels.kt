@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class AuthChallengeRequest(
+    val accountActivationSupported: Boolean,
     val publicKeySpki: String,
     val deviceLabel: String,
     val deviceModel: String,
@@ -18,8 +19,11 @@ data class AuthChallengeRequest(
 data class AuthChallengeResponse(
     val ok: Boolean,
     val loginToken: String,
-    val verificationCode: String,
-    val verificationUriComplete: String,
+    val accountActivationSupported: Boolean = false,
+    val activationCode: String? = null,
+    val activationUriComplete: String? = null,
+    val verificationCode: String? = null,
+    val verificationUriComplete: String? = null,
     val pollIntervalSeconds: Int,
     val expiresAt: String,
 )
@@ -43,7 +47,7 @@ data class MobileAccountResponse(
     val ok: Boolean,
     val user: AccountUser,
     val trial: TrialSummary,
-    val referrals: ReferralSummary,
+    val referrals: ReferralSummary?,
     val subscriptions: List<SubscriptionSummary>,
     val orders: List<OrderSummary>,
     val freeProxy: FreeProxySummary,
@@ -175,26 +179,6 @@ data class ApiFailureResponse(
 data class ApiFailure(
     val code: String,
     val retryable: Boolean,
-)
-
-@Serializable
-data class AppUpdateResponse(
-    val ok: Boolean,
-    val update: AppUpdateDto? = null,
-)
-
-@Serializable
-data class AppUpdateDto(
-    val latestVersionCode: Int,
-    val latestVersionName: String,
-    val minSupportedVersionCode: Int = 1,
-    val downloadUrl: String,
-    val sha256: String? = null,
-    val titleRu: String? = null,
-    val titleEn: String? = null,
-    val changelogRu: String? = null,
-    val changelogEn: String? = null,
-    val forceUpdate: Boolean = false,
 )
 
 @Serializable
