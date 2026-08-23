@@ -60,3 +60,11 @@ jobs:
       - name: Verify direct release excludes Google Play runtime dependencies
         working-directory: levik_vpn_android
         run: ./gradlew --no-daemon --stacktrace :app:verifyDirectReleaseRuntimeClasspath
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: levik-vpn-apk
+          path: levik_vpn_android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+
