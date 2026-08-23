@@ -1,40 +1,30 @@
-## Summary
+## Описание изменений
 
-Describe the user-visible or operational outcome and why the change is needed.
+Опишите суть изменений, их назначение и ожидаемый результат.
 
-## Scope
+## Область действия
 
-- Component(s):
-- Related issue or decision:
-- Out of scope:
+- Затронутые компоненты:
+- Связанная задача (Issue) или решение:
+- Что намеренно не входит в рамки PR:
 
-## Risk and security
+## Риски и безопасность
 
-- Trust boundaries, authentication, authorization, data, or secrets affected:
-- New dependency or external service, if any:
-- Abuse, failure, and edge cases considered:
+- Влияние на аутентификацию, авторизацию, криптографию или хранение данных:
+- Новые зависимости или внешние сервисы (если есть):
+- Обработка сбоев и краевых случаев:
 
-## Data and deployment
+## Валидация и тестирование
 
-- Migration or persistent-data impact:
-- Cache/revalidation impact:
-- Deployment ordering or configuration changes:
-- Rollback procedure:
+- [ ] Linter пройден (`./gradlew lintDirectDebug lintPlayDebug`).
+- [ ] Сборка прошла успешно (`./gradlew assembleDirectDebug assemblePlayDebug`).
+- [ ] Юнит-тесты пройдены (`./gradlew testDirectDebugUnitTest testPlayDebugUnitTest`).
+- [ ] Политики репозитория соблюдены (`./scripts/ci/check-repository-policy.sh`).
+- [ ] В PR отсутствуют пароли, токены, личные данные, production-логи или скомпилированные `.apk`/`.aab`.
+- [ ] Документация и лицензионные уведомления обновлены (если требуется).
 
-## Validation
+Укажите точные команды, выполненные для проверки, и их результаты.
 
-- [ ] Lint passed.
-- [ ] Build passed.
-- [ ] Relevant tests passed.
-- [ ] New or changed behavior has test coverage where practical.
-- [ ] No credentials, sessions, personal data, production logs, or release
-      binaries are included.
-- [ ] Documentation and third-party notices are updated when required.
-- [ ] UI changes were checked for accessibility and mobile layouts.
+## Материалы и скриншоты
 
-List exact commands and results. If a check could not run, explain why.
-
-## Evidence
-
-Attach redacted screenshots, recordings, logs, or release metadata when useful.
-Never attach secrets or private infrastructure details.
+Приложите скриншоты или видеозаписи для изменений в UI (без персональных данных и секретов).

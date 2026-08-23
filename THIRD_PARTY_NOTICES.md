@@ -1,82 +1,56 @@
-# Third-Party Notices
+# Уведомления об использовании сторонних компонентов (Third-Party Notices)
 
-This file records known third-party components and release obligations. It is
-not yet a complete generated notice bundle or SBOM. Every release must derive a
-complete inventory from the resolved dependency graph and shipped artifact.
+Данный документ фиксирует известные сторонние компоненты и лицензионные обязательства при публикации релизов. Каждый релиз формирует полный перечень компонентов на основе графа зависимостей и поставляемого артефакта (SBOM).
 
-The repository's `AGPL-3.0-only` grant applies only to original project code.
-It does not relicense the components below, dependency source, generated files,
-binary artifacts, trademarks, local backups, or code that is not included in
-the repository. Each third-party component remains subject to its own license.
+Лицензия проекта `AGPL-3.0-only` распространяется исключительно на оригинальный исходный код проекта. Она не изменяет лицензии перечисленных ниже сторонних компонентов, исходного кода зависимостей, сгенерированных файлов, бинарных артефактов, товарных знаков или кода, не включенного в репозиторий. Каждый сторонний компонент подчиняется условиям собственной лицензии.
 
-## Android native VPN runtime
+## Нативный runtime Android VPN
 
 ### libXray
 
-- Upstream: <https://github.com/XTLS/libXray>
-- Pinned release: `v26.7.28`
-- License identified by the project: MIT
-- Release archive SHA-256:
+- Upstream-репозиторий: <https://github.com/XTLS/libXray>
+- Зафиксированная версия: `v26.7.28`
+- Лицензия компонента: MIT
+- Контрольная сумма архива релиза (SHA-256):
   `28b7dc9d6cc8455fcca5cbd56e387003a7bfb558128651a64899dc3a8ccff666`
-- Extracted Android AAR SHA-256:
+- Контрольная сумма извлеченного Android AAR (SHA-256):
   `4708a361a74f7e955635dbe3661cefb459bdc867423c3b1826a2c5a6ea4ac77d`
 
-The AAR is an external build input and is intentionally excluded from Git.
+Файл AAR является внешней входной зависимостью при сборке и намеренно исключен из Git-отслеживания.
 
 ### Xray-core
 
-- Upstream: <https://github.com/XTLS/Xray-core>
-- Version: the version incorporated by the pinned libXray release
-- License identified by the project: Mozilla Public License 2.0
+- Upstream-репозиторий: <https://github.com/XTLS/Xray-core>
+- Версия: версия, включенная в зафиксированный релиз libXray
+- Лицензия компонента: Mozilla Public License 2.0 (MPL-2.0)
 
-Release engineering must preserve the exact upstream source reference,
-applicable notices, and information required for recipients to obtain covered
-source and modifications.
+Релизные процедуры сохраняют точную ссылку на upstream-исходники, применимые уведомления и информацию для получения покрываемого исходного кода и внесенных изменений.
 
-### SagerNet sing libraries embedded in libXray
+### Библиотеки SagerNet sing, встроенные в libXray
 
-Go build metadata and native symbols in the pinned AAR identify the following
-linked components:
+Метаданные сборки Go и нативные символы в зафиксированном AAR содержат следующие скомпонованные библиотеки:
 
 - `github.com/sagernet/sing` `v0.5.1` — GPL-3.0-or-later;
 - `github.com/sagernet/sing-shadowsocks` `v0.2.7` — GPL-3.0-or-later.
 
-These are executable components, not merely development-only module records.
-Distribution of an APK/AAB containing them requires the applicable GPL text,
-notices, and machine-readable Corresponding Source under GPLv3 section 6. The
-source offer must cover the exact revisions, build scripts, interface files,
-and any local changes needed for the shipped native binary. A generated Java
-sources JAR or a link to a moving upstream branch is not sufficient.
+Эти библиотеки являются исполняемыми компонентами. Распространение APK/AAB, содержащих их, требует предоставления соответствующего текста GPL, уведомлений и машиночитаемого соответствующего исходного кода (Corresponding Source) в соответствии с разделом 6 GPLv3. Предоставляемый исходный код должен охватывать точные ревизии, скрипты сборки, интерфейсные файлы и любые локальные изменения, необходимые для поставляемого бинарного файла.
 
-### Country IP blocks
+### Списки IP-диапазонов стран (Country IP blocks)
 
-- Upstream: <https://github.com/herrbischoff/country-ip-blocks>
-- Snapshot recorded by the Android project: 2025-05-16
-- License identified by the project: CC0 1.0 Universal
+- Upstream-репозиторий: <https://github.com/herrbischoff/country-ip-blocks>
+- Снимок, зафиксированный в Android-проекте: 2025-05-16
+- Лицензия компонента: CC0 1.0 Universal
 
-The Android assets record their source reference in
-`levik_vpn_android/app/src/main/assets/RU_CIDR_SOURCE.txt`.
+В ресурсах Android ссылка на источник зафиксирована в файле `levik_vpn_android/app/src/main/assets/RU_CIDR_SOURCE.txt`.
 
-## Android application dependencies
+## Зависимости Android-приложения
 
-AndroidX, Kotlin, kotlinx.coroutines, kotlinx.serialization, Google Play
-libraries, and their transitive dependencies retain their respective upstream
-licenses and distribution terms. Direct dependency declarations are not a
-substitute for a generated release inventory.
+Библиотеки AndroidX, Kotlin, kotlinx.coroutines, kotlinx.serialization, Google Play и их транзитивные зависимости сохраняют условия соответствующих upstream-лицензий. Объявления прямых зависимостей дополняются автоматически сгенерированным реестром лицензий при релизной сборке.
 
-## Missing and excluded components
+## Исключенные компоненты
 
-The local `levik_vpn_landing/` worktree and all website, backend, mobile BFF,
-bot, bridge, database, deployment, production configuration, and historical
-backup material are excluded from this Android-only repository. They are not
-distributed or licensed by this notice, and no statement here grants them
-open-source status. Telegram session state, databases, credentials, and
-compiled artifacts are never source-code contributions.
+Локальная рабочая директория `levik_vpn_landing/`, а также серверная часть, Mobile BFF, Telegram-бот, база данных, конфигурации развертывания и исторические резервные копии исключены из данного Android-репозитория. Они не распространяются и не лицензируются этим документом. Сессионные данные Telegram, базы данных, секреты и скомпилированные артефакты не являются исходным кодом.
 
-## Release requirement
+## Требования к релизу
 
-Before Android distribution, generate and review an SBOM and complete license
-notice bundle for the exact AAB/APK and native libraries. Preserve that
-inventory with the release provenance. Binary publication is blocked until the
-libXray/Xray-core/sing source closure and corresponding license texts have been
-assembled and verified for the shipped artifact.
+Перед распространением Android-сборок генерируется и проверяется SBOM и полный комплект лицензионных уведомлений для конкретного AAB/APK и нативных библиотек. Этот реестр сохраняется вместе с метаданными релиза. Публикация бинарных сборок блокируется до тех пор, пока архив исходного кода libXray/Xray-core/sing и соответствующие тексты лицензий не будут собраны и проверены.

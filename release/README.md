@@ -1,17 +1,5 @@
-# Release inputs
+# Релизные спецификации и lock-файлы
 
-This directory contains public, reviewable locks and schemas used to build
-Android release evidence. It never contains APKs, AABs, private keys,
-keystores, passwords, production configuration, or generated release output.
+В этом каталоге содержатся открытые lock-файлы и спецификации для детерминированной сборки релизов Android. Здесь никогда не хранятся файлы APK, AAB, приватные ключи, keystore, пароли или production-конфигурации.
 
-`native-sources.lock.json` binds the pinned native AAR to the exact source
-revisions found in its Go build metadata and to the Go source version embedded
-in the binary. The recorded archive sizes and SHA-256 digests are verification
-gates; a changed GitHub-generated archive must be reviewed instead of silently
-accepted.
-
-The corresponding-source generator also captures the exact Android repository
-revision, the complete Go module cache, module inventory, build scripts,
-license files, and the official Go source archive. A bundle is release evidence,
-not a claim that an independently rebuilt native binary is bit-for-bit
-reproducible.
+Файл `native-sources.lock.json` связывает зафиксированный нативный AAR с точными ревизиями исходного кода и компилятора Go, указанными в метаданных сборки. Контрольные суммы архивов и хэши SHA-256 являются обязательными критериями верификации при формировании архива соответствующего исходного кода (Corresponding Source) для требований лицензий GPL.

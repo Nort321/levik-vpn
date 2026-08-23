@@ -1,71 +1,68 @@
-name: Bug report
-description: Report a reproducible problem in a supported repository component.
+name: Сообщение об ошибке (Bug Report)
+description: Сообщите о воспроизводимой проблеме в приложении.
 title: "bug: "
 body:
   - type: markdown
     attributes:
       value: |
-        Do not report vulnerabilities or include credentials, account sessions,
-        personal data, production logs, or private infrastructure details here.
-        Follow SECURITY.md for security reports.
+        Пожалуйста, не сообщайте об уязвимостях и не прикладывайте учетные данные, сессии, личные данные или полные логи здесь. Ознакомьтесь с [SECURITY.md](SECURITY.md) для отчетов о безопасности.
   - type: dropdown
     id: component
     attributes:
-      label: Component
+      label: Компонент
       options:
-        - Web application
-        - Android application
-        - Database migration
-        - Caddy or Docker Compose
-        - Monitoring or maintenance worker
-        - Repository tooling or documentation
-        - External bridge dependency
+        - Android-приложение (Levik VPN)
+        - VPN-сервис и туннелирование
+        - Авторизация и аккаунты
+        - Интерфейс и UI (Jetpack Compose)
+        - OTA-обновления (Direct сборка)
+        - Инструменты сборки и документация
     validations:
       required: true
   - type: input
     id: version
     attributes:
-      label: Version or source revision
-      description: Use a release version or commit identifier; do not paste a private URL.
+      label: Версия приложения или хэш коммита
+      description: Укажите версию релиза или коммит.
     validations:
       required: true
   - type: textarea
     id: environment
     attributes:
-      label: Environment
-      description: Provide relevant OS, browser, device, or runtime versions without host credentials.
+      label: Окружение
+      description: Укажите модель устройства, версию Android и архитектуру (например, Pixel 8, Android 14, arm64-v8a).
     validations:
       required: true
   - type: textarea
     id: steps
     attributes:
-      label: Reproduction steps
-      description: Provide the smallest deterministic reproduction with sensitive values replaced.
+      label: Шаги для воспроизведения
+      description: Опишите минимальную последовательность действий для воспроизведения проблемы.
     validations:
       required: true
   - type: textarea
     id: expected
     attributes:
-      label: Expected behavior
+      label: Ожидаемое поведение
     validations:
       required: true
   - type: textarea
     id: actual
     attributes:
-      label: Actual behavior
+      label: Фактическое поведение
     validations:
       required: true
   - type: textarea
     id: evidence
     attributes:
-      label: Redacted evidence
-      description: Include only the minimum safe logs or screenshots needed to diagnose the issue.
+      label: Скриншоты и логи
+      description: Приложите безопасные скриншоты или фрагменты логов без личных данных.
   - type: checkboxes
     id: confirmations
     attributes:
-      label: Confirmation
+      label: Подтверждение
       options:
-        - label: I removed secrets, sessions, personal data, and private infrastructure details.
+        - label: Я удалил секреты, токены, личные данные и приватные адреса.
           required: true
-        - label: This is not a vulnerability report.
+        - label: Это сообщение не является отчетом об уязвимости безопасности.
           required: true
