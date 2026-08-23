@@ -1,0 +1,26 @@
+name: levik-monitor-probe
+
+services:
+  probe:
+    image: node:24-alpine@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd
+    restart: unless-stopped
+    working_dir: /app
+    command: ["node", "scripts/monitor-probe.mjs"]
+    env_file:
+      - ./.env
+    volumes:
+      - ./scripts/monitor-probe.mjs:/app/scripts/monitor-probe.mjs:ro
+      - ./config/monitor-services.json:/app/config/monitor-services.json:ro
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 40
+    mem_limit: 96m
+    cpus: 0.2
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"

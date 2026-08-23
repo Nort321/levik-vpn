@@ -1,0 +1,181 @@
+{
+	admin off
+	servers {
+		timeouts {
+			read_body 15m
+			read_header 15s
+			write 15m
+			idle 5m
+		}
+	}
+}
+
+www.leviknet.com {
+	redir https://leviknet.com{uri} permanent
+}
+
+leviknet.com {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+		-Server
+	}
+
+	handle /api/internal/* {
+		respond 404
+	}
+
+	handle /downloads/* {
+		root * /var/lib/leviknet
+		file_server
+	}
+
+	# APK uploads are large: dedicated body limit and extended reverse_proxy timeout BEFORE the generic one.
+	handle /api/admin/updates/upload* {
+		request_body {
+			max_size 350MB
+		}
+		reverse_proxy 127.0.0.1:3000 {
+			transport http {
+				read_timeout 15m
+				write_timeout 15m
+			}
+			header_up -Forwarded
+			header_up -X-Real-IP
+			header_up X-Levik-Client-IP {remote_host}
+			header_up Host leviknet.com
+			header_up X-Forwarded-Host leviknet.com
+			header_up X-Forwarded-Proto https
+		}
+	}
+
+	# Account JSON and WebAuthn payloads are bounded to the application limit.
+	handle /api/account/* {
+		request_body {
+			max_size 32KB
+		}
+		reverse_proxy 127.0.0.1:3000 {
+			header_up -Forwarded
+			header_up -X-Real-IP
+			header_up X-Levik-Client-IP {remote_host}
+			header_up Host leviknet.com
+			header_up X-Forwarded-Host leviknet.com
+			header_up X-Forwarded-Proto https
+		}
+	}
+
+	handle {
+		request_body {
+			max_size 16KB
+		}
+		reverse_proxy 127.0.0.1:3000 {
+			header_up -Forwarded
+			header_up -X-Real-IP
+			header_up X-Levik-Client-IP {remote_host}
+			header_up Host leviknet.com
+			header_up X-Forwarded-Host leviknet.com
+			header_up X-Forwarded-Proto https
+		}
+	}
+}
+
+check.leviknet.com {
+	encode zstd gzip
+
+	request_body {
+		max_size 16KB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+		-Server
+	}
+
+	handle /api/internal/* {
+		respond 404
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:3000 {
+			header_up -Forwarded
+			header_up -X-Real-IP
+			header_up X-Levik-Client-IP {remote_host}
+			header_up Host check.leviknet.com
+			header_up X-Forwarded-Host check.leviknet.com
+			header_up X-Forwarded-Proto https
+		}
+	}
+}
+
+note.leviknet.com {
+	encode zstd gzip
+
+	request_body {
+		max_size 20KB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+		-Server
+	}
+
+	handle /api/internal/* {
+		respond 404
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:3000 {
+			header_up -Forwarded
+			header_up -X-Real-IP
+			header_up X-Levik-Client-IP {remote_host}
+			header_up Host note.leviknet.com
+			header_up X-Forwarded-Host note.leviknet.com
+			header_up X-Forwarded-Proto https
+		}
+	}
+}
+
+mon.leviknet.com {
+	encode zstd gzip
+
+	request_body {
+		max_size 96KB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+		-Server
+	}
+
+	handle /api/internal/* {
+		respond 404
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:3000 {
+			header_up -Forwarded
+			header_up -X-Real-IP
+			header_up X-Levik-Client-IP {remote_host}
+			header_up Host mon.leviknet.com
+			header_up X-Forwarded-Host mon.leviknet.com
+			header_up X-Forwarded-Proto https
+		}
+	}
+}

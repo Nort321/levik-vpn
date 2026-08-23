@@ -1,0 +1,1 @@
+"""Levik VPN Telegram bot."""

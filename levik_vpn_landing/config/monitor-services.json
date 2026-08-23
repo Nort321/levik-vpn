@@ -1,0 +1,88 @@
+[
+  {
+    "slug": "discord",
+    "name": "Discord",
+    "summary": "Голосовые каналы, сообщения и API Discord",
+    "host": "discord.com",
+    "homepageUrl": "https://discord.com/",
+    "checks": [
+      { "id": "api", "label": "Discord API", "url": "https://discord.com/api/v10/gateway", "kind": "api" },
+      { "id": "cdn", "label": "Discord CDN", "url": "https://cdn.discordapp.com/embed/avatars/0.png", "kind": "cdn" }
+    ]
+  },
+  {
+    "slug": "youtube",
+    "name": "YouTube",
+    "summary": "Сайт, API и CDN изображений YouTube",
+    "host": "www.youtube.com",
+    "homepageUrl": "https://www.youtube.com/generate_204",
+    "checks": [
+      { "id": "api", "label": "YouTube endpoint", "url": "https://www.youtube.com/generate_204", "kind": "api" },
+      { "id": "cdn", "label": "YouTube CDN", "url": "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg", "kind": "cdn" }
+    ]
+  },
+  {
+    "slug": "telegram",
+    "name": "Telegram",
+    "summary": "Веб-сайт и статические ресурсы Telegram",
+    "host": "telegram.org",
+    "homepageUrl": "https://telegram.org/",
+    "checks": [
+      { "id": "web", "label": "Telegram Web", "url": "https://web.telegram.org/", "kind": "api" },
+      { "id": "cdn", "label": "Telegram CDN", "url": "https://telegram.org/img/t_logo.svg", "kind": "cdn" }
+    ]
+  },
+  {
+    "slug": "whatsapp",
+    "name": "WhatsApp",
+    "summary": "Веб-версия и статические ресурсы WhatsApp",
+    "host": "www.whatsapp.com",
+    "homepageUrl": "https://www.whatsapp.com/",
+    "checks": [
+      { "id": "web", "label": "WhatsApp Web", "url": "https://web.whatsapp.com/", "kind": "api" }
+    ]
+  },
+  {
+    "slug": "steam",
+    "name": "Steam",
+    "summary": "Магазин и инфраструктура Steam",
+    "host": "store.steampowered.com",
+    "homepageUrl": "https://store.steampowered.com/",
+    "checks": [
+      { "id": "community", "label": "Steam Community", "url": "https://steamcommunity.com/", "kind": "api" },
+      { "id": "cdn", "label": "Steam CDN", "url": "https://store.cloudflare.steamstatic.com/public/shared/images/header/logo_steam.svg", "kind": "cdn" }
+    ]
+  },
+  {
+    "slug": "github",
+    "name": "GitHub",
+    "summary": "Сайт, API и статические ресурсы GitHub",
+    "host": "github.com",
+    "homepageUrl": "https://github.com/",
+    "checks": [
+      { "id": "api", "label": "GitHub API", "url": "https://api.github.com/zen", "kind": "api" },
+      { "id": "cdn", "label": "GitHub CDN", "url": "https://github.githubassets.com/favicons/favicon.svg", "kind": "cdn" }
+    ]
+  },
+  {
+    "slug": "tiktok",
+    "name": "TikTok",
+    "summary": "Веб-сайт и статические ресурсы TikTok",
+    "host": "www.tiktok.com",
+    "homepageUrl": "https://www.tiktok.com/",
+    "checks": [
+      { "id": "cdn", "label": "TikTok CDN", "url": "https://lf16-tiktok-web.ttwstatic.com/obj/tiktok-web-common-sg/mtact/static/images/logo_48px.png", "kind": "cdn" }
+    ]
+  },
+  {
+    "slug": "twitch",
+    "name": "Twitch",
+    "summary": "Сайт и API Twitch",
+    "host": "www.twitch.tv",
+    "homepageUrl": "https://www.twitch.tv/",
+    "checks": [
+      { "id": "api", "label": "Twitch API", "url": "https://gql.twitch.tv/gql", "kind": "api" },
+      { "id": "cdn", "label": "Twitch CDN", "url": "https://static.twitchcdn.net/assets/favicon-32-e29e246c157142c94346.png", "kind": "cdn" }
+    ]
+  }
+]

@@ -1,0 +1,15 @@
+.DS_Store
+.next/
+node_modules/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+secrets/
+deployment/
+public/generated/
+public/downloads/*
+!public/downloads/.gitkeep
+*.apk
+*.aab
