@@ -10,10 +10,10 @@
 </p>
 
 <p align="center">
-  <a href="https://leviknet.com"><img src="https://img.shields.io/badge/Сайт-leviknet.com-blue?style=flat-square&logo=googlechrome&logoColor=white" alt="Website" /></a>
-  <a href="https://t.me/levikvpnbot"><img src="https://img.shields.io/badge/Telegram_Бот-@levikvpnbot-2CA5E0?style=flat-square&logo=telegram&logoColor=white" alt="Telegram Bot" /></a>
-  <a href="https://t.me/leviksupportbot"><img src="https://img.shields.io/badge/Поддержка-@leviksupportbot-24A1DE?style=flat-square&logo=telegram&logoColor=white" alt="Support" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/Лицензия-AGPL--3.0-green?style=flat-square" alt="License" /></a>
+  <a href="https://github.com/Nort321/levik-vpn/releases/latest"><img src="https://img.shields.io/badge/Скачать_APK-v2.0.1-brightgreen?style=for-the-badge&logo=android&logoColor=white" alt="Скачать APK" /></a>
+  <a href="https://leviknet.com"><img src="https://img.shields.io/badge/Сайт-leviknet.com-blue?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Website" /></a>
+  <a href="https://t.me/levikvpnbot"><img src="https://img.shields.io/badge/Telegram_Бот-@levikvpnbot-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram Bot" /></a>
+  <a href="https://t.me/leviksupportbot"><img src="https://img.shields.io/badge/Поддержка-@leviksupportbot-24A1DE?style=for-the-badge&logo=telegram&logoColor=white" alt="Support" /></a>
 </p>
 
 ---
@@ -52,7 +52,7 @@ Levik VPN работает на всех популярных устройств
 
 | Платформа | Способ подключения | Описание |
 | :--- | :--- | :--- |
-| **Android** | Фирменное приложение **Levik VPN** или клиенты Happ / v2rayNG | Удобный переключатель, автоподключение, защита в фоне без нагрева батареи |
+| **Android** | [**Скачать Levik VPN (.APK)**](https://github.com/Nort321/levik-vpn/releases/latest) или клиенты Happ / v2rayNG | Удобный переключатель, автоподключение, защита в фоне без нагрева батареи |
 | **iOS / iPadOS** | Happ / FoXray / Streisand / V2Box | Подключение через личный кабинет или бота за 1 минуту по QR-коду |
 | **Windows** | Hiddify / Nekoray / v2rayN | Полноценный туннель для всего ПК или отдельных приложений |
 | **macOS** | Happ / FoXray / Hiddify / V2Box | Быстрая работа на процессорах Apple Silicon (M1/M2/M3/M4) и Intel |
