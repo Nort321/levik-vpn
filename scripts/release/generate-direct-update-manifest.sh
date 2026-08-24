@@ -98,7 +98,8 @@ readonly ACTUAL_CERTIFICATE_SHA256="$({
   apksigner verify --print-certs "${APK_PATH}"
 } | awk -F ': ' '/certificate SHA-256 digest/ { print tolower($2); exit }')"
 if [[ "${ACTUAL_CERTIFICATE_SHA256}" != "${EXPECTED_CERTIFICATE_SHA256}" ]]; then
-  printf 'ERROR: APK signing certificate SHA-256 does not match the protected release value.\n' >&2
+  printf 'ERROR: APK signing certificate SHA-256 does not match the protected release value (actual public fingerprint: %s).\n' \
+    "${ACTUAL_CERTIFICATE_SHA256}" >&2
   exit 1
 fi
 
