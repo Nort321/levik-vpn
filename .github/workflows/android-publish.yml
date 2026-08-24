@@ -314,7 +314,7 @@ jobs:
             "${public_base}/latest.json.sig" \
             "${RUNNER_TEMP}/private-release/latest.json.sig" \
             "${RUNNER_TEMP}/published-latest.json.sig"
-          curl --fail --silent --show-error --head \
+          curl --fail --silent --show-error --head --location \
             --proto '=https' --tlsv1.2 \
             --retry 12 --retry-all-errors --retry-delay 5 \
             --connect-timeout 10 --max-time 30 \
