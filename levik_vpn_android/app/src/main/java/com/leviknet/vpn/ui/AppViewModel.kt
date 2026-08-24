@@ -1245,15 +1245,12 @@ class AppViewModel(
 
     fun loadPerAppTraffic(packageManager: PackageManager, context: Context) {
         viewModelScope.launch(Dispatchers.IO) {
-            if (perAppTrafficBaseline.isEmpty()) {
-                capturePerAppTrafficBaseline()
-            }
             val baseline = perAppTrafficBaseline
             val intent = android.content.Intent(android.content.Intent.ACTION_MAIN, null).apply {
                 addCategory(android.content.Intent.CATEGORY_LAUNCHER)
             }
             val resolveInfos = packageManager.queryIntentActivities(intent, 0)
-            val list = resolveInfos.mapNotNull { info ->
+            val allApps = resolveInfos.mapNotNull { info ->
                 val pkg = info.activityInfo.packageName
                 if (pkg == "com.leviknet.vpn") return@mapNotNull null
                 val uid = runCatching {
@@ -1270,12 +1267,19 @@ class AppViewModel(
                 val base = baseline[uid]
                 val rx = if (base != null) (rxTotal - base.first).coerceAtLeast(0) else rxTotal
                 val tx = if (base != null) (txTotal - base.second).coerceAtLeast(0) else txTotal
-                if (rx <= 0 && tx <= 0) return@mapNotNull null
 
                 val name = info.loadLabel(packageManager).toString()
                 val icon = info.loadIcon(packageManager)
                 AppTrafficUsage(packageName = pkg, label = name, icon = icon, rxBytes = rx, txBytes = tx)
-            }.sortedByDescending { it.rxBytes + it.txBytes }
+            }
+
+            val listWithTraffic = allApps.filter { it.rxBytes > 0 || it.txBytes > 0 }
+                .sortedByDescending { it.rxBytes + it.txBytes }
+            val list = if (listWithTraffic.isNotEmpty()) {
+                listWithTraffic
+            } else {
+                allApps.take(10)
+            }
             mutableState.update { it.copy(perAppTraffic = list) }
         }
     }
@@ -1284,7 +1288,7 @@ class AppViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             perAppTrafficBaseline = emptyMap()
             capturePerAppTrafficBaseline()
-            loadPerAppTraffic(packageManager, context)
+            mutableState.update { it.copy(perAppTraffic = emptyList()) }
         }
     }
 

@@ -316,6 +316,52 @@ class XrayConfigBuilderTest {
         }
     }
 
+    @Test
+    fun `enforces UseIPv4 in DNS and freedom outbounds to prevent IPv6 leaks`() {
+        val selected = server("b".repeat(64), "server-b")
+        val profile = PreparedTunnelProfile(
+            version = 1,
+            profileId = "profile",
+            subscriptionId = "subscription",
+            issuedAt = "2026-07-29T11:59:00Z",
+            subscriptionExpiresAt = "2026-08-29T13:00:00Z",
+            servers = listOf(selected),
+        )
+
+        val config = json.parseToJsonElement(
+            builder.build(
+                profile = profile,
+                selectedServerId = selected.id,
+                tunFileDescriptor = 42,
+                antiDpiEnabled = true,
+            ),
+        ).jsonObject
+
+        val dns = config.getValue("dns").jsonObject
+        assertEquals("UseIPv4", dns.getValue("queryStrategy").jsonPrimitive.content)
+
+        val outbounds = config.getValue("outbounds").jsonArray
+        val directOutbound = outbounds.first {
+            it.jsonObject["tag"]?.jsonPrimitive?.content == "levik-direct"
+        }.jsonObject
+        assertEquals(
+            "UseIPv4",
+            directOutbound.getValue("settings").jsonObject.getValue("domainStrategy").jsonPrimitive.content,
+        )
+
+        val fragmentOutbound = outbounds.first {
+            it.jsonObject["tag"]?.jsonPrimitive?.content == "levik-fragment"
+        }.jsonObject
+        assertEquals(
+            "UseIPv4",
+            fragmentOutbound.getValue("settings").jsonObject.getValue("domainStrategy").jsonPrimitive.content,
+        )
+
+        val killSwitchConfig = json.parseToJsonElement(builder.buildKillSwitchConfig(42)).jsonObject
+        val killSwitchDns = killSwitchConfig.getValue("dns").jsonObject
+        assertEquals("UseIPv4", killSwitchDns.getValue("queryStrategy").jsonPrimitive.content)
+    }
+
     private fun realityServer(id: String, tag: String, address: String = "de1.example.com"):
         TunnelServer = TunnelServer(
         id = id,

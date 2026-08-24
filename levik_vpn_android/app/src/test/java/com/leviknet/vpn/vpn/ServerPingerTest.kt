@@ -51,4 +51,25 @@ class ServerPingerTest {
 
         assertNull(ServerPinger.extractEndpoint(outbound))
     }
+
+    @Test
+    fun `extracts endpoint from hysteria2 outbound with string or int port`() {
+        val outboundIntPort = buildJsonObject {
+            put("protocol", "hysteria2")
+            put("settings", buildJsonObject {
+                put("address", "hy2.example.com")
+                put("port", 443)
+            })
+        }
+        assertEquals("hy2.example.com" to 443, ServerPinger.extractEndpoint(outboundIntPort))
+
+        val outboundStringPort = buildJsonObject {
+            put("protocol", "hysteria2")
+            put("settings", buildJsonObject {
+                put("server", "hy2-string.example.com")
+                put("port", "8443")
+            })
+        }
+        assertEquals("hy2-string.example.com" to 8443, ServerPinger.extractEndpoint(outboundStringPort))
+    }
 }

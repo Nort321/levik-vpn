@@ -24,6 +24,7 @@ import com.leviknet.vpn.core.logger.AppLogger
 import com.leviknet.vpn.core.security.SecureFileStore
 import com.leviknet.vpn.data.DnsProvider
 import com.leviknet.vpn.data.SplitTunnelMode
+import java.net.DatagramSocket
 import java.net.HttpURLConnection
 import java.net.Socket
 import java.net.URL
@@ -130,7 +131,7 @@ class LevikVpnService : VpnService() {
         AppLogger.i(LOG_TAG, "LevikVpnService onCreate")
         container.xrayRuntime.claimOwner(coreOwner)
         VpnStateStore.claim(coreOwner)
-        ServerPinger.registerSocketProtector(coreOwner, ::protectPingSocket)
+        ServerPinger.registerSocketProtector(coreOwner, ::protectPingSocket, ::protectPingDatagramSocket)
         createNotificationChannel()
     }
 
@@ -474,8 +475,6 @@ class LevikVpnService : VpnService() {
             dnsProvider.primaryIpv4
         }
         val secondaryDns = if (dnsProvider == DnsProvider.CUSTOM) "8.8.8.8" else dnsProvider.secondaryIpv4
-        val primaryDnsIpv6 = dnsProvider.primaryIpv6
-        val secondaryDnsIpv6 = dnsProvider.secondaryIpv6
         val splitMode = container.settings.splitTunnelMode.value
         val splitPackages = container.settings.splitTunnelPackages.value
 
@@ -489,8 +488,6 @@ class LevikVpnService : VpnService() {
             .addRoute("::", 0)
             .addDnsServer(primaryDns)
             .addDnsServer(secondaryDns)
-            .addDnsServer(primaryDnsIpv6)
-            .addDnsServer(secondaryDnsIpv6)
             .setBlocking(true)
             .apply {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -517,6 +514,17 @@ class LevikVpnService : VpnService() {
     }
 
     private fun protectPingSocket(socket: Socket): Boolean {
+        if (!coreRunning) return true
+        val network = underlyingNetwork.get() ?: return false
+        return try {
+            network.bindSocket(socket)
+            protect(socket)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun protectPingDatagramSocket(socket: DatagramSocket): Boolean {
         if (!coreRunning) return true
         val network = underlyingNetwork.get() ?: return false
         return try {
@@ -801,6 +809,7 @@ class LevikVpnService : VpnService() {
         autoHealingJob?.cancel()
         lockdownActive = false
         networkMonitor.stop()
+        val serverNameBeforePause = currentServerName
         stopCoreAndTun()
 
         val pauseDurationMs = minutes * 60_000L
@@ -812,11 +821,11 @@ class LevikVpnService : VpnService() {
             coreOwner,
             VpnSnapshot(
                 state = VpnConnectionState.PAUSED,
-                serverName = currentServerName,
+                serverName = serverNameBeforePause,
                 pausedRemainingSeconds = initialRemaining,
             ),
         )
-        showForeground(VpnConnectionState.PAUSED, currentServerName, initialRemaining)
+        showForeground(VpnConnectionState.PAUSED, serverNameBeforePause, initialRemaining)
 
         pauseJob = serviceScope.launch {
             while (true) {
@@ -826,25 +835,32 @@ class LevikVpnService : VpnService() {
                     AppLogger.i(LOG_TAG, "VPN pause expired, automatically resuming connection")
                     container.settings.setPausedUntilMs(0L)
                     pauseJob = null
-                    connect()
+                    connectionJob?.cancel()
+                    connectionJob = serviceScope.launch {
+                        connect()
+                    }
                     break
                 }
                 VpnStateStore.update(coreOwner) {
                     it.copy(
                         state = VpnConnectionState.PAUSED,
+                        serverName = serverNameBeforePause,
                         pausedRemainingSeconds = remaining,
                     )
                 }
-                showForeground(VpnConnectionState.PAUSED, currentServerName, remaining)
+                showForeground(VpnConnectionState.PAUSED, serverNameBeforePause, remaining)
             }
         }
     }
 
-    private suspend fun resumeConnection() = connectionMutex.withLock {
+    private suspend fun resumeConnection() {
         pauseJob?.cancel()
         pauseJob = null
         container.settings.setPausedUntilMs(0L)
-        connect()
+        connectionJob?.cancel()
+        connectionJob = serviceScope.launch {
+            connect()
+        }
     }
 
     private suspend fun checkConnectivity(): Boolean = withContext(Dispatchers.IO) {

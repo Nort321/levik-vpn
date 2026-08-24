@@ -89,6 +89,7 @@ class XrayConfigBuilder(
                     put("tag", FRAGMENT_TAG)
                     put("protocol", "freedom")
                     put("settings", buildJsonObject {
+                        put("domainStrategy", "UseIPv4")
                         put("fragment", buildJsonObject {
                             put("packets", "1-3")
                             put("length", "100-200")
@@ -105,7 +106,9 @@ class XrayConfigBuilder(
             add(buildJsonObject {
                 put("tag", DIRECT_TAG)
                 put("protocol", "freedom")
-                put("settings", buildJsonObject {})
+                put("settings", buildJsonObject {
+                    put("domainStrategy", "UseIPv4")
+                })
             })
             add(buildJsonObject {
                 put("tag", BLOCK_TAG)
@@ -122,7 +125,7 @@ class XrayConfigBuilder(
                 put(TUN_FD_ENV, tunFileDescriptor.toString())
             })
             put("dns", buildJsonObject {
-                put("queryStrategy", "UseIP")
+                put("queryStrategy", "UseIPv4")
                 put("servers", buildJsonArray {
                     if (!dohEndpoint.isNullOrBlank()) {
                         add(JsonPrimitive(dohEndpoint.trim()))
@@ -211,7 +214,7 @@ class XrayConfigBuilder(
                 put(TUN_FD_ENV, tunFileDescriptor.toString())
             })
             put("dns", buildJsonObject {
-                put("queryStrategy", "UseIP")
+                put("queryStrategy", "UseIPv4")
                 put("servers", buildJsonArray {
                     add(JsonPrimitive(PRIMARY_DNS_IP))
                 })

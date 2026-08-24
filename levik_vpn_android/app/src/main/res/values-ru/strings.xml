@@ -305,8 +305,10 @@
     <string name="battery_optimization_title">Работа в фоне (Батарея)</string>
     <string name="battery_optimization_desc">Отключить оптимизацию батареи для стабильной работы VPN при выключенном экране.</string>
 
-    <string name="referral_title">Приглашай друзей — получай дни</string>
-    <string name="referral_subtitle">Скидка 10% друзьям и +30 дней тебе за каждого активного друга!</string>
+    <string name="referral_title">Приглашай друзей</string>
+    <string name="referral_subtitle">Другу — 20% скидка на всю 1-ю покупку</string>
+    <string name="referral_terms_base">За 1-ю оплату друга: вам +14 дней (на Обычный и Мобильный VPN) и +10 ГБ трафика.</string>
+    <string name="referral_terms_tiers">🔥 Бонус со сроком покупки:\n• 3 мес — 21 день и 15 ГБ (×1,5)\n• 6+ мес — 28 дней и 20 ГБ (×2)</string>
     <string name="referral_stats_invited">Приглашено: %1$d</string>
     <string name="referral_stats_rewarded">Начислено: %1$d дней</string>
     <string name="referral_share_btn">Поделиться ссылкой</string>

@@ -62,7 +62,8 @@ class VpnController(
     }
 
     fun pause(durationMinutes: Int) {
-        context.startService(
+        ContextCompat.startForegroundService(
+            context,
             Intent(context, LevikVpnService::class.java)
                 .setAction(LevikVpnService.ACTION_PAUSE)
                 .putExtra(LevikVpnService.EXTRA_PAUSE_MINUTES, durationMinutes),
@@ -70,7 +71,8 @@ class VpnController(
     }
 
     fun resume() {
-        context.startService(
+        ContextCompat.startForegroundService(
+            context,
             Intent(context, LevikVpnService::class.java)
                 .setAction(LevikVpnService.ACTION_RESUME),
         )

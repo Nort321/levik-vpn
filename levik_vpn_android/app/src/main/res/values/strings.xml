@@ -305,8 +305,10 @@
     <string name="battery_optimization_title">Background Battery Settings</string>
     <string name="battery_optimization_desc">Disable battery optimization to keep VPN connected with screen off.</string>
 
-    <string name="referral_title">Invite Friends, Get Free Days</string>
-    <string name="referral_subtitle">Give friends 10% discount and get +30 days for each active friend!</string>
+    <string name="referral_title">Invite Friends</string>
+    <string name="referral_subtitle">Friend gets 20% off first purchase</string>
+    <string name="referral_terms_base">For friend\'s 1st payment: you get +14 days (Standard &amp; Mobile VPN) &amp; +10 GB traffic.</string>
+    <string name="referral_terms_tiers">🔥 Bonus grows with plan duration:\n• 3 mo — 21 days &amp; 15 GB (×1.5)\n• 6+ mo — 28 days &amp; 20 GB (×2)</string>
     <string name="referral_stats_invited">Invited: %1$d</string>
     <string name="referral_stats_rewarded">Rewarded: %1$d days</string>
     <string name="referral_share_btn">Share Link</string>
