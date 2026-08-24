@@ -88,26 +88,14 @@ Levik VPN работает на всех популярных устройств
 
 ## 💻 Для разработчиков
 
-В этом репозитории опубликован открытый исходный код Android-клиента **Levik VPN** (`levik_vpn_android/`):
+Этот private-репозиторий содержит только исходный код Android-клиента **Levik VPN** (`levik_vpn_android/`) и необходимые для него CI/release-материалы:
 - Нативный клиент на Kotlin и Jetpack Compose
 - Интеграция с Android `VpnService` и защищенным аппаратным хранилищем Android Keystore
 - Поддержка двух вариантов сборки: `direct` (прямая загрузка с безопасным OTA-обновлением) и `play` (для публикации в Google Play Store)
 
-### Сборка и тестирование:
-```bash
-# Проверка политик репозитория
-./scripts/ci/check-repository-policy.sh
-./scripts/ci/check-action-pins.sh
+### Сборка и тестирование
 
-# Загрузка и проверка нативного ядра libXray
-./scripts/ci/fetch-libxray.sh
-
-# Сборка и запуск тестов Android-приложения
-cd levik_vpn_android
-./gradlew lintDirectDebug lintPlayDebug
-./gradlew testDirectDebugUnitTest testPlayDebugUnitTest
-./gradlew assembleDirectDebug assemblePlayDebug
-```
+Любые lint, тесты, APK и AAB выполняются только workflow GitHub Actions. Push и pull request запускают `Android CI`; подписанный production-релиз запускается вручную из immutable-тега через `Android production release`. Локальная сборка Android-приложения не является поддерживаемым релизным путем.
 
 ---
 

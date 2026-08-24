@@ -17,15 +17,7 @@
 
 ## Проверка и валидация
 
-Для сборки используйте JDK 17, Android SDK 36 и Gradle Wrapper из репозитория. Загрузите зафиксированное нативное ядро через загрузчик репозитория и выполните проверки в следующем порядке:
-
-```bash
-./scripts/ci/fetch-libxray.sh
-cd levik_vpn_android
-./gradlew lintDirectDebug lintPlayDebug
-./gradlew assembleDirectDebug assemblePlayDebug
-./gradlew testDirectDebugUnitTest testPlayDebugUnitTest
-```
+Lint, тесты и любые сборки Android выполняются только workflow `Android CI` в GitHub Actions с JDK 17, Android SDK 36, Gradle Wrapper и зафиксированным нативным ядром. Не запускайте Gradle-сборку приложения локально и не прикладывайте локально собранные APK/AAB к pull request или релизу.
 
 Из корня репозитория также выполните:
 
@@ -34,7 +26,7 @@ cd levik_vpn_android
 ./scripts/ci/check-action-pins.sh
 ```
 
-Если какую-то проверку невозможно запустить локально, укажите причину в описании pull request. Не скрывайте ошибки сборки, не ослабляйте утверждения тестов и не удаляйте тесты для прохождения CI.
+В описании pull request укажите ссылку на успешный запуск `Android CI`. Не скрывайте ошибки сборки, не ослабляйте утверждения тестов и не удаляйте тесты для прохождения CI.
 
 ## Требования к коду
 

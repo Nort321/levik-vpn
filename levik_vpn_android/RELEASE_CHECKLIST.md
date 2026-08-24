@@ -17,14 +17,8 @@
    - Заполнить раздел **Data Safety** (безопасность данных) в соответствии с реальной политикой конфиденциальности (`https://leviknet.com/legal/privacy`).
    - Указать URL удаления аккаунта: `https://leviknet.com/account/delete`.
 6. **Автоматическая валидация**:
-   - Выполнить:
-     ```bash
-     ./gradlew verifyAllDependencyLocks
-     ./gradlew lintDirectRelease lintPlayRelease
-     ./gradlew assembleDirectRelease bundlePlayRelease
-     ./gradlew testDirectReleaseUnitTest testPlayReleaseUnitTest
-     ./gradlew :app:cyclonedxDirectBom
-     ```
+   - Убедиться, что `Android CI` успешно завершился для точного release-коммита.
+   - Выполнять lint, тесты, APK, AAB и SBOM только в GitHub Actions; локальные Android-сборки запрещены релизной политикой.
 7. **Direct OTA релиз (для сайта и прямых загрузок)**:
    - Сгенерировать криптографический манифест `update.json.sig` алгоритмом `SHA256withECDSA` (P-256) и опубликовать вместе с подписанным APK.
 8. **Лицензии и SBOM**:

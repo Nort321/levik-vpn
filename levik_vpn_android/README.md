@@ -2,7 +2,7 @@
 
 Нативный клиент на Kotlin и Jetpack Compose для подключения к сервису Levik VPN. Реализует независимую авторизацию Levik Account через Chrome Custom Tabs (`https://leviknet.com/activate`), привязку сессий к аппаратному ключу Android Keystore, подпись каждого сетевого запроса к Mobile BFF, локальное шифрование профилей (AES-GCM) и маршрутизацию трафика через `android.net.VpnService` с нативным ядром `libXray`.
 
-## Локальная конфигурация разработки
+## Конфигурация разработки
 
 Параметры разработки задаются в файле `local.properties` (не отслеживается в Git):
 
@@ -35,14 +35,6 @@ SHA256_HEX_BODY
 
 ## Сборка и тестирование
 
-Используйте JDK 17 и Android SDK 36:
-
-```bash
-./gradlew verifyAllDependencyLocks
-./gradlew lintDirectRelease lintPlayRelease
-./gradlew assembleDirectRelease bundlePlayRelease
-./gradlew testDirectReleaseUnitTest testPlayReleaseUnitTest
-./gradlew :app:cyclonedxDirectBom
-```
+Все lint, unit tests, APK, AAB и SBOM создаются только в GitHub Actions. Для изменений используется workflow `Android CI`, а production-артефакты выпускает `Android production release` из immutable-тега. Локальные Android-сборки не используются и не считаются релизным доказательством.
 
 Подробный чек-лист перед релизом в Google Play описан в [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).

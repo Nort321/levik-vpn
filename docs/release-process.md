@@ -16,24 +16,14 @@
 
 ## Последовательность сборки и проверки
 
-Используйте JDK 17, Android SDK 36 и Gradle Wrapper:
+Android-приложение собирается и тестируется только в GitHub Actions:
 
-```bash
-# 1. Проверка политик и пинов действий
-./scripts/ci/check-repository-policy.sh
-./scripts/ci/check-action-pins.sh
+1. Push или pull request запускает `Android CI` и `Repository Policy` для точного commit SHA.
+2. `Android CI` проверяет dependency locks, загружает и сверяет libXray, выполняет lint, unit tests и debug-сборки обоих вариантов.
+3. После успешного CI владелец создает immutable-тег `vX.Y.Z` на коммите из `main`.
+4. Workflow `Android production release`, запущенный из тега, выполняет release lint/tests, создает подписанные APK/AAB, SBOM и release evidence.
 
-# 2. Загрузка нативного ядра
-./scripts/ci/fetch-libxray.sh
-
-# 3. Сборка и тестирование Android-проекта
-cd levik_vpn_android
-./gradlew verifyAllDependencyLocks
-./gradlew lintDirectRelease lintPlayRelease
-./gradlew assembleDirectRelease bundlePlayRelease
-./gradlew testDirectReleaseUnitTest testPlayReleaseUnitTest
-./gradlew :app:cyclonedxDirectBom
-```
+Локальные Gradle-сборки Android, включая debug и release, запрещены релизной политикой и не принимаются как доказательство проверки.
 
 ## Подпись релизов
 
