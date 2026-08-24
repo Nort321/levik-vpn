@@ -24,9 +24,7 @@ jobs:
     timeout-minutes: 30
     environment: production-release
     permissions:
-      attestations: read
       contents: read
-      id-token: write
 
     steps:
       - name: Resolve immutable release tag
@@ -99,15 +97,63 @@ jobs:
             cd "${release_directory}"
             sha256sum --check --strict ARTIFACT-SHA256SUMS
           )
-          gh attestation verify \
-            "${release_directory}/LevikVPN-direct-${VERSION_NAME}.apk" \
-            --repo "${GITHUB_REPOSITORY}"
 
           printf '%s' "${DIRECT_UPDATE_MANIFEST_PUBLIC_KEY}" |
             base64 --decode >"${RUNNER_TEMP}/direct-update-public.der"
           openssl pkey -pubin -inform DER \
             -in "${RUNNER_TEMP}/direct-update-public.der" \
             -out "${RUNNER_TEMP}/direct-update-public.pem"
+          base64 --decode "${release_directory}/release-provenance.json.sig" \
+            >"${RUNNER_TEMP}/release-provenance.sig.der"
+          openssl dgst -sha256 \
+            -verify "${RUNNER_TEMP}/direct-update-public.pem" \
+            -signature "${RUNNER_TEMP}/release-provenance.sig.der" \
+            "${release_directory}/release-provenance.json" >/dev/null
+
+          readonly checksum_manifest_sha256="$(
+            sha256sum "${release_directory}/ARTIFACT-SHA256SUMS" | awk '{print $1}'
+          )"
+          readonly release_commit="$(git rev-parse HEAD)"
+          python3 - \
+            "${release_directory}/release-provenance.json" \
+            "${GITHUB_REPOSITORY}" \
+            "${release_commit}" \
+            "${RELEASE_TAG}" \
+            "${VERSION_NAME}" \
+            "${checksum_manifest_sha256}" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          path, repository, commit, tag, version_name, checksums_sha256 = sys.argv[1:]
+          payload = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+          expected = {
+              "schemaVersion": 1,
+              "repository": repository,
+              "commit": commit,
+              "ref": f"refs/tags/{tag}",
+              "tag": tag,
+              "versionCode": json.loads(
+                  pathlib.Path(path).with_name("update.json").read_text(encoding="utf-8")
+              )["versionCode"],
+              "versionName": version_name,
+              "releaseScope": "direct-only",
+              "workflowRef": (
+                  f"{repository}/.github/workflows/android-release.yml@refs/tags/{tag}"
+              ),
+              "artifactChecksumsSha256": checksums_sha256,
+          }
+          for key, value in expected.items():
+              if payload.get(key) != value:
+                  raise SystemExit(f"release provenance mismatch: {key}")
+          if set(payload) != set(expected) | {"workflowRunId", "workflowRunAttempt"}:
+              raise SystemExit("release provenance contains unexpected fields")
+          if not isinstance(payload["workflowRunId"], int) or payload["workflowRunId"] <= 0:
+              raise SystemExit("invalid provenance workflow run id")
+          if not isinstance(payload["workflowRunAttempt"], int) or payload["workflowRunAttempt"] <= 0:
+              raise SystemExit("invalid provenance workflow run attempt")
+          PY
+
           base64 --decode "${release_directory}/update.json.sig" \
             >"${RUNNER_TEMP}/update.json.sig.der"
           openssl dgst -sha256 \
@@ -141,6 +187,8 @@ jobs:
             native-sources.lock.json
             gradle-root.lockfile
             gradle-app.lockfile
+            release-provenance.json
+            release-provenance.json.sig
           )
           for asset in "${public_assets[@]}"; do
             if [[ ! -f "${source_directory}/${asset}" || -L "${source_directory}/${asset}" ]]; then

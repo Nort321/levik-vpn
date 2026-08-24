@@ -50,9 +50,7 @@ jobs:
     timeout-minutes: 90
     environment: production-release
     permissions:
-      attestations: write
       contents: write
-      id-token: write
 
     steps:
       - name: Checkout immutable release revision
@@ -422,10 +420,95 @@ jobs:
               sed 's#  \./#  #'
           ) >"${output_directory}/ARTIFACT-SHA256SUMS"
 
-      - name: Attest release artifacts
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: ${{ runner.temp }}/levik-release-output/*
+      - name: Sign private release provenance
+        shell: bash
+        env:
+          VERSION_CODE: ${{ inputs.version_code }}
+          VERSION_NAME: ${{ inputs.version_name }}
+          RELEASE_SCOPE: ${{ inputs.release_scope }}
+          DIRECT_UPDATE_MANIFEST_PUBLIC_KEY: ${{ secrets.DIRECT_UPDATE_MANIFEST_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          readonly output_directory="${RUNNER_TEMP}/levik-release-output"
+          readonly provenance="${output_directory}/release-provenance.json"
+          readonly provenance_signature="${output_directory}/release-provenance.json.sig"
+          readonly checksum_manifest="${output_directory}/ARTIFACT-SHA256SUMS"
+          readonly checksum_manifest_sha256="$(sha256sum "${checksum_manifest}" | awk '{print $1}')"
+
+          python3 - \
+            "${provenance}" \
+            "${GITHUB_REPOSITORY}" \
+            "${GITHUB_SHA}" \
+            "${GITHUB_REF}" \
+            "${VERSION_CODE}" \
+            "${VERSION_NAME}" \
+            "${RELEASE_SCOPE}" \
+            "${GITHUB_WORKFLOW_REF}" \
+            "${GITHUB_RUN_ID}" \
+            "${GITHUB_RUN_ATTEMPT}" \
+            "${checksum_manifest_sha256}" <<'PY'
+          import json
+          import pathlib
+          import re
+          import sys
+
+          (
+              output_path,
+              repository,
+              commit,
+              ref,
+              version_code,
+              version_name,
+              release_scope,
+              workflow_ref,
+              run_id,
+              run_attempt,
+              checksums_sha256,
+          ) = sys.argv[1:]
+          tag = f"v{version_name}"
+          if not re.fullmatch(r"[0-9a-f]{40}", commit):
+              raise SystemExit("invalid provenance commit")
+          if ref != f"refs/tags/{tag}":
+              raise SystemExit("invalid provenance ref")
+          if not re.fullmatch(r"[0-9a-f]{64}", checksums_sha256):
+              raise SystemExit("invalid provenance checksum")
+          payload = {
+              "schemaVersion": 1,
+              "repository": repository,
+              "commit": commit,
+              "ref": ref,
+              "tag": tag,
+              "versionCode": int(version_code),
+              "versionName": version_name,
+              "releaseScope": release_scope,
+              "workflowRef": workflow_ref,
+              "workflowRunId": int(run_id),
+              "workflowRunAttempt": int(run_attempt),
+              "artifactChecksumsSha256": checksums_sha256,
+          }
+          pathlib.Path(output_path).write_text(
+              json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+              newline="\n",
+          )
+          PY
+
+          openssl dgst -sha256 \
+            -sign "${RUNNER_TEMP}/levik-release-secrets/direct-update-private.pem" \
+            -out "${RUNNER_TEMP}/release-provenance.sig.der" \
+            "${provenance}"
+          base64 -w 0 "${RUNNER_TEMP}/release-provenance.sig.der" >"${provenance_signature}"
+          printf '\n' >>"${provenance_signature}"
+
+          printf '%s' "${DIRECT_UPDATE_MANIFEST_PUBLIC_KEY}" |
+            base64 --decode >"${RUNNER_TEMP}/release-provenance-public.der"
+          openssl pkey -pubin -inform DER \
+            -in "${RUNNER_TEMP}/release-provenance-public.der" \
+            -out "${RUNNER_TEMP}/release-provenance-public.pem"
+          openssl dgst -sha256 \
+            -verify "${RUNNER_TEMP}/release-provenance-public.pem" \
+            -signature "${RUNNER_TEMP}/release-provenance.sig.der" \
+            "${provenance}" >/dev/null
 
       - name: Create draft GitHub release
         shell: bash

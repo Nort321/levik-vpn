@@ -6,9 +6,11 @@ export LC_ALL=C
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly REPOSITORY_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 readonly WORKFLOW="${REPOSITORY_ROOT}/.github/workflows/android-release.yml"
+readonly PUBLISH_WORKFLOW="${REPOSITORY_ROOT}/.github/workflows/android-publish.yml"
 
-if [[ ! -f "${WORKFLOW}" || -L "${WORKFLOW}" ]]; then
-  printf 'ERROR: Android release workflow is missing or is not a regular file.\n' >&2
+if [[ ! -f "${WORKFLOW}" || -L "${WORKFLOW}" ||
+      ! -f "${PUBLISH_WORKFLOW}" || -L "${PUBLISH_WORKFLOW}" ]]; then
+  printf 'ERROR: Android release or publish workflow is missing or is not a regular file.\n' >&2
   exit 1
 fi
 
@@ -38,6 +40,9 @@ required_literals=(
   'validate-play-bundle-metadata.sh'
   'generate-native-sbom.py'
   'build-corresponding-source.sh'
+  'release-provenance.json'
+  'artifactChecksumsSha256'
+  'openssl dgst -sha256'
   'gh release create'
   '--draft'
   'private Android repository'
@@ -50,6 +55,26 @@ for literal in "${required_literals[@]}"; do
     violations=$((violations + 1))
   fi
 done
+
+publish_required_literals=(
+  'release-provenance.json'
+  'release-provenance.json.sig'
+  'artifactChecksumsSha256'
+  'openssl dgst -sha256'
+  'sha256sum --check --strict ARTIFACT-SHA256SUMS'
+  'release provenance mismatch'
+)
+for literal in "${publish_required_literals[@]}"; do
+  if ! grep -F -- "${literal}" "${PUBLISH_WORKFLOW}" >/dev/null; then
+    printf 'ERROR: Android publish workflow is missing required provenance gate: %s\n' "${literal}" >&2
+    violations=$((violations + 1))
+  fi
+done
+
+if grep -F -- 'gh attestation' "${WORKFLOW}" "${PUBLISH_WORKFLOW}" >/dev/null; then
+  printf 'ERROR: GitHub Artifact Attestations are unavailable for this private repository.\n' >&2
+  violations=$((violations + 1))
+fi
 
 on_block="$(awk '
   /^"on":$/ { in_on = 1; next }

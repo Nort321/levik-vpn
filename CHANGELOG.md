@@ -4,6 +4,12 @@
 
 ## [В разработке / Текущая версия]
 
+## [2.0.6] — 2026-08-24
+
+### Безопасность
+- Для private GitHub repository добавлен собственный ECDSA-подписанный release provenance, связывающий repository, commit, tag, workflow run и SHA-256 полного checksum manifest.
+- Publisher проверяет provenance, полный набор checksums и update manifest до передачи ограниченного публичного архива на production-сервер.
+
 ## [2.0.5] — 2026-08-24
 
 ### Исправлено
