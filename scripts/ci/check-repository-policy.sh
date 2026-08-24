@@ -135,6 +135,7 @@ if [[ "${INPUT_MODE}" == "git" ]]; then
     scripts/release/validate-play-bundle-metadata.sh
     release/native-sources.lock.json
     .github/workflows/android-release.yml
+    .github/workflows/android-dependency-verification.yml
     levik_vpn_android/gradle.lockfile
     levik_vpn_android/app/gradle.lockfile
     levik_vpn_android/gradle/verification-metadata.xml

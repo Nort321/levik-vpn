@@ -1,0 +1,80 @@
+name: Refresh Android dependency verification metadata
+
+"on":
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-dependency-verification
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    name: Resolve checksums on the Linux build runner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Restrict maintenance workflow to the repository owner
+        shell: bash
+        env:
+          MAINTENANCE_ACTOR: ${{ github.actor }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          MAINTENANCE_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "${MAINTENANCE_ACTOR}" != "${REPOSITORY_OWNER}" ||
+                "${MAINTENANCE_REPOSITORY}" != "Nort321/levik-vpn" ]]; then
+            printf 'ERROR: dependency verification maintenance is owner-only.\n' >&2
+            exit 1
+          fi
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          cache-provider: basic
+          cache-read-only: true
+
+      - name: Fetch and verify libXray
+        run: ./scripts/ci/fetch-libxray.sh
+
+      - name: Resolve CI and lint dependencies and record checksums
+        id: generate
+        continue-on-error: true
+        working-directory: levik_vpn_android
+        run: |
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            --write-verification-metadata sha256 \
+            verifyAllDependencyLocks \
+            lintDirectDebug \
+            lintPlayDebug
+
+      - name: Upload verification metadata for owner review
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: android-dependency-verification-metadata
+          path: levik_vpn_android/gradle/verification-metadata.xml
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Require successful dependency resolution and lint
+        if: steps.generate.outcome != 'success'
+        run: |
+          printf 'ERROR: dependency resolution or Android lint failed.\n' >&2
+          exit 1
