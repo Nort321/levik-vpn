@@ -145,7 +145,10 @@ class MainActivity : ComponentActivity() {
         val customTabsIntent = CustomTabsIntent.Builder()
             .setShareState(CustomTabsIntent.SHARE_STATE_OFF)
             .build()
-        runCatching { customTabsIntent.launchUrl(this, uri) }
+        val customTabsLaunched = runCatching { customTabsIntent.launchUrl(this, uri) }.isSuccess
+        if (!customTabsLaunched) {
+            runCatching { startActivity(Intent(Intent.ACTION_VIEW, uri)) }
+        }
     }
 
     private fun openAllowedUri(rawUri: String) {
