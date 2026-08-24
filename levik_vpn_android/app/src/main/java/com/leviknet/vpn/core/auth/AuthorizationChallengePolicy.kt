@@ -53,7 +53,7 @@ internal object AuthorizationChallengePolicy {
         if (uri.rawUserInfo != null || uri.port != -1 || uri.rawFragment != null) return null
         val allowed = when (uri.scheme?.lowercase()) {
             "https" -> uri.host.equals("t.me", ignoreCase = true)
-            "tg" -> uri.host.equals("resolve", ignoreCase = true)
+            "tg" -> uri.host.equals("resolve", ignoreCase = true) || uri.host.equals("proxy", ignoreCase = true)
             else -> false
         }
         return if (allowed) ChallengeAuthorization.LegacyTelegram(rawUri, code) else null
