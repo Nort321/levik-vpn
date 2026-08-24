@@ -43,7 +43,12 @@ required_literals=(
   'release-provenance.json'
   'artifactChecksumsSha256'
   'openssl dgst -sha256'
+  'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'
+  'android-production-release-${{ inputs.version_name }}'
+  'retention-days: 1'
   'gh release create'
+  '"${release_apk}"'
+  '--notes-file "${release_notes}"'
   '--draft'
   'private Android repository'
 )
@@ -62,6 +67,8 @@ publish_required_literals=(
   'artifactChecksumsSha256'
   'openssl dgst -sha256'
   'sha256sum --check --strict ARTIFACT-SHA256SUMS'
+  'gh run download "${release_run_id}"'
+  'published GitHub release must contain only the Direct APK'
   'release provenance mismatch'
 )
 for literal in "${publish_required_literals[@]}"; do

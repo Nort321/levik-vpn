@@ -21,9 +21,10 @@ jobs:
   publish:
     name: Verify and publish Direct release
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 90
     environment: production-release
     permissions:
+      actions: read
       contents: read
 
     steps:
@@ -65,13 +66,17 @@ jobs:
             printf 'ERROR: checkout does not match the release tag.\n' >&2
             exit 1
           fi
-          release_json="$(gh release view "${RELEASE_TAG}" --json isDraft,isPrerelease,tagName,targetCommitish)"
+          release_json="$(gh release view "${RELEASE_TAG}" --json assets,isDraft,isPrerelease,tagName,targetCommitish)"
           python3 - "${release_json}" "${RELEASE_TAG}" <<'PY'
           import json
           import sys
 
           release = json.loads(sys.argv[1])
           tag = sys.argv[2]
+          assets = release.pop("assets", [])
+          expected_apk = f"LevikVPN-direct-{tag.removeprefix('v')}.apk"
+          if [asset.get("name") for asset in assets] != [expected_apk]:
+              raise SystemExit("published GitHub release must contain only the Direct APK")
           if release != {
               "isDraft": False,
               "isPrerelease": False,
@@ -92,7 +97,43 @@ jobs:
           set -euo pipefail
           readonly release_directory="${RUNNER_TEMP}/private-release"
           mkdir -m 700 -- "${release_directory}"
-          gh release download "${RELEASE_TAG}" --dir "${release_directory}"
+          readonly release_commit="$(git rev-parse HEAD)"
+          release_runs_json="$(
+            gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/android-release.yml/runs" \
+              -f event=workflow_dispatch \
+              -f status=success \
+              -f head_sha="${release_commit}" \
+              -f per_page=20
+          )"
+          read -r release_run_id release_run_attempt < <(
+            python3 - "${release_runs_json}" "${RELEASE_TAG}" <<'PY'
+          import json
+          import sys
+
+          payload = json.loads(sys.argv[1])
+          tag = sys.argv[2]
+          matches = [
+              run
+              for run in payload.get("workflow_runs", [])
+              if run.get("head_branch") == tag
+              and run.get("conclusion") == "success"
+              and run.get("path") == ".github/workflows/android-release.yml"
+          ]
+          if len(matches) != 1:
+              raise SystemExit("expected exactly one successful production release run")
+          run = matches[0]
+          print(run["id"], run["run_attempt"])
+          PY
+          )
+          if [[ ! "${release_run_id}" =~ ^[1-9][0-9]*$ ||
+                ! "${release_run_attempt}" =~ ^[1-9][0-9]*$ ]]; then
+            printf 'ERROR: invalid production release run identity.\n' >&2
+            exit 1
+          fi
+          gh run download "${release_run_id}" \
+            --name "android-production-release-${VERSION_NAME}" \
+            --dir "${release_directory}"
           (
             cd "${release_directory}"
             sha256sum --check --strict ARTIFACT-SHA256SUMS
@@ -113,19 +154,29 @@ jobs:
           readonly checksum_manifest_sha256="$(
             sha256sum "${release_directory}/ARTIFACT-SHA256SUMS" | awk '{print $1}'
           )"
-          readonly release_commit="$(git rev-parse HEAD)"
           python3 - \
             "${release_directory}/release-provenance.json" \
             "${GITHUB_REPOSITORY}" \
             "${release_commit}" \
             "${RELEASE_TAG}" \
             "${VERSION_NAME}" \
-            "${checksum_manifest_sha256}" <<'PY'
+            "${checksum_manifest_sha256}" \
+            "${release_run_id}" \
+            "${release_run_attempt}" <<'PY'
           import json
           import pathlib
           import sys
 
-          path, repository, commit, tag, version_name, checksums_sha256 = sys.argv[1:]
+          (
+              path,
+              repository,
+              commit,
+              tag,
+              version_name,
+              checksums_sha256,
+              run_id,
+              run_attempt,
+          ) = sys.argv[1:]
           payload = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
           expected = {
               "schemaVersion": 1,
@@ -142,16 +193,14 @@ jobs:
                   f"{repository}/.github/workflows/android-release.yml@refs/tags/{tag}"
               ),
               "artifactChecksumsSha256": checksums_sha256,
+              "workflowRunId": int(run_id),
+              "workflowRunAttempt": int(run_attempt),
           }
           for key, value in expected.items():
               if payload.get(key) != value:
                   raise SystemExit(f"release provenance mismatch: {key}")
-          if set(payload) != set(expected) | {"workflowRunId", "workflowRunAttempt"}:
+          if set(payload) != set(expected):
               raise SystemExit("release provenance contains unexpected fields")
-          if not isinstance(payload["workflowRunId"], int) or payload["workflowRunId"] <= 0:
-              raise SystemExit("invalid provenance workflow run id")
-          if not isinstance(payload["workflowRunAttempt"], int) or payload["workflowRunAttempt"] <= 0:
-              raise SystemExit("invalid provenance workflow run attempt")
           PY
 
           base64 --decode "${release_directory}/update.json.sig" \

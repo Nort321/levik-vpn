@@ -510,26 +510,49 @@ jobs:
             -signature "${RUNNER_TEMP}/release-provenance.sig.der" \
             "${provenance}" >/dev/null
 
-      - name: Create draft GitHub release
+      - name: Upload private release evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: android-production-release-${{ inputs.version_name }}
+          path: ${{ runner.temp }}/levik-release-output/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      - name: Create APK-only draft GitHub release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION_NAME: ${{ inputs.version_name }}
-          RELEASE_SCOPE: ${{ inputs.release_scope }}
+          CHANGELOG_RU: ${{ inputs.changelog_ru }}
         run: |
           set -euo pipefail
           readonly release_tag="v${VERSION_NAME}"
+          readonly release_apk="${RUNNER_TEMP}/levik-release-output/LevikVPN-direct-${VERSION_NAME}.apk"
+          readonly release_notes="${RUNNER_TEMP}/release-notes-ru.md"
           if gh release view "${release_tag}" >/dev/null 2>&1; then
             printf 'ERROR: refusing to replace an existing GitHub release.\n' >&2
             exit 1
           fi
+          if [[ ! -f "${release_apk}" || -L "${release_apk}" ]]; then
+            printf 'ERROR: signed Direct APK is missing.\n' >&2
+            exit 1
+          fi
+          {
+            printf '## Levik VPN %s\n\n' "${VERSION_NAME}"
+            printf '### Что нового\n\n%s\n\n' "${CHANGELOG_RU}"
+            printf '### Установка\n\n'
+            printf 'Скачайте файл `LevikVPN-direct-%s.apk` и откройте его на Android-устройстве.\n\n' "${VERSION_NAME}"
+            printf '### Важно для пользователей ранней версии 1.9.0\n\n'
+            printf 'Ранняя тестовая сборка 1.9.0 была подписана другим ключом. Если Android не позволяет установить обновление поверх неё, удалите старую версию и установите %s заново. При удалении могут сброситься локальные настройки приложения.\n' "${VERSION_NAME}"
+          } >"${release_notes}"
           gh release create \
             "${release_tag}" \
-            "${RUNNER_TEMP}/levik-release-output"/* \
+            "${release_apk}" \
             --draft \
             --verify-tag \
             --title "Levik VPN ${VERSION_NAME}" \
-            --notes "Signed ${RELEASE_SCOPE} release candidate. Review every attached checksum, SBOM, source bundle, signing decision, and test result before publication. Publishing this draft triggers the separate verified deployment of the signed Direct feed to leviknet.com."
+            --notes-file "${release_notes}"
 
       - name: Remove protected signing inputs
         if: always()
