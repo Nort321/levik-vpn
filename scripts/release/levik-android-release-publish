@@ -66,6 +66,7 @@ required_files=(
   update.json
   update.json.sig
   latest.json
+  latest.json.sig
   SHA256SUMS
   PUBLIC-SHA256SUMS
   THIRD_PARTY_NOTICES-root.md
@@ -95,26 +96,54 @@ openssl dgst -sha256 \
   "${temporary_directory}/update.json" >/dev/null
 rm -f -- "${binary_signature}"
 
+readonly feed_signature="${temporary_directory}/latest.json.sig.der"
+base64 --decode "${temporary_directory}/latest.json.sig" >"${feed_signature}"
+openssl dgst -sha256 \
+  -verify "${public_key}" \
+  -signature "${feed_signature}" \
+  "${temporary_directory}/latest.json" >/dev/null
+rm -f -- "${feed_signature}"
+
 python3 - "${temporary_directory}" "${release_tag}" "${version_name}" "${apk_name}" <<'PY'
+import hashlib
 import json
 import pathlib
 import sys
+import time
 
 directory = pathlib.Path(sys.argv[1])
 tag, version, apk_name = sys.argv[2:]
 base = f"https://leviknet.com/downloads/android/stable/{tag}"
+manifest_path = directory / "update.json"
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+manifest_version_code = manifest.get("versionCode")
 feed = json.loads((directory / "latest.json").read_text(encoding="utf-8"))
+now = int(time.time())
+generated_at = feed.get("generated_at")
+expires_at = feed.get("expires_at")
 if (
     feed.get("schemaVersion") != 1
     or feed.get("channel") != "stable"
     or feed.get("tag_name") != tag
+    or feed.get("version_code") != manifest_version_code
+    or feed.get("manifest_sha256") != hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    or not isinstance(generated_at, int)
+    or not isinstance(expires_at, int)
+    or generated_at > now + 300
+    or expires_at <= now
+    or expires_at <= generated_at
+    or expires_at - generated_at > 72 * 60 * 60
     or feed.get("draft") is not False
     or feed.get("prerelease") is not False
 ):
     raise SystemExit("invalid Direct release feed metadata")
 assets = feed.get("assets")
 expected_names = {"update.json", "update.json.sig", apk_name}
-if not isinstance(assets, list) or {item.get("name") for item in assets} != expected_names:
+if (
+    not isinstance(assets, list)
+    or not all(isinstance(item, dict) for item in assets)
+    or {item.get("name") for item in assets} != expected_names
+):
     raise SystemExit("invalid Direct release feed assets")
 for item in assets:
     name = item["name"]
@@ -122,7 +151,6 @@ for item in assets:
     if item.get("size") != path.stat().st_size or item.get("url") != f"{base}/{name}":
         raise SystemExit("Direct release feed does not match published assets")
 
-manifest = json.loads((directory / "update.json").read_text(encoding="utf-8"))
 if (
     manifest.get("versionName") != version
     or manifest.get("apkUrl") != f"{base}/{apk_name}"
@@ -138,6 +166,10 @@ readonly latest_temporary="${release_root}/.latest-${release_tag}.json"
 cp -- "${release_directory}/latest.json" "${latest_temporary}"
 chmod 0444 "${latest_temporary}"
 mv -- "${latest_temporary}" "${release_root}/latest.json"
+readonly latest_signature_temporary="${release_root}/.latest-${release_tag}.json.sig"
+cp -- "${release_directory}/latest.json.sig" "${latest_signature_temporary}"
+chmod 0444 "${latest_signature_temporary}"
+mv -- "${latest_signature_temporary}" "${release_root}/latest.json.sig"
 trap - EXIT
 rm -f -- "${archive}" "${archive_listing}"
 printf 'Published immutable Android Direct release %s.\n' "${release_tag}"

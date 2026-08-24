@@ -28,7 +28,10 @@ internal class DirectAppUpdateManager(
     context: Context,
     manifestPublicKeyBase64: String,
     signingCertificateSha256: String,
-    private val releaseClient: DirectReleaseClient = DirectReleaseClient(context.applicationContext),
+    private val releaseClient: DirectReleaseClient = DirectReleaseClient(
+        context.applicationContext,
+        manifestPublicKeyBase64,
+    ),
 ) : AppUpdateManager {
     private val context = context.applicationContext
     private val configuration = runCatching {
@@ -93,11 +96,25 @@ internal class DirectAppUpdateManager(
                         lookup.release.signatureUrl,
                         UpdateManifestVerifier.MAX_SIGNATURE_FILE_BYTES,
                     )
+                    val manifestSha256 = MessageDigest.getInstance("SHA-256")
+                        .digest(manifest)
+                        .toHex()
+                    if (manifestSha256 != lookup.release.manifestSha256) {
+                        throw UpdateVerificationException(
+                            "Update manifest digest does not match the signed release feed",
+                        )
+                    }
                     val update = configured.verifier.verify(
                         manifestBytes = manifest,
                         signatureBytes = signature,
                         releaseAssets = lookup.release.assets,
                     )
+                    if (update.latestVersionCode != lookup.release.versionCode) {
+                        throw UpdateVerificationException(
+                            "Update manifest version does not match the signed release feed",
+                        )
+                    }
+                    releaseClient.recordVerifiedRelease(update.latestVersionCode)
                     lastVerifiedUpdate = update
                     mutableState.value = UpdateState.Available(update)
                     AppLogger.i(

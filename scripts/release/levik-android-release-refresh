@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+export LC_ALL=C
+umask 077
+
+readonly release_root="/srv/levik-android-releases/stable"
+readonly incoming_root="/srv/levik-android-releases/incoming"
+readonly public_key="/etc/leviknet/direct-update-public.pem"
+
+IFS= read -r release_tag
+if [[ ! "${release_tag}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+  printf 'ERROR: invalid Android release tag.\n' >&2
+  exit 64
+fi
+readonly version_name="${BASH_REMATCH[1]}"
+readonly release_directory="${release_root}/${release_tag}"
+if [[ ! -d "${release_directory}" || -L "${release_directory}" ||
+      ! -f "${public_key}" || -L "${public_key}" ]]; then
+  printf 'ERROR: immutable release or verification key is unavailable.\n' >&2
+  exit 1
+fi
+
+mkdir -p -- "${incoming_root}"
+readonly temporary_directory="$(mktemp -d "${incoming_root}/feed-${release_tag}.XXXXXX")"
+readonly archive="${temporary_directory}.tar.gz"
+cleanup() { rm -rf -- "${temporary_directory}" "${archive}"; }
+trap cleanup EXIT
+cat >"${archive}"
+readonly archive_size="$(wc -c <"${archive}" | tr -d '[:space:]')"
+if [[ ! "${archive_size}" =~ ^[0-9]+$ || "${archive_size}" -lt 100 ||
+      "${archive_size}" -gt 65536 ]]; then
+  printf 'ERROR: feed refresh archive is outside the allowed size.\n' >&2
+  exit 1
+fi
+mapfile -t archive_files < <(tar -tzf "${archive}" | sort)
+if [[ "${#archive_files[@]}" -ne 2 ||
+      "${archive_files[0]}" != "latest.json" ||
+      "${archive_files[1]}" != "latest.json.sig" ]]; then
+  printf 'ERROR: feed refresh archive has unexpected content.\n' >&2
+  exit 1
+fi
+tar -xzf "${archive}" --directory "${temporary_directory}" \
+  --no-same-owner --no-same-permissions
+if find "${temporary_directory}" -mindepth 1 \
+  \( ! -type f -o -type l \) -print -quit | grep -q .; then
+  printf 'ERROR: feed refresh archive contains a non-regular file.\n' >&2
+  exit 1
+fi
+
+readonly signature_der="${temporary_directory}/latest.json.sig.der"
+base64 --decode "${temporary_directory}/latest.json.sig" >"${signature_der}"
+openssl dgst -sha256 -verify "${public_key}" -signature "${signature_der}" \
+  "${temporary_directory}/latest.json" >/dev/null
+rm -f -- "${signature_der}"
+
+python3 - "${temporary_directory}/latest.json" "${release_directory}" \
+  "${release_tag}" "${version_name}" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+import time
+
+feed_path = pathlib.Path(sys.argv[1])
+release_dir = pathlib.Path(sys.argv[2])
+tag, version = sys.argv[3:]
+feed = json.loads(feed_path.read_text(encoding="utf-8"))
+manifest_path = release_dir / "update.json"
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+apk_name = f"LevikVPN-direct-{version}.apk"
+now = int(time.time())
+generated = feed.get("generated_at")
+expires = feed.get("expires_at")
+if (
+    feed.get("schemaVersion") != 1
+    or feed.get("channel") != "stable"
+    or feed.get("tag_name") != tag
+    or feed.get("version_code") != manifest.get("versionCode")
+    or feed.get("manifest_sha256") != hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    or feed.get("draft") is not False
+    or feed.get("prerelease") is not False
+    or not isinstance(generated, int)
+    or not isinstance(expires, int)
+    or generated > now + 300
+    or expires <= now
+    or expires <= generated
+    or expires - generated > 72 * 60 * 60
+):
+    raise SystemExit("invalid signed Direct release feed")
+expected = {
+    "update.json": manifest_path,
+    "update.json.sig": release_dir / "update.json.sig",
+    apk_name: release_dir / apk_name,
+}
+assets = feed.get("assets")
+if (
+    not isinstance(assets, list)
+    or not all(isinstance(item, dict) for item in assets)
+    or {item.get("name") for item in assets} != set(expected)
+):
+    raise SystemExit("invalid signed Direct release assets")
+base = f"https://leviknet.com/downloads/android/stable/{tag}"
+for item in assets:
+    name = item["name"]
+    path = expected[name]
+    if not path.is_file() or path.is_symlink():
+        raise SystemExit("immutable release asset is unavailable")
+    if item.get("size") != path.stat().st_size or item.get("url") != f"{base}/{name}":
+        raise SystemExit("signed Direct release asset metadata mismatch")
+PY
+
+for name in latest.json latest.json.sig; do
+  chmod 0444 "${temporary_directory}/${name}"
+  mv -- "${temporary_directory}/${name}" "${release_root}/.${name}.${release_tag}"
+  mv -- "${release_root}/.${name}.${release_tag}" "${release_root}/${name}"
+done
+
+printf 'Refreshed signed Android Direct feed for %s.\n' "${release_tag}"

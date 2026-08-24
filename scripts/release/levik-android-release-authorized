@@ -4,13 +4,21 @@ set -euo pipefail
 export LC_ALL=C
 
 readonly original_command="${SSH_ORIGINAL_COMMAND:-}"
-if [[ ! "${original_command}" =~ ^publish[[:space:]](v[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+if [[ ! "${original_command}" =~ ^(publish|refresh)[[:space:]](v[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
   printf 'ERROR: unsupported Android release command.\n' >&2
   exit 64
 fi
-readonly release_tag="${BASH_REMATCH[1]}"
+readonly operation="${BASH_REMATCH[1]}"
+readonly release_tag="${BASH_REMATCH[2]}"
 
-{
-  printf '%s\n' "${release_tag}"
-  cat
-} | /usr/bin/sudo -n /usr/local/sbin/levik-android-release-publish
+if [[ "${operation}" == "publish" ]]; then
+  {
+    printf '%s\n' "${release_tag}"
+    cat
+  } | /usr/bin/sudo -n /usr/local/sbin/levik-android-release-publish
+else
+  {
+    printf '%s\n' "${release_tag}"
+    cat
+  } | /usr/bin/sudo -n /usr/local/sbin/levik-android-release-refresh
+fi

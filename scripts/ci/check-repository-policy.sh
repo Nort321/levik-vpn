@@ -129,12 +129,15 @@ if [[ "${INPUT_MODE}" == "git" ]]; then
     scripts/ci/fetch-libxray.sh
     scripts/release/build-corresponding-source.sh
     scripts/release/generate-direct-update-manifest.sh
+    scripts/release/levik-android-release-refresh
+    scripts/release/levik-android-release.sudoers
     scripts/release/generate-native-sbom.py
     scripts/release/validate-play-bundle-metadata.sh
     release/native-sources.lock.json
     .github/workflows/android-release.yml
     levik_vpn_android/gradle.lockfile
     levik_vpn_android/app/gradle.lockfile
+    levik_vpn_android/gradle/verification-metadata.xml
   )
 
   for required_path in "${required_paths[@]}"; do

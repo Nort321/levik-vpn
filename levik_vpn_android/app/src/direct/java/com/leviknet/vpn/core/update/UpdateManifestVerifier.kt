@@ -40,6 +40,38 @@ internal class UpdateVerificationException(message: String, cause: Throwable? = 
 
 internal class UpdateNotNewerException : Exception("Signed update is not newer")
 
+internal class DetachedSignatureVerifier(publicKeyBase64: String) {
+    private val publicKey = UpdateManifestVerifier.parsePublicKey(publicKeyBase64)
+
+    fun verify(payload: ByteArray, signatureBytes: ByteArray, payloadName: String) {
+        if (payload.isEmpty() || payload.size > UpdateManifestVerifier.MAX_MANIFEST_BYTES) {
+            throw UpdateVerificationException("$payloadName size is invalid")
+        }
+        if (signatureBytes.isEmpty() ||
+            signatureBytes.size > UpdateManifestVerifier.MAX_SIGNATURE_FILE_BYTES
+        ) {
+            throw UpdateVerificationException("$payloadName signature size is invalid")
+        }
+        val signature = try {
+            Base64.getDecoder().decode(signatureBytes.decodeToString().trim())
+        } catch (error: IllegalArgumentException) {
+            throw UpdateVerificationException("$payloadName signature is not valid Base64", error)
+        }
+        val verified = try {
+            Signature.getInstance(UpdateManifestVerifier.SIGNATURE_ALGORITHM).run {
+                initVerify(publicKey)
+                update(payload)
+                verify(signature)
+            }
+        } catch (error: Exception) {
+            throw UpdateVerificationException("Unable to verify $payloadName signature", error)
+        }
+        if (!verified) {
+            throw UpdateVerificationException("$payloadName signature verification failed")
+        }
+    }
+}
+
 internal class UpdateManifestVerifier(
     publicKeyBase64: String,
     expectedSigningCertificateSha256: String,
@@ -47,7 +79,7 @@ internal class UpdateManifestVerifier(
     private val currentVersionCode: Int,
     private val json: Json = STRICT_JSON,
 ) {
-    private val publicKey = parsePublicKey(publicKeyBase64)
+    private val signatureVerifier = DetachedSignatureVerifier(publicKeyBase64)
     private val expectedSigningCertificateSha256 = normalizeSha256(
         value = expectedSigningCertificateSha256,
         fieldName = "configured signing certificate",
@@ -58,7 +90,7 @@ internal class UpdateManifestVerifier(
         signatureBytes: ByteArray,
         releaseAssets: List<PublishedReleaseAsset>,
     ): AppUpdateDto {
-        requireVerifiedSignature(manifestBytes, signatureBytes)
+        signatureVerifier.verify(manifestBytes, signatureBytes, "Update manifest")
         val manifest = try {
             json.decodeFromString<DirectUpdateManifest>(manifestBytes.decodeToString())
         } catch (error: Exception) {
@@ -112,32 +144,6 @@ internal class UpdateManifestVerifier(
             changelogEn = validateOptionalText(manifest.changelogEn, MAX_CHANGELOG_LENGTH, "English changelog"),
             forceUpdate = manifest.forceUpdate,
         )
-    }
-
-    private fun requireVerifiedSignature(manifestBytes: ByteArray, signatureBytes: ByteArray) {
-        if (manifestBytes.isEmpty() || manifestBytes.size > MAX_MANIFEST_BYTES) {
-            throw UpdateVerificationException("Update manifest size is invalid")
-        }
-        if (signatureBytes.isEmpty() || signatureBytes.size > MAX_SIGNATURE_FILE_BYTES) {
-            throw UpdateVerificationException("Update signature size is invalid")
-        }
-        val signature = try {
-            Base64.getDecoder().decode(signatureBytes.decodeToString().trim())
-        } catch (error: IllegalArgumentException) {
-            throw UpdateVerificationException("Update signature is not valid Base64", error)
-        }
-        val verified = try {
-            Signature.getInstance(SIGNATURE_ALGORITHM).run {
-                initVerify(publicKey)
-                update(manifestBytes)
-                verify(signature)
-            }
-        } catch (error: Exception) {
-            throw UpdateVerificationException("Unable to verify update signature", error)
-        }
-        if (!verified) {
-            throw UpdateVerificationException("Update manifest signature verification failed")
-        }
     }
 
     private fun validateVersionName(value: String) {
@@ -214,7 +220,7 @@ internal class UpdateManifestVerifier(
             return uri
         }
 
-        private fun parsePublicKey(value: String): ECPublicKey {
+        internal fun parsePublicKey(value: String): ECPublicKey {
             if (value.isBlank()) {
                 throw UpdateVerificationException("Update manifest public key is not configured")
             }

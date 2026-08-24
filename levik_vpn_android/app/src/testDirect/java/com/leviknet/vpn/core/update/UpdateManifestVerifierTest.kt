@@ -55,6 +55,17 @@ class UpdateManifestVerifierTest {
     }
 
     @Test
+    fun `detached verifier rejects a changed signed release pointer`() {
+        val pointer = "{\"tag_name\":\"v2.0.0\"}".encodeToByteArray()
+        val verifier = DetachedSignatureVerifier(publicKeyBase64)
+
+        verifier.verify(pointer, sign(pointer), "Direct release feed")
+        assertThrows(UpdateVerificationException::class.java) {
+            verifier.verify(pointer + '\n'.code.toByte(), sign(pointer), "Direct release feed")
+        }
+    }
+
+    @Test
     fun `rejects cross package and downgrade manifests`() {
         val crossPackage = manifestBytes(validManifest().copy(packageName = "com.example.other"))
         assertThrows(UpdateVerificationException::class.java) {

@@ -18,10 +18,12 @@
 
 Android-приложение собирается и тестируется только в GitHub Actions:
 
-1. Push или pull request запускает `Android CI` и `Repository Policy` для точного commit SHA.
+1. Push владельца запускает `Android CI` и `Repository Policy` для точного commit SHA.
 2. `Android CI` проверяет dependency locks, загружает и сверяет libXray, выполняет lint, unit tests и debug-сборки обоих вариантов.
 3. После успешного CI владелец создает immutable-тег `vX.Y.Z` на коммите из `main`.
 4. Workflow `Android production release`, запущенный из тега, выполняет release lint/tests, создает подписанные APK/AAB, SBOM и release evidence.
+5. Публичный GitHub Release получает только Direct APK; OTA-манифесты и доказательства остаются во внутреннем artifact.
+6. Ежедневный workflow обновляет короткоживущий подписанный `latest.json`, не меняя неизменяемые файлы версии.
 
 Локальные Gradle-сборки Android, включая debug и release, запрещены релизной политикой и не принимаются как доказательство проверки.
 

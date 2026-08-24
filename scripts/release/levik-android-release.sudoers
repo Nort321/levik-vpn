@@ -1,0 +1,2 @@
+levikdeploy ALL=(root) NOPASSWD: /usr/local/sbin/levik-android-release-publish ""
+levikdeploy ALL=(root) NOPASSWD: /usr/local/sbin/levik-android-release-refresh ""

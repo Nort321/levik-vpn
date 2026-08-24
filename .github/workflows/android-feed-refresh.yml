@@ -1,0 +1,122 @@
+name: Refresh signed Android Direct feed
+
+"on":
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-direct-feed-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    name: Refresh signed latest pointer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: production-release
+
+    steps:
+      - name: Checkout canonical repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve latest stable release
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REPOSITORY}" != "Nort321/levik-vpn" ||
+                "${GITHUB_REF}" != "refs/heads/main" ]]; then
+            printf 'ERROR: feed refresh is restricted to canonical main.\n' >&2
+            exit 1
+          fi
+          release_json="$(gh release view --json assets,isDraft,isPrerelease,tagName)"
+          read -r tag version < <(python3 - "${release_json}" <<'PY'
+          import json
+          import re
+          import sys
+
+          release = json.loads(sys.argv[1])
+          tag = release.get("tagName", "")
+          match = re.fullmatch(r"v([0-9]+\.[0-9]+\.[0-9]+)", tag)
+          if not match or release.get("isDraft") or release.get("isPrerelease"):
+              raise SystemExit("latest GitHub release is not a stable release")
+          expected_apk = f"LevikVPN-direct-{match.group(1)}.apk"
+          if [asset.get("name") for asset in release.get("assets", [])] != [expected_apk]:
+              raise SystemExit("latest GitHub release is not APK-only")
+          print(tag, match.group(1))
+          PY
+          )
+          printf 'tag=%s\nversion=%s\n' "${tag}" "${version}" >>"${GITHUB_OUTPUT}"
+
+      - name: Verify immutable release metadata and create signed pointer
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          VERSION_NAME: ${{ steps.release.outputs.version }}
+          DIRECT_UPDATE_MANIFEST_PUBLIC_KEY: ${{ secrets.DIRECT_UPDATE_MANIFEST_PUBLIC_KEY }}
+          DIRECT_OTA_PRIVATE_KEY_PEM: ${{ secrets.DIRECT_OTA_PRIVATE_KEY_PEM }}
+        run: |
+          set -euo pipefail
+          umask 077
+          readonly work="${RUNNER_TEMP}/feed-refresh"
+          mkdir -m 700 -- "${work}"
+          readonly base="https://leviknet.com/downloads/android/stable/${RELEASE_TAG}"
+          curl --fail --silent --show-error --proto '=https' --tlsv1.2 \
+            "${base}/update.json" --output "${work}/update.json"
+          curl --fail --silent --show-error --proto '=https' --tlsv1.2 \
+            "${base}/update.json.sig" --output "${work}/update.json.sig"
+
+          printf '%s' "${DIRECT_UPDATE_MANIFEST_PUBLIC_KEY}" |
+            base64 --decode >"${work}/public.der"
+          openssl pkey -pubin -inform DER -in "${work}/public.der" -out "${work}/public.pem"
+          base64 --decode "${work}/update.json.sig" >"${work}/update.json.sig.der"
+          openssl dgst -sha256 -verify "${work}/public.pem" \
+            -signature "${work}/update.json.sig.der" "${work}/update.json" >/dev/null
+
+          python3 scripts/release/generate-direct-release-feed.py \
+            --output-directory "${work}" \
+            --version "${VERSION_NAME}" \
+            --metadata-only
+          printf '%s' "${DIRECT_OTA_PRIVATE_KEY_PEM}" >"${work}/private.pem"
+          openssl dgst -sha256 -sign "${work}/private.pem" \
+            -out "${work}/latest.json.sig.der" "${work}/latest.json"
+          base64 -w 0 "${work}/latest.json.sig.der" >"${work}/latest.json.sig"
+          printf '\n' >>"${work}/latest.json.sig"
+          openssl dgst -sha256 -verify "${work}/public.pem" \
+            -signature "${work}/latest.json.sig.der" "${work}/latest.json" >/dev/null
+          tar -czf "${RUNNER_TEMP}/levik-feed-refresh.tar.gz" \
+            -C "${work}" latest.json latest.json.sig
+
+      - name: Publish through restricted SSH command
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          DEPLOY_HOST: ${{ secrets.ANDROID_RELEASE_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.ANDROID_RELEASE_DEPLOY_USER }}
+          DEPLOY_PRIVATE_KEY: ${{ secrets.ANDROID_RELEASE_DEPLOY_PRIVATE_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.ANDROID_RELEASE_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          readonly ssh_directory="${RUNNER_TEMP}/release-ssh"
+          mkdir -m 700 -- "${ssh_directory}"
+          printf '%s\n' "${DEPLOY_PRIVATE_KEY}" >"${ssh_directory}/id_ed25519"
+          printf '%s\n' "${DEPLOY_KNOWN_HOSTS}" >"${ssh_directory}/known_hosts"
+          chmod 600 -- "${ssh_directory}"/*
+          ssh -i "${ssh_directory}/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="${ssh_directory}/known_hosts" \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" "refresh ${RELEASE_TAG}" \
+            <"${RUNNER_TEMP}/levik-feed-refresh.tar.gz"
+
+      - name: Remove protected material
+        if: always()
+        shell: bash
+        run: rm -rf -- "${RUNNER_TEMP}/feed-refresh" "${RUNNER_TEMP}/release-ssh"

@@ -69,6 +69,7 @@ jobs:
           CHANGELOG_EN: ${{ inputs.changelog_en }}
           CHANGELOG_RU: ${{ inputs.changelog_ru }}
           RELEASE_ACTOR: ${{ github.actor }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
           REPOSITORY_OWNER: ${{ github.repository_owner }}
           DIRECT_SIGNING_KEYSTORE_BASE64: ${{ secrets.DIRECT_SIGNING_KEYSTORE_BASE64 }}
           DIRECT_SIGNING_STORE_PASSWORD: ${{ secrets.DIRECT_SIGNING_STORE_PASSWORD }}
@@ -96,6 +97,10 @@ jobs:
           fi
           if [[ "${RELEASE_ACTOR}" != "${REPOSITORY_OWNER}" ]]; then
             printf 'ERROR: only the repository owner may dispatch a production release.\n' >&2
+            exit 1
+          fi
+          if [[ "${RELEASE_REPOSITORY}" != "Nort321/levik-vpn" ]]; then
+            printf 'ERROR: production releases are restricted to the canonical repository.\n' >&2
             exit 1
           fi
           if [[ ! "${VERSION_CODE}" =~ ^[1-9][0-9]*$ ||
@@ -190,11 +195,6 @@ jobs:
             exit 1
           fi
           printf '%s' "${DIRECT_UPDATE_MANIFEST_PUBLIC_KEY}" | base64 --decode >/dev/null
-
-          if [[ "${{ github.event.repository.private }}" != "true" ]]; then
-            printf 'ERROR: this release workflow is intentionally scoped to the private Android repository.\n' >&2
-            exit 1
-          fi
 
       - name: Materialize protected Direct signing inputs
         shell: bash
@@ -383,6 +383,13 @@ jobs:
           python3 scripts/release/generate-direct-release-feed.py \
             --output-directory "${output_directory}" \
             --version "${VERSION_NAME}"
+          openssl dgst -sha256 \
+            -sign "${RUNNER_TEMP}/levik-release-secrets/direct-update-private.pem" \
+            -out "${RUNNER_TEMP}/latest.json.sig.der" \
+            "${output_directory}/latest.json"
+          base64 -w 0 "${RUNNER_TEMP}/latest.json.sig.der" \
+            >"${output_directory}/latest.json.sig"
+          printf '\n' >>"${output_directory}/latest.json.sig"
 
           if [[ "${RELEASE_SCOPE}" == "direct-and-play" ]]; then
             cp -- "${play_aab}" "${output_directory}/LevikVPN-play-${VERSION_NAME}.aab"

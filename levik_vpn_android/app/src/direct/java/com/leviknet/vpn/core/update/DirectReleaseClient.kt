@@ -2,16 +2,11 @@ package com.leviknet.vpn.core.update
 
 import android.content.Context
 import java.io.ByteArrayOutputStream
-import java.io.File
-import java.io.FileOutputStream
 import java.io.IOException
 import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
-import java.nio.file.AtomicMoveNotSupportedException
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import kotlin.math.min
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -29,6 +24,10 @@ internal data class DirectReleaseFeed(
     val schemaVersion: Int,
     val channel: String,
     @SerialName("tag_name") val tagName: String,
+    @SerialName("version_code") val versionCode: Int,
+    @SerialName("generated_at") val generatedAt: Long,
+    @SerialName("expires_at") val expiresAt: Long,
+    @SerialName("manifest_sha256") val manifestSha256: String,
     val draft: Boolean,
     val prerelease: Boolean,
     val assets: List<DirectReleaseAsset>,
@@ -36,6 +35,8 @@ internal data class DirectReleaseFeed(
 
 internal data class StableDirectRelease(
     val tagName: String,
+    val versionCode: Int,
+    val manifestSha256: String,
     val manifestUrl: String,
     val signatureUrl: String,
     val assets: List<PublishedReleaseAsset>,
@@ -49,7 +50,12 @@ internal sealed interface ReleaseLookupResult {
 }
 
 internal object DirectReleaseParser {
-    fun parseLatestStableRelease(body: ByteArray, json: Json): StableDirectRelease? {
+    fun parseLatestStableRelease(
+        body: ByteArray,
+        json: Json,
+        nowEpochSeconds: Long,
+        minimumVersionCode: Int,
+    ): StableDirectRelease? {
         val release = try {
             json.decodeFromString(DirectReleaseFeed.serializer(), body.decodeToString())
         } catch (error: Exception) {
@@ -62,6 +68,21 @@ internal object DirectReleaseParser {
         if (!STABLE_TAG_PATTERN.matches(release.tagName)) {
             throw IOException("Invalid stable release tag")
         }
+        if (release.versionCode <= 0 || release.versionCode < minimumVersionCode) {
+            throw IOException("Signed release feed attempts a rollback")
+        }
+        if (release.generatedAt > nowEpochSeconds + MAX_CLOCK_SKEW_SECONDS ||
+            release.expiresAt <= nowEpochSeconds ||
+            release.expiresAt <= release.generatedAt ||
+            release.expiresAt - release.generatedAt > MAX_FEED_LIFETIME_SECONDS
+        ) {
+            throw IOException("Signed release feed is expired or has invalid validity bounds")
+        }
+        val manifestSha256 = try {
+            UpdateManifestVerifier.normalizeSha256(release.manifestSha256, "release manifest")
+        } catch (error: UpdateVerificationException) {
+            throw IOException("Invalid signed release manifest digest", error)
+        }
         val manifest = release.assets.singleOrNull { asset ->
             asset.name == DirectReleaseClient.MANIFEST_ASSET_NAME
         } ?: throw IOException("Latest stable release does not contain update.json")
@@ -69,14 +90,20 @@ internal object DirectReleaseParser {
             asset.name == DirectReleaseClient.SIGNATURE_ASSET_NAME
         } ?: throw IOException("Latest stable release does not contain update.json.sig")
 
-        UpdateManifestVerifier.requireDirectReleaseAssetUrl(
+        val manifestUri = UpdateManifestVerifier.requireDirectReleaseAssetUrl(
             manifest.url,
             DirectReleaseClient.MANIFEST_ASSET_NAME,
         )
-        UpdateManifestVerifier.requireDirectReleaseAssetUrl(
+        val signatureUri = UpdateManifestVerifier.requireDirectReleaseAssetUrl(
             signature.url,
             DirectReleaseClient.SIGNATURE_ASSET_NAME,
         )
+        val expectedReleasePrefix = "/downloads/android/stable/${release.tagName}/"
+        if (!manifestUri.rawPath.startsWith(expectedReleasePrefix) ||
+            !signatureUri.rawPath.startsWith(expectedReleasePrefix)
+        ) {
+            throw IOException("Signed release assets do not match the signed release tag")
+        }
         if (manifest.size !in 1..UpdateManifestVerifier.MAX_MANIFEST_BYTES.toLong()) {
             throw IOException("Published update manifest size is invalid")
         }
@@ -86,6 +113,8 @@ internal object DirectReleaseParser {
 
         return StableDirectRelease(
             tagName = release.tagName,
+            versionCode = release.versionCode,
+            manifestSha256 = manifestSha256,
             manifestUrl = manifest.url,
             signatureUrl = signature.url,
             assets = release.assets.map { asset ->
@@ -100,6 +129,8 @@ internal object DirectReleaseParser {
 
     private const val SUPPORTED_SCHEMA_VERSION = 1
     private const val STABLE_CHANNEL = "stable"
+    private const val MAX_CLOCK_SKEW_SECONDS = 5L * 60
+    private const val MAX_FEED_LIFETIME_SECONDS = 72L * 60 * 60
     private val STABLE_TAG_PATTERN = Regex("^v[0-9]+\\.[0-9]+\\.[0-9]+$")
 }
 
@@ -134,6 +165,7 @@ internal object UpdateCheckSchedule {
 
 internal class DirectReleaseClient(
     context: Context,
+    publicKeyBase64: String,
     private val json: Json = Json {
         ignoreUnknownKeys = true
         isLenient = false
@@ -142,8 +174,7 @@ internal class DirectReleaseClient(
     private val nowMillis: () -> Long = System::currentTimeMillis,
 ) {
     private val preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
-    private val metadataDirectory = File(context.filesDir, METADATA_DIRECTORY_NAME)
-    private val cachedReleasesFile = File(metadataDirectory, RELEASE_CACHE_FILE_NAME)
+    private val signatureVerifier = DetachedSignatureVerifier(publicKeyBase64)
 
     fun lookupLatestStableRelease(silent: Boolean): ReleaseLookupResult {
         val now = nowMillis()
@@ -161,42 +192,47 @@ internal class DirectReleaseClient(
         }
 
         return try {
-            val headers = buildMap {
-                put("Accept", JSON_ACCEPT)
-                preferences.getString(KEY_ETAG, null)
-                    ?.takeIf { etag -> etag.length <= MAX_ETAG_LENGTH }
-                    ?.let { etag -> put("If-None-Match", etag) }
-            }
             val response = request(
                 url = RELEASE_FEED_URL,
-                headers = headers,
+                headers = mapOf("Accept" to JSON_ACCEPT),
                 maxBytes = MAX_RELEASE_RESPONSE_BYTES,
                 allowedHosts = setOf(RELEASE_HOST),
                 allowRedirects = false,
             )
-            val body = when (response.statusCode) {
-                HttpURLConnection.HTTP_OK -> {
-                    val bytes = requireNotNull(response.body)
-                    writeCacheAtomically(bytes)
-                    response.etag
-                        ?.takeIf { etag -> etag.length <= MAX_ETAG_LENGTH }
-                        ?.let { etag -> preferences.edit().putString(KEY_ETAG, etag).apply() }
-                    bytes
-                }
-                HttpURLConnection.HTTP_NOT_MODIFIED -> {
-                    readCache() ?: run {
-                        preferences.edit().remove(KEY_ETAG).apply()
-                        throw IOException("Update feed returned 304 without cached metadata")
-                    }
-                }
-                else -> throw ReleaseHttpException(
+            if (response.statusCode != HttpURLConnection.HTTP_OK) {
+                throw ReleaseHttpException(
                     statusCode = response.statusCode,
                     retryAfterSeconds = response.retryAfterSeconds,
                     rateLimitResetEpochSeconds = response.rateLimitResetEpochSeconds,
                 )
             }
+            val body = requireNotNull(response.body)
+            val signatureResponse = request(
+                url = RELEASE_FEED_SIGNATURE_URL,
+                headers = mapOf("Accept" to "application/octet-stream"),
+                maxBytes = UpdateManifestVerifier.MAX_SIGNATURE_FILE_BYTES,
+                allowedHosts = setOf(RELEASE_HOST),
+                allowRedirects = false,
+            )
+            if (signatureResponse.statusCode != HttpURLConnection.HTTP_OK) {
+                throw ReleaseHttpException(
+                    statusCode = signatureResponse.statusCode,
+                    retryAfterSeconds = signatureResponse.retryAfterSeconds,
+                    rateLimitResetEpochSeconds = signatureResponse.rateLimitResetEpochSeconds,
+                )
+            }
+            signatureVerifier.verify(
+                body,
+                requireNotNull(signatureResponse.body),
+                "Direct release feed",
+            )
 
-            val release = DirectReleaseParser.parseLatestStableRelease(body, json)
+            val release = DirectReleaseParser.parseLatestStableRelease(
+                body = body,
+                json = json,
+                nowEpochSeconds = now / 1000,
+                minimumVersionCode = preferences.getInt(KEY_HIGHEST_VERIFIED_VERSION_CODE, 0),
+            )
             recordSuccess(now)
             release?.let(ReleaseLookupResult::Found) ?: ReleaseLookupResult.NoStableRelease
         } catch (error: ReleaseHttpException) {
@@ -305,6 +341,13 @@ internal class DirectReleaseClient(
         }
     }
 
+    fun recordVerifiedRelease(versionCode: Int) {
+        val previous = preferences.getInt(KEY_HIGHEST_VERIFIED_VERSION_CODE, 0)
+        if (versionCode > previous) {
+            preferences.edit().putInt(KEY_HIGHEST_VERIFIED_VERSION_CODE, versionCode).apply()
+        }
+    }
+
     private fun request(
         url: String,
         headers: Map<String, String>,
@@ -349,7 +392,6 @@ internal class DirectReleaseClient(
                 return HttpResponse(
                     statusCode = status,
                     body = body,
-                    etag = connection.getHeaderField("ETag"),
                     retryAfterSeconds = connection.getHeaderField("Retry-After")?.toLongOrNull(),
                     rateLimitResetEpochSeconds = connection.getHeaderField("X-RateLimit-Reset")?.toLongOrNull(),
                 )
@@ -382,42 +424,6 @@ internal class DirectReleaseClient(
             output.write(buffer, 0, count)
         }
         return output.toByteArray()
-    }
-
-    private fun readCache(): ByteArray? = try {
-        if (!cachedReleasesFile.isFile || cachedReleasesFile.length() > MAX_RELEASE_RESPONSE_BYTES) null
-        else cachedReleasesFile.readBytes()
-    } catch (_: IOException) {
-        null
-    }
-
-    private fun writeCacheAtomically(bytes: ByteArray) {
-        if (!metadataDirectory.exists() && !metadataDirectory.mkdirs()) {
-            throw IOException("Unable to create update metadata directory")
-        }
-        val temporary = File(metadataDirectory, "$RELEASE_CACHE_FILE_NAME.tmp")
-        try {
-            FileOutputStream(temporary).use { output ->
-                output.write(bytes)
-                output.fd.sync()
-            }
-            try {
-                Files.move(
-                    temporary.toPath(),
-                    cachedReleasesFile.toPath(),
-                    StandardCopyOption.ATOMIC_MOVE,
-                    StandardCopyOption.REPLACE_EXISTING,
-                )
-            } catch (_: AtomicMoveNotSupportedException) {
-                Files.move(
-                    temporary.toPath(),
-                    cachedReleasesFile.toPath(),
-                    StandardCopyOption.REPLACE_EXISTING,
-                )
-            }
-        } finally {
-            temporary.delete()
-        }
     }
 
     private fun recordSuccess(now: Long) {
@@ -464,7 +470,6 @@ internal class DirectReleaseClient(
     private data class HttpResponse(
         val statusCode: Int,
         val body: ByteArray?,
-        val etag: String?,
         val retryAfterSeconds: Long?,
         val rateLimitResetEpochSeconds: Long?,
     )
@@ -472,6 +477,8 @@ internal class DirectReleaseClient(
     companion object {
         const val RELEASE_FEED_URL =
             "https://leviknet.com/downloads/android/stable/latest.json"
+        const val RELEASE_FEED_SIGNATURE_URL =
+            "https://leviknet.com/downloads/android/stable/latest.json.sig"
         const val MANIFEST_ASSET_NAME = "update.json"
         const val SIGNATURE_ASSET_NAME = "update.json.sig"
 
@@ -483,11 +490,8 @@ internal class DirectReleaseClient(
         private const val APK_READ_TIMEOUT_MS = 60_000
         private const val MAX_REDIRECTS = 4
         private const val MAX_RELEASE_RESPONSE_BYTES = 1024 * 1024
-        private const val MAX_ETAG_LENGTH = 512
         private const val PREFERENCES_NAME = "direct_update_checks"
-        private const val METADATA_DIRECTORY_NAME = "update-metadata"
-        private const val RELEASE_CACHE_FILE_NAME = "direct-release-feed.json"
-        private const val KEY_ETAG = "github_etag"
+        private const val KEY_HIGHEST_VERIFIED_VERSION_CODE = "highest_verified_version_code"
         private const val KEY_NEXT_CHECK_AT = "next_check_at"
         private const val KEY_RETRY_AT = "retry_at"
         private const val KEY_FAILURE_COUNT = "failure_count"

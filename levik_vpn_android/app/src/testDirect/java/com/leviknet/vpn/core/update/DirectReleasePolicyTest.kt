@@ -15,6 +15,8 @@ class DirectReleasePolicyTest {
         val selected = DirectReleaseParser.parseLatestStableRelease(
             json.encodeToString(release(tag = "v2.0.0")).encodeToByteArray(),
             json,
+            NOW,
+            0,
         )
 
         assertEquals("v2.0.0", selected?.tagName)
@@ -25,6 +27,8 @@ class DirectReleasePolicyTest {
         val selected = DirectReleaseParser.parseLatestStableRelease(
             json.encodeToString(release(tag = "draft", draft = true)).encodeToByteArray(),
             json,
+            NOW,
+            0,
         )
 
         assertNull(selected)
@@ -35,6 +39,8 @@ class DirectReleasePolicyTest {
         val selected = DirectReleaseParser.parseLatestStableRelease(
             json.encodeToString(release(tag = "preview", prerelease = true)).encodeToByteArray(),
             json,
+            NOW,
+            0,
         )
 
         assertNull(selected)
@@ -47,12 +53,50 @@ class DirectReleasePolicyTest {
                 json.encodeToString(release(tag = "v2.0.0").copy(channel = "beta"))
                     .encodeToByteArray(),
                 json,
+                NOW,
+                0,
             )
         }
         org.junit.Assert.assertThrows(java.io.IOException::class.java) {
             DirectReleaseParser.parseLatestStableRelease(
                 json.encodeToString(release(tag = "../v2.0.0")).encodeToByteArray(),
                 json,
+                NOW,
+                0,
+            )
+        }
+    }
+
+    @Test
+    fun `rejects expired rollback and cross-tag signed feeds`() {
+        val expired = release(tag = "v2.0.0").copy(expiresAt = NOW)
+        org.junit.Assert.assertThrows(java.io.IOException::class.java) {
+            DirectReleaseParser.parseLatestStableRelease(
+                json.encodeToString(expired).encodeToByteArray(),
+                json,
+                NOW,
+                0,
+            )
+        }
+
+        org.junit.Assert.assertThrows(java.io.IOException::class.java) {
+            DirectReleaseParser.parseLatestStableRelease(
+                json.encodeToString(release(tag = "v2.0.0")).encodeToByteArray(),
+                json,
+                NOW,
+                21,
+            )
+        }
+
+        val crossTag = release(tag = "v2.0.0").copy(
+            assets = release(tag = "v2.0.1").assets,
+        )
+        org.junit.Assert.assertThrows(java.io.IOException::class.java) {
+            DirectReleaseParser.parseLatestStableRelease(
+                json.encodeToString(crossTag).encodeToByteArray(),
+                json,
+                NOW,
+                0,
             )
         }
     }
@@ -87,6 +131,10 @@ class DirectReleasePolicyTest {
         schemaVersion = 1,
         channel = "stable",
         tagName = tag,
+        versionCode = 20,
+        generatedAt = NOW - 60,
+        expiresAt = NOW + 3_600,
+        manifestSha256 = "12".repeat(32),
         draft = draft,
         prerelease = prerelease,
         assets = listOf(
@@ -104,6 +152,7 @@ class DirectReleasePolicyTest {
     )
 
     companion object {
+        private const val NOW = 1_800_000_000L
         private const val RELEASE_PREFIX =
             "https://leviknet.com/downloads/android/stable"
     }

@@ -7,7 +7,9 @@ updates:
       day: monday
       time: "04:30"
       timezone: Etc/UTC
-    open-pull-requests-limit: 5
+    # This repository is published for source transparency and does not accept
+    # pull requests. Vulnerability alerts remain enabled in GitHub Security.
+    open-pull-requests-limit: 0
     rebase-strategy: auto
     commit-message:
       prefix: chore(android-deps)
@@ -19,7 +21,7 @@ updates:
       day: monday
       time: "05:30"
       timezone: Etc/UTC
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
     rebase-strategy: auto
     commit-message:
       prefix: chore(ci-deps)

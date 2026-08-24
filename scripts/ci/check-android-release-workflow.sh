@@ -50,7 +50,7 @@ required_literals=(
   '"${release_apk}"'
   '--notes-file "${release_notes}"'
   '--draft'
-  'private Android repository'
+  'Nort321/levik-vpn'
 )
 
 violations=0
@@ -79,7 +79,12 @@ for literal in "${publish_required_literals[@]}"; do
 done
 
 if grep -F -- 'gh attestation' "${WORKFLOW}" "${PUBLISH_WORKFLOW}" >/dev/null; then
-  printf 'ERROR: GitHub Artifact Attestations are unavailable for this private repository.\n' >&2
+  printf 'ERROR: release provenance must use the repository-defined signed provenance contract.\n' >&2
+  violations=$((violations + 1))
+fi
+
+if grep -F -- 'github.event.repository.private' "${WORKFLOW}" "${PUBLISH_WORKFLOW}" >/dev/null; then
+  printf 'ERROR: production workflows must support the canonical public repository.\n' >&2
   violations=$((violations + 1))
 fi
 
