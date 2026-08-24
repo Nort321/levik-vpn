@@ -159,6 +159,16 @@ class XrayConfigBuilder(
             put("routing", buildJsonObject {
                 put("domainStrategy", if (isBypassRu || isBlockedOnly || directDomains.isNotEmpty()) "IPIfNonMatch" else "AsIs")
                 put("rules", buildJsonArray {
+                    add(buildJsonObject {
+                        put("type", "field")
+                        put("inboundTag", buildJsonArray {
+                            add(JsonPrimitive(TUN_INBOUND_TAG))
+                        })
+                        put("ip", buildJsonArray {
+                            add(JsonPrimitive(IPV6_DEFAULT_ROUTE))
+                        })
+                        put("outboundTag", BLOCK_TAG)
+                    })
                     if (proxyDomains.isNotEmpty()) {
                         add(buildJsonObject {
                             put("type", "field")
@@ -311,6 +321,7 @@ class XrayConfigBuilder(
         private const val DIRECT_TAG = "levik-direct"
         private const val BLOCK_TAG = "levik-block"
         private const val FRAGMENT_TAG = "levik-fragment"
+        private const val IPV6_DEFAULT_ROUTE = "::/0"
         private const val TUN_MTU = 1500
         private const val MAX_SERVERS = 200
         private val SAFE_TAG = Regex("[A-Za-z0-9._:-]{1,128}")

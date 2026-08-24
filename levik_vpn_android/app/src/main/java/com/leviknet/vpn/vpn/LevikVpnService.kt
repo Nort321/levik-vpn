@@ -62,19 +62,17 @@ class LevikVpnService : VpnService() {
         override fun protectFd(fd: Long): Boolean {
             if (fd !in 0..Int.MAX_VALUE.toLong()) return false
             val socketFd = fd.toInt()
-            val isProtected = protect(socketFd)
-            val network = underlyingNetwork.get()
-            if (network != null) {
-                runCatching {
-                    val pfd = ParcelFileDescriptor.adoptFd(socketFd)
-                    try {
-                        network.bindSocket(pfd.fileDescriptor)
-                    } finally {
-                        pfd.detachFd() // Keep the underlying native socket open!
-                    }
+            val network = underlyingNetwork.get() ?: return false
+            if (!protect(socketFd)) return false
+            return runCatching {
+                val pfd = ParcelFileDescriptor.adoptFd(socketFd)
+                try {
+                    network.bindSocket(pfd.fileDescriptor)
+                } finally {
+                    pfd.detachFd() // Keep the underlying native socket open!
                 }
-            }
-            return isProtected
+                true
+            }.getOrDefault(false)
         }
     }
     private val networkMonitor by lazy {

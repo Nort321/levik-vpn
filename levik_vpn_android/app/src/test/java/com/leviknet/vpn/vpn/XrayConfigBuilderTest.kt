@@ -43,6 +43,7 @@ class XrayConfigBuilderTest {
         ).jsonObject
         val inbound = config.getValue("inbounds").jsonArray.single().jsonObject
         val outbounds = config.getValue("outbounds").jsonArray
+        val rules = config.getValue("routing").jsonObject.getValue("rules").jsonArray
 
         assertEquals("42", config.getValue("env").jsonObject
             .getValue("xray.tun.fd").jsonPrimitive.content)
@@ -54,6 +55,11 @@ class XrayConfigBuilderTest {
             .getValue("protocol").jsonPrimitive.content)
         assertEquals("blackhole", outbounds.last().jsonObject
             .getValue("protocol").jsonPrimitive.content)
+        val ipv6LeakProtection = rules.first().jsonObject
+        assertEquals("levik-block", ipv6LeakProtection
+            .getValue("outboundTag").jsonPrimitive.content)
+        assertEquals("::/0", ipv6LeakProtection
+            .getValue("ip").jsonArray.single().jsonPrimitive.content)
         assertFalse("api" in config)
         assertFalse("metrics" in config)
     }
@@ -83,10 +89,10 @@ class XrayConfigBuilderTest {
         val rules = routing.getValue("rules").jsonArray
 
         assertEquals("IPIfNonMatch", routing.getValue("domainStrategy").jsonPrimitive.content)
-        assertTrue(rules.first().jsonObject.getValue("domain").jsonArray.any {
+        assertTrue(rules[1].jsonObject.getValue("domain").jsonArray.any {
             it.jsonPrimitive.content == "domain:ru"
         })
-        assertTrue(rules[1].jsonObject.getValue("ip").jsonArray.any {
+        assertTrue(rules[2].jsonObject.getValue("ip").jsonArray.any {
             it.jsonPrimitive.content == "203.0.113.0/24"
         })
     }
@@ -118,7 +124,7 @@ class XrayConfigBuilderTest {
 
         assertEquals("AsIs", routing.getValue("domainStrategy").jsonPrimitive.content)
         assertTrue(rules.none { "domain" in it.jsonObject })
-        assertTrue(rules.single().jsonObject.getValue("ip").jsonArray.none {
+        assertTrue(rules.drop(1).single().jsonObject.getValue("ip").jsonArray.none {
             it.jsonPrimitive.content == "203.0.113.0/24"
         })
     }

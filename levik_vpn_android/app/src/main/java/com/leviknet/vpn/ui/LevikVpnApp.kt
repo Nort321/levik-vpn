@@ -237,20 +237,27 @@ fun LevikVpnApp(viewModel: AppViewModel) {
         AlertDialog(
             onDismissRequest = viewModel::declineAppDataDisclosure,
             title = { Text(stringResource(R.string.app_data_disclosure_title)) },
-            text = { Text(stringResource(R.string.app_data_disclosure_body)) },
+            text = {
+                Column {
+                    Text(
+                        text = stringResource(R.string.app_data_disclosure_body),
+                        modifier = Modifier
+                            .heightIn(max = 360.dp)
+                            .verticalScroll(rememberScrollState()),
+                    )
+                    TextButton(onClick = viewModel::openPrivacyPolicy) {
+                        Text(stringResource(R.string.profile_privacy_policy))
+                    }
+                }
+            },
             confirmButton = {
                 Button(onClick = viewModel::acceptAppDataDisclosure) {
                     Text(stringResource(R.string.app_data_disclosure_accept))
                 }
             },
             dismissButton = {
-                Row {
-                    TextButton(onClick = viewModel::openPrivacyPolicy) {
-                        Text(stringResource(R.string.profile_privacy_policy))
-                    }
-                    TextButton(onClick = viewModel::declineAppDataDisclosure) {
-                        Text(stringResource(R.string.app_data_disclosure_decline))
-                    }
+                TextButton(onClick = viewModel::declineAppDataDisclosure) {
+                    Text(stringResource(R.string.app_data_disclosure_decline))
                 }
             },
         )

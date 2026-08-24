@@ -767,7 +767,7 @@ class AppViewModel(
     }
 
     fun onLocationPermissionResult(granted: Boolean) {
-        val desired = pendingWifiAutoConnect ?: return
+        if (!pendingWifiAutoConnect) return
         pendingWifiAutoConnect = false
         if (granted) {
             settings.setAutoConnectUntrustedWifi(true)
