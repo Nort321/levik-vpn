@@ -3,6 +3,7 @@ package com.leviknet.vpn.core.update
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -119,6 +120,26 @@ class DirectReleasePolicyTest {
                 nowMillis = 0L,
                 retryAfterSeconds = 48L * 60 * 60,
                 resetEpochSeconds = null,
+            ),
+        )
+    }
+
+    @Test
+    fun `backoff defers silent checks but never blocks a manual retry`() {
+        val retryAt = 20_000L
+
+        assertTrue(
+            UpdateCheckSchedule.shouldDeferForBackoff(
+                silent = true,
+                retryAt = retryAt,
+                now = 10_000L,
+            ),
+        )
+        assertFalse(
+            UpdateCheckSchedule.shouldDeferForBackoff(
+                silent = false,
+                retryAt = retryAt,
+                now = 10_000L,
             ),
         )
     }

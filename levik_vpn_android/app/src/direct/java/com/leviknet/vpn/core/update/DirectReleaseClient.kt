@@ -146,6 +146,9 @@ internal object UpdateCheckSchedule {
     const val MIN_RATE_LIMIT_BACKOFF_MS = 15L * 60 * 1000
     const val MAX_BACKOFF_MS = 24L * 60 * 60 * 1000
 
+    fun shouldDeferForBackoff(silent: Boolean, retryAt: Long, now: Long): Boolean =
+        silent && retryAt > now
+
     fun transientBackoffMs(consecutiveFailures: Int): Long {
         val exponent = (consecutiveFailures - 1).coerceIn(0, 5)
         return min(30L * 60 * 1000 * (1L shl exponent), 12L * 60 * 60 * 1000)
@@ -179,12 +182,8 @@ internal class DirectReleaseClient(
     fun lookupLatestStableRelease(silent: Boolean): ReleaseLookupResult {
         val now = nowMillis()
         val retryAt = preferences.getLong(KEY_RETRY_AT, 0L)
-        if (retryAt > now) {
-            return if (silent) {
-                ReleaseLookupResult.Skipped
-            } else {
-                ReleaseLookupResult.Unavailable("Update service is temporarily unavailable. Try again later.")
-            }
+        if (UpdateCheckSchedule.shouldDeferForBackoff(silent, retryAt, now)) {
+            return ReleaseLookupResult.Skipped
         }
         val nextCheckAt = preferences.getLong(KEY_NEXT_CHECK_AT, 0L)
         if (silent && nextCheckAt > now) {
