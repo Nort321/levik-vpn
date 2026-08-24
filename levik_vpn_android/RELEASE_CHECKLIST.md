@@ -26,4 +26,4 @@
 9. **Запуск релиза**:
    - Запустить GitHub Actions workflow `.github/workflows/android-release.yml` для тега версии через защищенное окружение `production-release`.
    - Проверить, что draft GitHub Release опубликован вручную только после проверки evidence; публикация должна запустить `.github/workflows/android-publish.yml`.
-   - Убедиться, что публичный подписанный feed и immutable APK доступны через `https://leviknet.com/downloads/android/stable/latest.json`, не раскрывая доступ к private repository.
+   - Убедиться, что публичный подписанный feed доступен через `https://leviknet.com/downloads/android/stable/latest.json`, а доверенный APK URL перенаправляет на публичный GitHub Release.

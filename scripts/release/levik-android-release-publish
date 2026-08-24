@@ -7,7 +7,7 @@ umask 022
 readonly release_root="/srv/levik-android-releases/stable"
 readonly incoming_root="/srv/levik-android-releases/incoming"
 readonly public_key="/etc/leviknet/direct-update-public.pem"
-readonly max_archive_bytes=$((1024 * 1024 * 1024))
+readonly max_archive_bytes=$((1024 * 1024))
 
 IFS= read -r release_tag
 if [[ ! "${release_tag}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
@@ -36,7 +36,7 @@ trap cleanup EXIT
 
 cat >"${archive}"
 readonly archive_size="$(wc -c <"${archive}" | tr -d '[:space:]')"
-if [[ ! "${archive_size}" =~ ^[0-9]+$ || "${archive_size}" -lt 1048576 ||
+if [[ ! "${archive_size}" =~ ^[0-9]+$ || "${archive_size}" -lt 512 ||
       "${archive_size}" -gt "${max_archive_bytes}" ]]; then
   printf 'ERROR: Android release archive is outside the allowed size.\n' >&2
   exit 1
@@ -62,18 +62,11 @@ fi
 
 readonly apk_name="LevikVPN-direct-${version_name}.apk"
 required_files=(
-  "${apk_name}"
   update.json
   update.json.sig
   latest.json
   latest.json.sig
-  SHA256SUMS
   PUBLIC-SHA256SUMS
-  THIRD_PARTY_NOTICES-root.md
-  THIRD_PARTY_NOTICES-android.md
-  levik-vpn-android.cdx.json
-  levik-vpn-native.cdx.json
-  "LevikVPN-corresponding-source-${version_name}.tar.gz"
 )
 for required_file in "${required_files[@]}"; do
   if [[ ! -f "${temporary_directory}/${required_file}" ]]; then
@@ -85,7 +78,6 @@ done
 (
   cd "${temporary_directory}"
   sha256sum --check --strict PUBLIC-SHA256SUMS
-  sha256sum --check --strict SHA256SUMS
 )
 
 readonly binary_signature="${temporary_directory}/update.json.sig.der"
@@ -147,14 +139,15 @@ if (
     raise SystemExit("invalid Direct release feed assets")
 for item in assets:
     name = item["name"]
-    path = directory / name
-    if item.get("size") != path.stat().st_size or item.get("url") != f"{base}/{name}":
+    expected_size = manifest.get("apkSize") if name == apk_name else (directory / name).stat().st_size
+    if item.get("size") != expected_size or item.get("url") != f"{base}/{name}":
         raise SystemExit("Direct release feed does not match published assets")
 
 if (
     manifest.get("versionName") != version
     or manifest.get("apkUrl") != f"{base}/{apk_name}"
-    or manifest.get("apkSize") != (directory / apk_name).stat().st_size
+    or not isinstance(manifest.get("apkSize"), int)
+    or manifest.get("apkSize") <= 0
 ):
     raise SystemExit("signed update manifest does not match the release")
 PY

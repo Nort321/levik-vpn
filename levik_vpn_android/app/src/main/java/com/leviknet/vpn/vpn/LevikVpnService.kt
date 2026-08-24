@@ -473,6 +473,8 @@ class LevikVpnService : VpnService() {
             dnsProvider.primaryIpv4
         }
         val secondaryDns = if (dnsProvider == DnsProvider.CUSTOM) "8.8.8.8" else dnsProvider.secondaryIpv4
+        val primaryDnsIpv6 = dnsProvider.primaryIpv6
+        val secondaryDnsIpv6 = dnsProvider.secondaryIpv6
         val splitMode = container.settings.splitTunnelMode.value
         val splitPackages = container.settings.splitTunnelPackages.value
 
@@ -486,6 +488,8 @@ class LevikVpnService : VpnService() {
             .addRoute("::", 0)
             .addDnsServer(primaryDns)
             .addDnsServer(secondaryDns)
+            .addDnsServer(primaryDnsIpv6)
+            .addDnsServer(secondaryDnsIpv6)
             .setBlocking(true)
             .apply {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -1096,8 +1100,8 @@ class LevikVpnService : VpnService() {
         private const val TUN_MTU = 1500
         private const val TUN_IPV4_ADDRESS = "172.30.0.2"
         private const val TUN_IPV4_PREFIX = 30
-        private const val TUN_IPV6_ADDRESS = "fd42:4c65:7669:6b00::2"
-        private const val TUN_IPV6_PREFIX = 126
+        private const val TUN_IPV6_ADDRESS = "2600:1900:4000:5255::2"
+        private const val TUN_IPV6_PREFIX = 64
         private val CONSENT_VALUE = "accepted-v1".encodeToByteArray()
         private val NEXT_CORE_OWNER = AtomicLong(0)
     }

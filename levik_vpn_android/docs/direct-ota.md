@@ -1,6 +1,6 @@
 # Контракт безопасного OTA-обновления для Direct-сборки
 
-GitHub repository остаётся публичным источником кода, а GitHub Actions — единственным источником сборки и полного release evidence. Служебные checksums, SBOM, corresponding source и подписанный provenance хранятся во внутреннем GitHub Actions artifact с минимальным сроком хранения; пользовательский GitHub Release содержит только Direct APK и русское описание версии. Workflow формирует provenance с repository, commit, tag, workflow run и SHA-256 полного checksum manifest, а затем подписывает его production ECDSA P-256 OTA-ключом. После ручной публикации стабильного GitHub Release отдельный workflow загружает внутренний artifact, проверяет checksums, provenance-подпись и ECDSA-подписи, после чего атомарно публикует ограниченный публичный feed на `https://leviknet.com/downloads/android/stable/latest.json`. Токены GitHub и deploy credentials никогда не попадают в APK. Сборка для Google Play (Play flavor) не содержит кода OTA-апдейтера и компонентов установки APK.
+GitHub repository остаётся публичным источником кода, APK и полного release evidence, а GitHub Actions — единственным источником сборки. Служебные checksums, SBOM, corresponding source и подписанный provenance хранятся во внутреннем GitHub Actions artifact с минимальным сроком хранения; пользовательский GitHub Release содержит только Direct APK и русское описание версии. Workflow формирует provenance с repository, commit, tag, workflow run и SHA-256 полного checksum manifest, а затем подписывает его production ECDSA P-256 OTA-ключом. После ручной публикации стабильного GitHub Release отдельный workflow загружает внутренний artifact, проверяет checksums, provenance-подпись и ECDSA-подписи, после чего атомарно публикует только подписанные метаданные на `https://leviknet.com/downloads/android/stable/latest.json`. Доверенный APK URL отвечает временным redirect на публичный GitHub Release, поэтому бинарные файлы не хранятся на OTA-origin. Токены GitHub и deploy credentials никогда не попадают в APK. Сборка для Google Play (Play flavor) не содержит кода OTA-апдейтера и компонентов установки APK.
 
 ## Публичный GitHub Release
 
@@ -8,7 +8,7 @@ GitHub Release содержит только подписанный APK-файл
 
 ## OTA-ассеты
 
-Для каждой неизменяемой версии OTA-origin содержит APK, `update.json` и его отсоединённую подпись `update.json.sig`. В корне канала находятся короткоживущие `latest.json` и `latest.json.sig`. Указатель включает тег, `versionCode`, SHA-256 манифеста и срок действия не более 72 часов; он автоматически переподписывается GitHub Actions каждые сутки.
+Для каждой неизменяемой версии OTA-origin содержит только `update.json` и его отсоединённую подпись `update.json.sig`; APK хранится в публичном GitHub Release. В корне канала находятся короткоживущие `latest.json` и `latest.json.sig`. Указатель включает тег, `versionCode`, SHA-256 манифеста и срок действия не более 72 часов; он автоматически переподписывается GitHub Actions каждые сутки.
 
 ### Схема `update.json`
 

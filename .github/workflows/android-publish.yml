@@ -221,25 +221,10 @@ jobs:
           readonly public_directory="${RUNNER_TEMP}/public-release"
           mkdir -m 755 -- "${public_directory}"
           public_assets=(
-            "LevikVPN-direct-${VERSION_NAME}.apk"
-            "LevikVPN-corresponding-source-${VERSION_NAME}.tar.gz"
-            "LevikVPN-corresponding-source-${VERSION_NAME}.tar.gz.sha256"
             update.json
             update.json.sig
             latest.json
             latest.json.sig
-            SHA256SUMS
-            THIRD_PARTY_NOTICES-root.md
-            THIRD_PARTY_NOTICES-android.md
-            levik-vpn-android.cdx.json
-            levik-vpn-android.cdx.xml
-            levik-vpn-native.cdx.json
-            levik-vpn-native.cdx.xml
-            native-sources.lock.json
-            gradle-root.lockfile
-            gradle-app.lockfile
-            release-provenance.json
-            release-provenance.json.sig
           )
           for asset in "${public_assets[@]}"; do
             if [[ ! -f "${source_directory}/${asset}" || -L "${source_directory}/${asset}" ]]; then
