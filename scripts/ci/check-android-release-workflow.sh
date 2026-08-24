@@ -34,12 +34,13 @@ required_literals=(
   'assembleDirectRelease'
   'bundlePlayRelease'
   'generate-direct-update-manifest.sh'
+  'generate-direct-release-feed.py'
   'validate-play-bundle-metadata.sh'
   'generate-native-sbom.py'
   'build-corresponding-source.sh'
   'gh release create'
   '--draft'
-  'repository is private'
+  'private Android repository'
 )
 
 violations=0
