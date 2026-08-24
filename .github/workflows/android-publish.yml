@@ -1,0 +1,219 @@
+name: Publish signed Android Direct feed
+
+"on":
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing published stable release tag (vX.Y.Z)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-direct-publication
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Verify and publish Direct release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: production-release
+    permissions:
+      attestations: read
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Resolve immutable release tag
+        id: release
+        shell: bash
+        env:
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="${EVENT_TAG:-${INPUT_TAG:-}}"
+          if [[ ! "${tag}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            printf 'ERROR: publication requires stable tag vX.Y.Z.\n' >&2
+            exit 64
+          fi
+          printf 'tag=%s\n' "${tag}" >>"${GITHUB_OUTPUT}"
+          printf 'version=%s\n' "${BASH_REMATCH[1]}" >>"${GITHUB_OUTPUT}"
+
+      - name: Checkout immutable release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ steps.release.outputs.tag }}
+
+      - name: Verify repository and published release state
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event.repository.private }}" != "true" ]]; then
+            printf 'ERROR: private Android repository policy mismatch.\n' >&2
+            exit 1
+          fi
+          if [[ "$(git rev-parse HEAD)" != "$(git rev-parse "${RELEASE_TAG}^{commit}")" ]]; then
+            printf 'ERROR: checkout does not match the release tag.\n' >&2
+            exit 1
+          fi
+          release_json="$(gh release view "${RELEASE_TAG}" --json isDraft,isPrerelease,tagName,targetCommitish)"
+          python3 - "${release_json}" "${RELEASE_TAG}" <<'PY'
+          import json
+          import sys
+
+          release = json.loads(sys.argv[1])
+          tag = sys.argv[2]
+          if release != {
+              "isDraft": False,
+              "isPrerelease": False,
+              "tagName": tag,
+              "targetCommitish": "main",
+          }:
+              raise SystemExit("release is not an approved published stable main release")
+          PY
+
+      - name: Download and verify private release evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          VERSION_NAME: ${{ steps.release.outputs.version }}
+          DIRECT_UPDATE_MANIFEST_PUBLIC_KEY: ${{ secrets.DIRECT_UPDATE_MANIFEST_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          readonly release_directory="${RUNNER_TEMP}/private-release"
+          mkdir -m 700 -- "${release_directory}"
+          gh release download "${RELEASE_TAG}" --dir "${release_directory}"
+          (
+            cd "${release_directory}"
+            sha256sum --check --strict ARTIFACT-SHA256SUMS
+          )
+          gh attestation verify \
+            "${release_directory}/LevikVPN-direct-${VERSION_NAME}.apk" \
+            --repo "${GITHUB_REPOSITORY}"
+
+          printf '%s' "${DIRECT_UPDATE_MANIFEST_PUBLIC_KEY}" |
+            base64 --decode >"${RUNNER_TEMP}/direct-update-public.der"
+          openssl pkey -pubin -inform DER \
+            -in "${RUNNER_TEMP}/direct-update-public.der" \
+            -out "${RUNNER_TEMP}/direct-update-public.pem"
+          base64 --decode "${release_directory}/update.json.sig" \
+            >"${RUNNER_TEMP}/update.json.sig.der"
+          openssl dgst -sha256 \
+            -verify "${RUNNER_TEMP}/direct-update-public.pem" \
+            -signature "${RUNNER_TEMP}/update.json.sig.der" \
+            "${release_directory}/update.json" >/dev/null
+
+      - name: Build bounded public release archive
+        shell: bash
+        env:
+          VERSION_NAME: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          readonly source_directory="${RUNNER_TEMP}/private-release"
+          readonly public_directory="${RUNNER_TEMP}/public-release"
+          mkdir -m 755 -- "${public_directory}"
+          public_assets=(
+            "LevikVPN-direct-${VERSION_NAME}.apk"
+            "LevikVPN-corresponding-source-${VERSION_NAME}.tar.gz"
+            "LevikVPN-corresponding-source-${VERSION_NAME}.tar.gz.sha256"
+            update.json
+            update.json.sig
+            latest.json
+            SHA256SUMS
+            THIRD_PARTY_NOTICES-root.md
+            THIRD_PARTY_NOTICES-android.md
+            levik-vpn-android.cdx.json
+            levik-vpn-android.cdx.xml
+            levik-vpn-native.cdx.json
+            levik-vpn-native.cdx.xml
+            native-sources.lock.json
+            gradle-root.lockfile
+            gradle-app.lockfile
+          )
+          for asset in "${public_assets[@]}"; do
+            if [[ ! -f "${source_directory}/${asset}" || -L "${source_directory}/${asset}" ]]; then
+              printf 'ERROR: required public release asset is missing: %s\n' "${asset}" >&2
+              exit 1
+            fi
+            cp -- "${source_directory}/${asset}" "${public_directory}/${asset}"
+          done
+          (
+            cd "${public_directory}"
+            printf '%s\0' "${public_assets[@]}" |
+              sort -z |
+              xargs -0 sha256sum
+          ) >"${public_directory}/PUBLIC-SHA256SUMS"
+          mapfile -d '' archive_files < <(
+            find "${public_directory}" -mindepth 1 -maxdepth 1 -type f -printf '%f\0' | sort -z
+          )
+          tar -czf "${RUNNER_TEMP}/levik-android-public-release.tar.gz" \
+            -C "${public_directory}" \
+            "${archive_files[@]}"
+
+      - name: Publish through restricted SSH command
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          DEPLOY_HOST: ${{ secrets.ANDROID_RELEASE_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.ANDROID_RELEASE_DEPLOY_USER }}
+          DEPLOY_PRIVATE_KEY: ${{ secrets.ANDROID_RELEASE_DEPLOY_PRIVATE_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.ANDROID_RELEASE_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${DEPLOY_HOST}" =~ ^[A-Za-z0-9.-]+$ ||
+                ! "${DEPLOY_USER}" =~ ^[a-z_][a-z0-9_-]{0,31}$ ||
+                -z "${DEPLOY_PRIVATE_KEY}" ||
+                -z "${DEPLOY_KNOWN_HOSTS}" ]]; then
+            printf 'ERROR: restricted Android release deployment is not configured.\n' >&2
+            exit 1
+          fi
+          readonly ssh_directory="${RUNNER_TEMP}/release-ssh"
+          mkdir -m 700 -- "${ssh_directory}"
+          printf '%s\n' "${DEPLOY_PRIVATE_KEY}" >"${ssh_directory}/id_ed25519"
+          printf '%s\n' "${DEPLOY_KNOWN_HOSTS}" >"${ssh_directory}/known_hosts"
+          chmod 600 -- "${ssh_directory}"/*
+          ssh \
+            -i "${ssh_directory}/id_ed25519" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="${ssh_directory}/known_hosts" \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "publish ${RELEASE_TAG}" \
+            <"${RUNNER_TEMP}/levik-android-public-release.tar.gz"
+
+      - name: Verify public feed and immutable APK
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          VERSION_NAME: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          readonly public_base="https://leviknet.com/downloads/android/stable"
+          curl --fail --silent --show-error \
+            --proto '=https' --tlsv1.2 \
+            "${public_base}/latest.json" \
+            --output "${RUNNER_TEMP}/published-latest.json"
+          cmp --silent \
+            "${RUNNER_TEMP}/private-release/latest.json" \
+            "${RUNNER_TEMP}/published-latest.json"
+          curl --fail --silent --show-error --head \
+            --proto '=https' --tlsv1.2 \
+            "${public_base}/${RELEASE_TAG}/LevikVPN-direct-${VERSION_NAME}.apk"
+
+      - name: Remove deployment material
+        if: always()
+        shell: bash
+        run: rm -rf -- "${RUNNER_TEMP}/release-ssh" "${RUNNER_TEMP}/direct-update-public.der" "${RUNNER_TEMP}/direct-update-public.pem" "${RUNNER_TEMP}/update.json.sig.der"

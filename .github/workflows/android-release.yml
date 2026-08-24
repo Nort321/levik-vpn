@@ -193,8 +193,9 @@ jobs:
           fi
           printf '%s' "${DIRECT_UPDATE_MANIFEST_PUBLIC_KEY}" | base64 --decode >/dev/null
 
-          if [[ "${{ github.event.repository.private }}" == "true" ]]; then
-            printf 'NOTICE: repository is private; unauthenticated Direct OTA remains unavailable to installed apps.\n'
+          if [[ "${{ github.event.repository.private }}" != "true" ]]; then
+            printf 'ERROR: this release workflow is intentionally scoped to the private Android repository.\n' >&2
+            exit 1
           fi
 
       - name: Materialize protected Direct signing inputs
@@ -336,6 +337,18 @@ jobs:
           readonly changelog_en="${RUNNER_TEMP}/levik-changelog-en.txt"
           readonly changelog_ru="${RUNNER_TEMP}/levik-changelog-ru.txt"
 
+          readonly apkanalyzer_path="${ANDROID_HOME}/cmdline-tools/latest/bin/apkanalyzer"
+          mapfile -d '' apksigner_paths < <(
+            find "${ANDROID_HOME}/build-tools" \
+              -mindepth 2 -maxdepth 2 -type f -name apksigner -print0 | sort -zV
+          )
+          if [[ ! -x "${apkanalyzer_path}" || "${#apksigner_paths[@]}" -eq 0 ]]; then
+            printf 'ERROR: required Android SDK verification tools are unavailable.\n' >&2
+            exit 1
+          fi
+          readonly apksigner_path="${apksigner_paths[-1]}"
+          export PATH="$(dirname "${apkanalyzer_path}"):$(dirname "${apksigner_path}"):${PATH}"
+
           printf '%s\n' "${CHANGELOG_EN}" >"${changelog_en}"
           printf '%s\n' "${CHANGELOG_RU}" >"${changelog_ru}"
 
@@ -368,6 +381,10 @@ jobs:
             "${RUNNER_TEMP}/levik-release-secrets/direct-update-private.pem" \
             "${DIRECT_UPDATE_MANIFEST_PUBLIC_KEY}" \
             "${output_directory}"
+
+          python3 scripts/release/generate-direct-release-feed.py \
+            --output-directory "${output_directory}" \
+            --version "${VERSION_NAME}"
 
           if [[ "${RELEASE_SCOPE}" == "direct-and-play" ]]; then
             cp -- "${play_aab}" "${output_directory}/LevikVPN-play-${VERSION_NAME}.aab"
@@ -429,7 +446,7 @@ jobs:
             --draft \
             --verify-tag \
             --title "Levik VPN ${VERSION_NAME}" \
-            --notes "Signed ${RELEASE_SCOPE} release candidate. Review every attached checksum, SBOM, source bundle, signing decision, and test result before publication. Direct OTA will not work for unauthenticated installed apps while this repository remains private."
+            --notes "Signed ${RELEASE_SCOPE} release candidate. Review every attached checksum, SBOM, source bundle, signing decision, and test result before publication. Publishing this draft triggers the separate verified deployment of the signed Direct feed to leviknet.com."
 
       - name: Remove protected signing inputs
         if: always()

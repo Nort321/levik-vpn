@@ -31,3 +31,5 @@
    - Сформировать спецификацию SBOM (CycloneDX JSON/XML) и архив соответствующего исходного кода (Corresponding Source) для нативных компонентов GPL.
 9. **Запуск релиза**:
    - Запустить GitHub Actions workflow `.github/workflows/android-release.yml` для тега версии через защищенное окружение `production-release`.
+   - Проверить, что draft GitHub Release опубликован вручную только после проверки evidence; публикация должна запустить `.github/workflows/android-publish.yml`.
+   - Убедиться, что публичный подписанный feed и immutable APK доступны через `https://leviknet.com/downloads/android/stable/latest.json`, не раскрывая доступ к private repository.
