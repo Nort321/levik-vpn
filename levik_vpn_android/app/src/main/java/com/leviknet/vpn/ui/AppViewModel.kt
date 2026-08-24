@@ -27,6 +27,7 @@ import com.leviknet.vpn.core.network.DiagnosticReport
 import com.leviknet.vpn.core.network.MobileAccountResponse
 import com.leviknet.vpn.core.network.NetworkDiagnostics
 import com.leviknet.vpn.core.network.SubscriptionSummary
+import com.leviknet.vpn.data.AntiDpiPreset
 import com.leviknet.vpn.data.AppRepository
 import com.leviknet.vpn.data.AppSettings
 import com.leviknet.vpn.data.DailyTraffic
@@ -151,6 +152,26 @@ class AppViewModel(
         viewModelScope.launch {
             settings.antiDpiEnabled.collect { enabled ->
                 mutableState.update { it.copy(antiDpiEnabled = enabled) }
+            }
+        }
+        viewModelScope.launch {
+            settings.antiDpiPreset.collect { preset ->
+                mutableState.update { it.copy(antiDpiPreset = preset) }
+            }
+        }
+        viewModelScope.launch {
+            settings.antiDpiPackets.collect { packets ->
+                mutableState.update { it.copy(antiDpiPackets = packets) }
+            }
+        }
+        viewModelScope.launch {
+            settings.antiDpiLength.collect { length ->
+                mutableState.update { it.copy(antiDpiLength = length) }
+            }
+        }
+        viewModelScope.launch {
+            settings.antiDpiInterval.collect { interval ->
+                mutableState.update { it.copy(antiDpiInterval = interval) }
             }
         }
         viewModelScope.launch {
@@ -738,6 +759,20 @@ class AppViewModel(
             .onFailure {
                 mutableState.update { state -> state.copy(message = UiMessage.GENERIC_ERROR) }
             }
+    }
+
+    fun setAntiDpiPreset(preset: AntiDpiPreset) {
+        settings.setAntiDpiPreset(preset)
+        if (mutableState.value.vpn.state == VpnConnectionState.CONNECTED) {
+            vpnController.reconfigure()
+        }
+    }
+
+    fun setAntiDpiCustomParams(packets: String, length: String, interval: String) {
+        settings.setAntiDpiCustomParams(packets, length, interval)
+        if (mutableState.value.vpn.state == VpnConnectionState.CONNECTED) {
+            vpnController.reconfigure()
+        }
     }
 
     fun setAntiDpiEnabled(enabled: Boolean) {
@@ -1567,6 +1602,10 @@ data class AppUiState(
     val showLogoutConfirmation: Boolean = false,
     val routingPreset: RoutingPreset = RoutingPreset.BYPASS_RU,
     val bypassRussianTraffic: Boolean = true,
+    val antiDpiPreset: AntiDpiPreset = AntiDpiPreset.OFF,
+    val antiDpiPackets: String = "tlshello",
+    val antiDpiLength: String = "100-200",
+    val antiDpiInterval: String = "10-20",
     val antiDpiEnabled: Boolean = false,
     val autoHealingEnabled: Boolean = true,
     val killSwitchEnabled: Boolean = false,

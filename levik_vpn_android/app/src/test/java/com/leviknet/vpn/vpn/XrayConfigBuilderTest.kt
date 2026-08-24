@@ -250,6 +250,11 @@ class XrayConfigBuilderTest {
         }
         assertTrue(fragmentOutbound != null)
 
+        val fragmentSettings = fragmentOutbound!!.jsonObject["settings"]?.jsonObject?.get("fragment")?.jsonObject
+        assertEquals("tlshello", fragmentSettings?.get("packets")?.jsonPrimitive?.content)
+        assertEquals("100-200", fragmentSettings?.get("length")?.jsonPrimitive?.content)
+        assertEquals("10-20", fragmentSettings?.get("interval")?.jsonPrimitive?.content)
+
         val selectedOutbound = outbounds.first().jsonObject
         val streamSettings = selectedOutbound["streamSettings"]?.jsonObject
         val sockopt = streamSettings?.get("sockopt")?.jsonObject
@@ -258,6 +263,76 @@ class XrayConfigBuilderTest {
         val dns = config.getValue("dns").jsonObject
         val servers = dns.getValue("servers").jsonArray
         assertTrue(servers.any { it.jsonPrimitive.content == "https://1.1.1.1/dns-query" })
+    }
+
+    @Test
+    fun `injects custom and micro fragment params when specified`() {
+        val selected = server("b".repeat(64), "server-b")
+        val profile = PreparedTunnelProfile(
+            version = 1,
+            profileId = "profile",
+            subscriptionId = "subscription",
+            issuedAt = "2026-07-29T11:59:00Z",
+            subscriptionExpiresAt = "2026-08-29T13:00:00Z",
+            servers = listOf(selected),
+        )
+
+        val config = json.parseToJsonElement(
+            builder.build(
+                profile = profile,
+                selectedServerId = selected.id,
+                tunFileDescriptor = 42,
+                antiDpiEnabled = true,
+                antiDpiPackets = "1-5",
+                antiDpiLength = "1-5",
+                antiDpiInterval = "5-15",
+            ),
+        ).jsonObject
+
+        val outbounds = config.getValue("outbounds").jsonArray
+        val fragmentOutbound = outbounds.first {
+            it.jsonObject["tag"]?.jsonPrimitive?.content == "levik-fragment"
+        }.jsonObject
+        val fragment = fragmentOutbound.getValue("settings").jsonObject.getValue("fragment").jsonObject
+
+        assertEquals("1-5", fragment.getValue("packets").jsonPrimitive.content)
+        assertEquals("1-5", fragment.getValue("length").jsonPrimitive.content)
+        assertEquals("5-15", fragment.getValue("interval").jsonPrimitive.content)
+    }
+
+    @Test
+    fun `sanitizes invalid Anti-DPI parameters to safe defaults`() {
+        val selected = server("b".repeat(64), "server-b")
+        val profile = PreparedTunnelProfile(
+            version = 1,
+            profileId = "profile",
+            subscriptionId = "subscription",
+            issuedAt = "2026-07-29T11:59:00Z",
+            subscriptionExpiresAt = "2026-08-29T13:00:00Z",
+            servers = listOf(selected),
+        )
+
+        val config = json.parseToJsonElement(
+            builder.build(
+                profile = profile,
+                selectedServerId = selected.id,
+                tunFileDescriptor = 42,
+                antiDpiEnabled = true,
+                antiDpiPackets = "evil;injection{\"",
+                antiDpiLength = "invalid length spaces",
+                antiDpiInterval = "   ",
+            ),
+        ).jsonObject
+
+        val outbounds = config.getValue("outbounds").jsonArray
+        val fragmentOutbound = outbounds.first {
+            it.jsonObject["tag"]?.jsonPrimitive?.content == "levik-fragment"
+        }.jsonObject
+        val fragment = fragmentOutbound.getValue("settings").jsonObject.getValue("fragment").jsonObject
+
+        assertEquals("tlshello", fragment.getValue("packets").jsonPrimitive.content)
+        assertEquals("100-200", fragment.getValue("length").jsonPrimitive.content)
+        assertEquals("10-20", fragment.getValue("interval").jsonPrimitive.content)
     }
 
     @Test

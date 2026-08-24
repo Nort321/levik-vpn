@@ -138,7 +138,21 @@
     <string name="routing_preset_desc">Choose traffic routing strategy</string>
 
     <string name="anti_dpi_title">Anti-DPI / TLS Fragmentation</string>
-    <string name="anti_dpi_desc">Fragment TLS ClientHello packets to bypass DPI censorship firewalls</string>
+    <string name="anti_dpi_desc">Fragment packets to bypass DPI censorship firewalls</string>
+    <string name="anti_dpi_dialog_title">Anti-DPI Configuration</string>
+    <string name="anti_dpi_dialog_desc">Splitting packets into chunks with slight delays prevents Deep Packet Inspection (DPI) systems from identifying and blocking encrypted tunnel handshakes.</string>
+    <string name="anti_dpi_enable_toggle">Enable Anti-DPI</string>
+    <string name="anti_dpi_presets_header">Fragmentation Modes</string>
+    <string name="anti_dpi_custom_header">Custom Parameters</string>
+    <string name="anti_dpi_packets_label">Target Packets</string>
+    <string name="anti_dpi_packets_hint">e.g. tlshello, 1-3 or 1-5</string>
+    <string name="anti_dpi_length_label">Chunk Length in Bytes</string>
+    <string name="anti_dpi_length_hint">e.g. 100-200, 1-5 or 50-150</string>
+    <string name="anti_dpi_interval_label">Delay Interval in ms</string>
+    <string name="anti_dpi_interval_hint">e.g. 10-20, 5-15 or 1-5</string>
+    <string name="anti_dpi_apply_btn">Apply</string>
+    <string name="anti_dpi_custom_invalid">Invalid format. Use letters, numbers, and dashes (e.g. tlshello, 100-200, 10-20).</string>
+    <string name="anti_dpi_active_preset">Active Mode: %1$s</string>
 
     <string name="auto_healing_title">Smart Auto-Healing</string>
     <string name="auto_healing_desc">Automatically detect silent connection freezes and restore connection</string>

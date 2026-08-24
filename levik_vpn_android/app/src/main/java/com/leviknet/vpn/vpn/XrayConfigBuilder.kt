@@ -27,6 +27,9 @@ class XrayConfigBuilder(
         secondaryDnsIp: String = SECONDARY_DNS_IP,
         dohEndpoint: String? = null,
         antiDpiEnabled: Boolean = false,
+        antiDpiPackets: String = DEFAULT_ANTI_DPI_PACKETS,
+        antiDpiLength: String = DEFAULT_ANTI_DPI_LENGTH,
+        antiDpiInterval: String = DEFAULT_ANTI_DPI_INTERVAL,
         customDirectDomains: Set<String> = emptySet(),
         customProxyDomains: Set<String> = emptySet(),
     ): String {
@@ -85,15 +88,19 @@ class XrayConfigBuilder(
 
         val additionalOutbounds = buildList {
             if (antiDpiEnabled) {
+                val sanitizedPackets = sanitizeAntiDpiParam(antiDpiPackets, DEFAULT_ANTI_DPI_PACKETS)
+                val sanitizedLength = sanitizeAntiDpiParam(antiDpiLength, DEFAULT_ANTI_DPI_LENGTH)
+                val sanitizedInterval = sanitizeAntiDpiParam(antiDpiInterval, DEFAULT_ANTI_DPI_INTERVAL)
+
                 add(buildJsonObject {
                     put("tag", FRAGMENT_TAG)
                     put("protocol", "freedom")
                     put("settings", buildJsonObject {
                         put("domainStrategy", "UseIPv4")
                         put("fragment", buildJsonObject {
-                            put("packets", "1-3")
-                            put("length", "100-200")
-                            put("interval", "10-20")
+                            put("packets", sanitizedPackets)
+                            put("length", sanitizedLength)
+                            put("interval", sanitizedInterval)
                         })
                     })
                     put("streamSettings", buildJsonObject {
@@ -295,6 +302,12 @@ class XrayConfigBuilder(
         )
     }
 
+    private fun sanitizeAntiDpiParam(param: String, fallback: String): String {
+        val trimmed = param.trim()
+        if (trimmed.isBlank()) return fallback
+        return if (trimmed.matches(Regex("^[a-zA-Z0-9,-]+$"))) trimmed else fallback
+    }
+
     private fun validateServers(servers: List<TunnelServer>) {
         require(servers.isNotEmpty() && servers.size <= MAX_SERVERS)
         val tags = mutableSetOf<String>()
@@ -313,6 +326,9 @@ class XrayConfigBuilder(
     }
 
     companion object {
+        const val DEFAULT_ANTI_DPI_PACKETS = "tlshello"
+        const val DEFAULT_ANTI_DPI_LENGTH = "100-200"
+        const val DEFAULT_ANTI_DPI_INTERVAL = "10-20"
         const val PRIMARY_DNS_ENDPOINT = "1.1.1.1:53"
         private const val PRIMARY_DNS_IP = "1.1.1.1"
         private const val SECONDARY_DNS_IP = "8.8.8.8"

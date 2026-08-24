@@ -347,6 +347,9 @@ class LevikVpnService : VpnService() {
                 secondaryDnsIp = secondaryDns,
                 dohEndpoint = dohUrl,
                 antiDpiEnabled = antiDpi,
+                antiDpiPackets = container.settings.antiDpiPackets.value,
+                antiDpiLength = container.settings.antiDpiLength.value,
+                antiDpiInterval = container.settings.antiDpiInterval.value,
                 customDirectDomains = container.settings.customDirectDomains.value,
                 customProxyDomains = container.settings.customProxyDomains.value,
             )

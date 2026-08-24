@@ -138,7 +138,21 @@
     <string name="routing_preset_desc">Правило распределения трафика (Global, Обход РФ, Только заблокированное)</string>
 
     <string name="anti_dpi_title">Анти-DPI / Фрагментация TLS</string>
-    <string name="anti_dpi_desc">Дробление TLS ClientHello пакетов для обхода жестких фильтров и блокировок ТСПУ</string>
+    <string name="anti_dpi_desc">Дробление сетевых пакетов для обхода жестких фильтров и блокировок ТСПУ</string>
+    <string name="anti_dpi_dialog_title">Настройка Анти-DPI (Фрагментация)</string>
+    <string name="anti_dpi_dialog_desc">Дробление сетевых пакетов на фрагменты и задержка между ними мешают системам глубокой фильтрации (ТСПУ / DPI) распознавать защищённый трафик и блокировать соединение.</string>
+    <string name="anti_dpi_enable_toggle">Включить Анти-DPI</string>
+    <string name="anti_dpi_presets_header">Режимы фрагментации</string>
+    <string name="anti_dpi_custom_header">Пользовательские параметры</string>
+    <string name="anti_dpi_packets_label">Фрагментируемые пакеты (Packets)</string>
+    <string name="anti_dpi_packets_hint">например, tlshello, 1-3 или 1-5</string>
+    <string name="anti_dpi_length_label">Размер фрагментов в байтах (Length)</string>
+    <string name="anti_dpi_length_hint">например, 100-200, 1-5 или 50-150</string>
+    <string name="anti_dpi_interval_label">Интервал задержки в мс (Interval)</string>
+    <string name="anti_dpi_interval_hint">например, 10-20, 5-15 или 1-5</string>
+    <string name="anti_dpi_apply_btn">Применить</string>
+    <string name="anti_dpi_custom_invalid">Недопустимый формат параметров. Используйте буквы, цифры и дефис (например: tlshello, 100-200, 10-20).</string>
+    <string name="anti_dpi_active_preset">Активен режим: %1$s</string>
 
     <string name="auto_healing_title">Авто-восстановление связи</string>
     <string name="auto_healing_desc">Автоматически обнаруживать зависание туннеля и восстанавливать соединение</string>

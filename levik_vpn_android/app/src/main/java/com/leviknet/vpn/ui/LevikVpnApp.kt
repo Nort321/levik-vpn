@@ -111,6 +111,7 @@ import com.leviknet.vpn.core.logger.LogEntry
 import com.leviknet.vpn.core.network.DiagnosticReport
 import com.leviknet.vpn.core.network.MobileAccountResponse
 import com.leviknet.vpn.core.network.SubscriptionSummary
+import com.leviknet.vpn.data.AntiDpiPreset
 import com.leviknet.vpn.data.DailyTraffic
 import com.leviknet.vpn.data.DnsProvider
 import com.leviknet.vpn.data.RoutingPreset
@@ -138,6 +139,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
     val context = LocalContext.current
 
     var showPauseDialog by remember { mutableStateOf(false) }
+    var showAntiDpiDialog by remember { mutableStateOf(false) }
     var showSplitTunnelDialog by remember { mutableStateOf(false) }
     var showAppSelectorDialog by remember { mutableStateOf(false) }
     var showDnsDialog by remember { mutableStateOf(false) }
@@ -191,6 +193,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     onLogout = viewModel::requestLogout,
                     onRoutingPresetSelected = viewModel::setRoutingPreset,
                     onOpenRoutingPreset = { showRoutingPresetDialog = true },
+                    onOpenAntiDpi = { showAntiDpiDialog = true },
                     onAntiDpiChanged = viewModel::setAntiDpiEnabled,
                     onAutoHealingChanged = viewModel::setAutoHealingEnabled,
                     onOpenKillSwitch = { showKillSwitchDialog = true },
@@ -307,6 +310,29 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                 showRoutingPresetDialog = false
             },
             onDismiss = { showRoutingPresetDialog = false },
+        )
+    }
+
+    if (showAntiDpiDialog) {
+        AntiDpiDialog(
+            enabled = state.antiDpiEnabled,
+            currentPreset = state.antiDpiPreset,
+            customPackets = state.antiDpiPackets,
+            customLength = state.antiDpiLength,
+            customInterval = state.antiDpiInterval,
+            onPresetSelected = { preset ->
+                viewModel.setAntiDpiPreset(preset)
+                showAntiDpiDialog = false
+            },
+            onCustomParamsChanged = { packets, length, interval ->
+                viewModel.setAntiDpiCustomParams(packets, length, interval)
+                showAntiDpiDialog = false
+            },
+            onEnabledChanged = { enabled ->
+                viewModel.setAntiDpiEnabled(enabled)
+                showAntiDpiDialog = false
+            },
+            onDismiss = { showAntiDpiDialog = false },
         )
     }
 
@@ -652,6 +678,7 @@ private fun MainContent(
     onLogout: () -> Unit,
     onRoutingPresetSelected: (RoutingPreset) -> Unit,
     onOpenRoutingPreset: () -> Unit,
+    onOpenAntiDpi: () -> Unit,
     onAntiDpiChanged: (Boolean) -> Unit,
     onAutoHealingChanged: (Boolean) -> Unit,
     onOpenKillSwitch: () -> Unit,
@@ -701,6 +728,7 @@ private fun MainContent(
                 onProfile = { onTabSelected(AppTab.PROFILE) },
                 onServers = { onTabSelected(AppTab.SERVERS) },
                 onOpenRoutingPreset = onOpenRoutingPreset,
+                onOpenAntiDpi = onOpenAntiDpi,
             )
             AppTab.SERVERS -> ServersScreen(
                 modifier = Modifier.padding(padding),
@@ -747,7 +775,9 @@ private fun MainContent(
                 onLogout = onLogout,
                 routingPreset = state.routingPreset,
                 onOpenRoutingPreset = onOpenRoutingPreset,
+                antiDpiPreset = state.antiDpiPreset,
                 antiDpiEnabled = state.antiDpiEnabled,
+                onOpenAntiDpi = onOpenAntiDpi,
                 onAntiDpiChanged = onAntiDpiChanged,
                 autoHealingEnabled = state.autoHealingEnabled,
                 onAutoHealingChanged = onAutoHealingChanged,
@@ -857,6 +887,7 @@ private fun HomeScreen(
     onProfile: () -> Unit,
     onServers: () -> Unit,
     onOpenRoutingPreset: () -> Unit,
+    onOpenAntiDpi: () -> Unit,
 ) {
     val selectedServer = state.profile?.servers?.firstOrNull {
         it.id == state.selectedServerId
@@ -964,7 +995,7 @@ private fun HomeScreen(
             }
             if (state.antiDpiEnabled) {
                 Surface(
-                    onClick = onProfile,
+                    onClick = onOpenAntiDpi,
                     shape = RoundedCornerShape(12.dp),
                     color = MaterialTheme.colorScheme.surface,
                     border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
@@ -981,7 +1012,14 @@ private fun HomeScreen(
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            text = "Anti-DPI",
+                            text = when (state.antiDpiPreset) {
+                                AntiDpiPreset.TLS_HELLO -> "Anti-DPI: TLS Hello"
+                                AntiDpiPreset.MICRO -> "Anti-DPI: Micro"
+                                AntiDpiPreset.BALANCED -> "Anti-DPI: Balanced"
+                                AntiDpiPreset.DEEP -> "Anti-DPI: Deep"
+                                AntiDpiPreset.CUSTOM -> "Anti-DPI: Custom"
+                                AntiDpiPreset.OFF -> "Anti-DPI"
+                            },
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurface,
@@ -2406,7 +2444,9 @@ private fun ProfileScreen(
     onLogout: () -> Unit,
     routingPreset: RoutingPreset,
     onOpenRoutingPreset: () -> Unit,
+    antiDpiPreset: AntiDpiPreset,
     antiDpiEnabled: Boolean,
+    onOpenAntiDpi: () -> Unit,
     onAntiDpiChanged: (Boolean) -> Unit,
     autoHealingEnabled: Boolean,
     onAutoHealingChanged: (Boolean) -> Unit,
@@ -2634,8 +2674,9 @@ private fun ProfileScreen(
                 modifier = Modifier.padding(top = 6.dp),
             )
 
-            // Anti-DPI / TLS Fragmentation Switch
+            // Anti-DPI / TLS Fragmentation Row
             Surface(
+                onClick = onOpenAntiDpi,
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(18.dp),
                 color = MaterialTheme.colorScheme.surface,
@@ -2654,7 +2695,11 @@ private fun ProfileScreen(
                         )
                         Spacer(Modifier.height(2.dp))
                         Text(
-                            text = stringResource(R.string.anti_dpi_desc),
+                            text = if (antiDpiPreset != AntiDpiPreset.OFF) {
+                                stringResource(R.string.anti_dpi_active_preset, antiDpiPreset.titleRu)
+                            } else {
+                                stringResource(R.string.anti_dpi_desc)
+                            },
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall,
                         )
@@ -3271,6 +3316,243 @@ private fun ProfileScreen(
 
 internal fun referralSummaryForDisplay(account: MobileAccountResponse?): ReferralSummary? =
     account?.referrals
+
+@Composable
+private fun AntiDpiDialog(
+    enabled: Boolean,
+    currentPreset: AntiDpiPreset,
+    customPackets: String,
+    customLength: String,
+    customInterval: String,
+    onPresetSelected: (AntiDpiPreset) -> Unit,
+    onCustomParamsChanged: (String, String, String) -> Unit,
+    onEnabledChanged: (Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var isEnabled by remember(enabled) { mutableStateOf(enabled) }
+    var selectedPreset by remember(currentPreset) { mutableStateOf(currentPreset) }
+    var packetsText by remember(customPackets) { mutableStateOf(customPackets) }
+    var lengthText by remember(customLength) { mutableStateOf(customLength) }
+    var intervalText by remember(customInterval) { mutableStateOf(customInterval) }
+    var isCustomFormatError by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(24.dp),
+        title = {
+            Text(
+                text = stringResource(R.string.anti_dpi_dialog_title),
+                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.titleLarge,
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 480.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.anti_dpi_dialog_desc),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 18.sp,
+                )
+
+                // Master Toggle Switch
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                text = stringResource(R.string.anti_dpi_enable_toggle),
+                                fontWeight = FontWeight.SemiBold,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                        Switch(
+                            checked = isEnabled,
+                            onCheckedChange = { checked ->
+                                isEnabled = checked
+                                if (checked && selectedPreset == AntiDpiPreset.OFF) {
+                                    selectedPreset = AntiDpiPreset.TLS_HELLO
+                                }
+                            },
+                            colors = LevikSwitchDefaults.colors(),
+                        )
+                    }
+                }
+
+                if (isEnabled) {
+                    Text(
+                        text = stringResource(R.string.anti_dpi_presets_header),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+
+                    AntiDpiPreset.entries.filter { it != AntiDpiPreset.OFF }.forEach { preset ->
+                        val isSelected = selectedPreset == preset
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable { selectedPreset = preset },
+                            shape = RoundedCornerShape(14.dp),
+                            color = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f) else MaterialTheme.colorScheme.surface,
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                            ),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(14.dp),
+                                verticalAlignment = Alignment.Top,
+                            ) {
+                                RadioButton(
+                                    selected = isSelected,
+                                    onClick = { selectedPreset = preset },
+                                    modifier = Modifier.padding(top = 2.dp),
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                Column {
+                                    Text(
+                                        text = preset.titleRu,
+                                        fontWeight = FontWeight.SemiBold,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                    )
+                                    Spacer(Modifier.height(2.dp))
+                                    Text(
+                                        text = preset.descriptionRu,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    if (preset != AntiDpiPreset.CUSTOM) {
+                                        Spacer(Modifier.height(6.dp))
+                                        Surface(
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = MaterialTheme.colorScheme.surfaceVariant,
+                                        ) {
+                                            Text(
+                                                text = "packets: ${preset.defaultPackets} | length: ${preset.defaultLength} | interval: ${preset.defaultInterval} ms",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                fontFamily = FontFamily.Monospace,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (selectedPreset == AntiDpiPreset.CUSTOM) {
+                        Text(
+                            text = stringResource(R.string.anti_dpi_custom_header),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+
+                        OutlinedTextField(
+                            value = packetsText,
+                            onValueChange = {
+                                packetsText = it
+                                isCustomFormatError = false
+                            },
+                            label = { Text(stringResource(R.string.anti_dpi_packets_label)) },
+                            placeholder = { Text(stringResource(R.string.anti_dpi_packets_hint)) },
+                            singleLine = true,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+
+                        OutlinedTextField(
+                            value = lengthText,
+                            onValueChange = {
+                                lengthText = it
+                                isCustomFormatError = false
+                            },
+                            label = { Text(stringResource(R.string.anti_dpi_length_label)) },
+                            placeholder = { Text(stringResource(R.string.anti_dpi_length_hint)) },
+                            singleLine = true,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+
+                        OutlinedTextField(
+                            value = intervalText,
+                            onValueChange = {
+                                intervalText = it
+                                isCustomFormatError = false
+                            },
+                            label = { Text(stringResource(R.string.anti_dpi_interval_label)) },
+                            placeholder = { Text(stringResource(R.string.anti_dpi_interval_hint)) },
+                            singleLine = true,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+
+                        if (isCustomFormatError) {
+                            Text(
+                                text = stringResource(R.string.anti_dpi_custom_invalid),
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (!isEnabled) {
+                        onEnabledChanged(false)
+                    } else {
+                        if (selectedPreset == AntiDpiPreset.CUSTOM) {
+                            val cleanPackets = packetsText.trim()
+                            val cleanLength = lengthText.trim()
+                            val cleanInterval = intervalText.trim()
+                            val safeRegex = Regex("^[a-zA-Z0-9,-]+$")
+                            if (!cleanPackets.matches(safeRegex) || !cleanLength.matches(safeRegex) || !cleanInterval.matches(safeRegex)) {
+                                isCustomFormatError = true
+                                return@Button
+                            }
+                            onCustomParamsChanged(cleanPackets, cleanLength, cleanInterval)
+                        } else {
+                            onPresetSelected(selectedPreset)
+                        }
+                    }
+                },
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.height(LevikDimensions.ButtonHeight),
+            ) {
+                Text(stringResource(R.string.anti_dpi_apply_btn), fontWeight = FontWeight.SemiBold)
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.height(LevikDimensions.ButtonHeight),
+            ) {
+                Text(stringResource(R.string.cancel), fontWeight = FontWeight.SemiBold)
+            }
+        },
+    )
+}
 
 @Composable
 private fun RoutingPresetDialog(

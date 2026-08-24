@@ -38,6 +38,71 @@ enum class RoutingPreset(
     ),
 }
 
+enum class AntiDpiPreset(
+    val titleRu: String,
+    val titleEn: String,
+    val descriptionRu: String,
+    val descriptionEn: String,
+    val defaultPackets: String,
+    val defaultLength: String,
+    val defaultInterval: String,
+) {
+    OFF(
+        titleRu = "Выключено",
+        titleEn = "Disabled",
+        descriptionRu = "Прямое подключение без фрагментации пакетов",
+        descriptionEn = "Direct connection without packet fragmentation",
+        defaultPackets = "",
+        defaultLength = "",
+        defaultInterval = "",
+    ),
+    TLS_HELLO(
+        titleRu = "TLS ClientHello (Рекомендуемый)",
+        titleEn = "TLS ClientHello (Recommended)",
+        descriptionRu = "Дробление только TLS ClientHello рукопожатия. Минимальное влияние на пинг и скорость.",
+        descriptionEn = "Fragments only TLS ClientHello handshake. Minimal impact on latency and speed.",
+        defaultPackets = "tlshello",
+        defaultLength = "100-200",
+        defaultInterval = "10-20",
+    ),
+    MICRO(
+        titleRu = "Микро-фрагментация (Агрессивный)",
+        titleEn = "Micro-fragmentation (Aggressive)",
+        descriptionRu = "Дробление пакетов на микрочастицы по 1–5 байт. Максимальная пробиваемость жестких блокировок ТСПУ.",
+        descriptionEn = "Fragments packets into 1–5 byte chunks. Maximum bypass capability against strict DPI/TSPU filters.",
+        defaultPackets = "tlshello",
+        defaultLength = "1-5",
+        defaultInterval = "5-15",
+    ),
+    BALANCED(
+        titleRu = "Умеренная (1–3 пакета)",
+        titleEn = "Balanced (1–3 packets)",
+        descriptionRu = "Фрагментация первых 3 пакетов TCP-соединения блоками по 50–150 байт.",
+        descriptionEn = "Fragments the first 3 TCP packets into 50–150 byte chunks.",
+        defaultPackets = "1-3",
+        defaultLength = "50-150",
+        defaultInterval = "10-20",
+    ),
+    DEEP(
+        titleRu = "Глубокая (1–5 пакетов)",
+        titleEn = "Deep (1–5 packets)",
+        descriptionRu = "Фрагментация первых 5 пакетов с увеличенной задержкой между фрагментами для переполнения DPI-буферов.",
+        descriptionEn = "Fragments the first 5 packets with increased delay to overflow DPI buffers.",
+        defaultPackets = "1-5",
+        defaultLength = "30-80",
+        defaultInterval = "15-30",
+    ),
+    CUSTOM(
+        titleRu = "Пользовательская",
+        titleEn = "Custom",
+        descriptionRu = "Ручная настройка номеров пакетов, длины фрагментов и интервалов задержки.",
+        descriptionEn = "Manual configuration of packet numbers, chunk lengths, and delay intervals.",
+        defaultPackets = "tlshello",
+        defaultLength = "100-200",
+        defaultInterval = "10-20",
+    ),
+}
+
 enum class DnsProvider(
     val title: String,
     val primaryIpv4: String,
@@ -115,8 +180,31 @@ class AppSettings(context: Context) {
     private val mutableBypassRussianTraffic = MutableStateFlow(
         preferences.getBoolean(BYPASS_RUSSIAN_TRAFFIC, true),
     )
+    private val mutableAntiDpiPreset = MutableStateFlow(
+        runCatching {
+            val saved = preferences.getString(ANTI_DPI_PRESET, null)
+            if (saved != null) {
+                AntiDpiPreset.valueOf(saved)
+            } else {
+                val legacyEnabled = preferences.getBoolean(ANTI_DPI_ENABLED, false)
+                if (legacyEnabled) AntiDpiPreset.TLS_HELLO else AntiDpiPreset.OFF
+            }
+        }.getOrDefault(AntiDpiPreset.OFF),
+    )
+    private val mutableAntiDpiPackets = MutableStateFlow(
+        preferences.getString(ANTI_DPI_PACKETS, AntiDpiPreset.TLS_HELLO.defaultPackets)
+            ?: AntiDpiPreset.TLS_HELLO.defaultPackets,
+    )
+    private val mutableAntiDpiLength = MutableStateFlow(
+        preferences.getString(ANTI_DPI_LENGTH, AntiDpiPreset.TLS_HELLO.defaultLength)
+            ?: AntiDpiPreset.TLS_HELLO.defaultLength,
+    )
+    private val mutableAntiDpiInterval = MutableStateFlow(
+        preferences.getString(ANTI_DPI_INTERVAL, AntiDpiPreset.TLS_HELLO.defaultInterval)
+            ?: AntiDpiPreset.TLS_HELLO.defaultInterval,
+    )
     private val mutableAntiDpiEnabled = MutableStateFlow(
-        preferences.getBoolean(ANTI_DPI_ENABLED, false),
+        mutableAntiDpiPreset.value != AntiDpiPreset.OFF,
     )
     private val mutableAutoHealingEnabled = MutableStateFlow(
         preferences.getBoolean(AUTO_HEALING_ENABLED, true),
@@ -200,6 +288,10 @@ class AppSettings(context: Context) {
 
     val routingPreset: StateFlow<RoutingPreset> = mutableRoutingPreset.asStateFlow()
     val bypassRussianTraffic: StateFlow<Boolean> = mutableBypassRussianTraffic.asStateFlow()
+    val antiDpiPreset: StateFlow<AntiDpiPreset> = mutableAntiDpiPreset.asStateFlow()
+    val antiDpiPackets: StateFlow<String> = mutableAntiDpiPackets.asStateFlow()
+    val antiDpiLength: StateFlow<String> = mutableAntiDpiLength.asStateFlow()
+    val antiDpiInterval: StateFlow<String> = mutableAntiDpiInterval.asStateFlow()
     val antiDpiEnabled: StateFlow<Boolean> = mutableAntiDpiEnabled.asStateFlow()
     val autoHealingEnabled: StateFlow<Boolean> = mutableAutoHealingEnabled.asStateFlow()
     val killSwitchEnabled: StateFlow<Boolean> = mutableKillSwitchEnabled.asStateFlow()
@@ -238,11 +330,51 @@ class AppSettings(context: Context) {
         setRoutingPreset(preset)
     }
 
-    fun setAntiDpiEnabled(enabled: Boolean) {
+    fun setAntiDpiPreset(preset: AntiDpiPreset) {
         preferences.edit(commit = true) {
-            putBoolean(ANTI_DPI_ENABLED, enabled)
+            putString(ANTI_DPI_PRESET, preset.name)
+            putBoolean(ANTI_DPI_ENABLED, preset != AntiDpiPreset.OFF)
+            if (preset != AntiDpiPreset.CUSTOM && preset != AntiDpiPreset.OFF) {
+                putString(ANTI_DPI_PACKETS, preset.defaultPackets)
+                putString(ANTI_DPI_LENGTH, preset.defaultLength)
+                putString(ANTI_DPI_INTERVAL, preset.defaultInterval)
+            }
         }
-        mutableAntiDpiEnabled.value = enabled
+        mutableAntiDpiPreset.value = preset
+        mutableAntiDpiEnabled.value = (preset != AntiDpiPreset.OFF)
+        if (preset != AntiDpiPreset.CUSTOM && preset != AntiDpiPreset.OFF) {
+            mutableAntiDpiPackets.value = preset.defaultPackets
+            mutableAntiDpiLength.value = preset.defaultLength
+            mutableAntiDpiInterval.value = preset.defaultInterval
+        }
+    }
+
+    fun setAntiDpiCustomParams(packets: String, length: String, interval: String) {
+        val cleanPackets = packets.trim().ifBlank { "tlshello" }
+        val cleanLength = length.trim().ifBlank { "100-200" }
+        val cleanInterval = interval.trim().ifBlank { "10-20" }
+        preferences.edit(commit = true) {
+            putString(ANTI_DPI_PRESET, AntiDpiPreset.CUSTOM.name)
+            putBoolean(ANTI_DPI_ENABLED, true)
+            putString(ANTI_DPI_PACKETS, cleanPackets)
+            putString(ANTI_DPI_LENGTH, cleanLength)
+            putString(ANTI_DPI_INTERVAL, cleanInterval)
+        }
+        mutableAntiDpiPreset.value = AntiDpiPreset.CUSTOM
+        mutableAntiDpiEnabled.value = true
+        mutableAntiDpiPackets.value = cleanPackets
+        mutableAntiDpiLength.value = cleanLength
+        mutableAntiDpiInterval.value = cleanInterval
+    }
+
+    fun setAntiDpiEnabled(enabled: Boolean) {
+        if (enabled) {
+            if (mutableAntiDpiPreset.value == AntiDpiPreset.OFF) {
+                setAntiDpiPreset(AntiDpiPreset.TLS_HELLO)
+            }
+        } else {
+            setAntiDpiPreset(AntiDpiPreset.OFF)
+        }
     }
 
     fun setAutoHealingEnabled(enabled: Boolean) {
@@ -443,6 +575,10 @@ class AppSettings(context: Context) {
         private const val ROUTING_PRESET = "routing_preset"
         private const val BYPASS_RUSSIAN_TRAFFIC = "bypass_russian_traffic"
         private const val ANTI_DPI_ENABLED = "anti_dpi_enabled"
+        private const val ANTI_DPI_PRESET = "anti_dpi_preset"
+        private const val ANTI_DPI_PACKETS = "anti_dpi_packets"
+        private const val ANTI_DPI_LENGTH = "anti_dpi_length"
+        private const val ANTI_DPI_INTERVAL = "anti_dpi_interval"
         private const val AUTO_HEALING_ENABLED = "auto_healing_enabled"
         private const val KILL_SWITCH_ENABLED = "kill_switch_enabled"
         private const val AUTO_CONNECT_UNTRUSTED_WIFI = "auto_connect_untrusted_wifi"
