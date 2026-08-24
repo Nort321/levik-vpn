@@ -1,6 +1,6 @@
 # Контракт безопасного OTA-обновления для Direct-сборки
 
-Direct-вариант сборки проверяет наличие стабильных релизов через открытый API GitHub Releases (`https://api.github.com/repos/Nort321/levik-vpn/releases/latest`) без API-токена. Черновики и пре-релизы игнорируются. Сборка для Google Play (Play flavor) не содержит кода OTA-апдейтера и компонентов установки APK.
+Private GitHub repository остаётся источником сборки, attestations и полного release evidence. После ручной публикации стабильного GitHub Release отдельный workflow проверяет checksums, attestation и ECDSA-подпись, после чего атомарно публикует ограниченный публичный feed на `https://leviknet.com/downloads/android/stable/latest.json`. Токены GitHub и deploy credentials никогда не попадают в APK. Сборка для Google Play (Play flavor) не содержит кода OTA-апдейтера и компонентов установки APK.
 
 ## Релизные ассеты
 
@@ -17,7 +17,7 @@ Direct-вариант сборки проверяет наличие стаби�
   "packageName": "com.leviknet.vpn",
   "versionCode": 20,
   "versionName": "2.0.0",
-  "apkUrl": "https://github.com/Nort321/levik-vpn/releases/download/v2.0.0/LevikVPN-direct-2.0.0.apk",
+  "apkUrl": "https://leviknet.com/downloads/android/stable/v2.0.0/LevikVPN-direct-2.0.0.apk",
   "apkSize": 203423412,
   "apkSha256": "64-символьный-hex-хеш-sha256",
   "signingCertificateSha256": "64-символьный-hex-отпечаток-сертификата",
@@ -41,3 +41,5 @@ Direct-вариант сборки проверяет наличие стаби�
 - Публичный ключ верификации зашит в бинарный код Android-приложения (`DIRECT_UPDATE_MANIFEST_PUBLIC_KEY`).
 
 Скрипт `scripts/release/generate-direct-update-manifest.sh` автоматически валидирует APK, генерирует манифест и подписывает его ключом разработчика.
+
+Public feed и каталоги `vX.Y.Z` публикуются атомарно через forced-command SSH key. Серверный deploy-ключ способен только загрузить новую неизменяемую версию; он не имеет shell-доступа и не может заменить существующий релиз. Даже при компрометации web-сервера клиент отвергнет manifest без production ECDSA-подписи и APK без закреплённого signing certificate.

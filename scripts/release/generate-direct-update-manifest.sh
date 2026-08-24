@@ -157,7 +157,7 @@ openssl pkey -pubin -inform DER -in "${EXPECTED_PUBLIC_KEY_DER}" \
   -out "${EXPECTED_PUBLIC_KEY_PEM}"
 
 readonly APK_SHA256="$(sha256_file "${APK_PATH}")"
-readonly APK_URL="https://github.com/Nort321/levik-vpn/releases/download/${RELEASE_TAG}/${APK_ASSET_NAME}"
+readonly APK_URL="https://leviknet.com/downloads/android/stable/${RELEASE_TAG}/${APK_ASSET_NAME}"
 cp -- "${APK_PATH}" "${APK_ASSET_PATH}"
 
 python3 - \

@@ -28,7 +28,7 @@ internal class DirectAppUpdateManager(
     context: Context,
     manifestPublicKeyBase64: String,
     signingCertificateSha256: String,
-    private val releaseClient: GitHubReleaseClient = GitHubReleaseClient(context.applicationContext),
+    private val releaseClient: DirectReleaseClient = DirectReleaseClient(context.applicationContext),
 ) : AppUpdateManager {
     private val context = context.applicationContext
     private val configuration = runCatching {
@@ -79,7 +79,7 @@ internal class DirectAppUpdateManager(
                 null
             }
             is ReleaseLookupResult.Unavailable -> {
-                AppLogger.e(LOG_TAG, "GitHub update check failed", lookup.cause)
+                AppLogger.e(LOG_TAG, "Direct update check failed", lookup.cause)
                 if (!silent) mutableState.value = UpdateState.Error(lookup.message)
                 null
             }
@@ -151,7 +151,7 @@ internal class DirectAppUpdateManager(
             mutableState.value = UpdateState.Error(VERIFICATION_ERROR_MESSAGE)
             return@withContext
         }
-        UpdateManifestVerifier.requireGitHubReleaseAssetUrl(update.downloadUrl, expectedSuffix = ".apk")
+        UpdateManifestVerifier.requireDirectReleaseAssetUrl(update.downloadUrl, expectedSuffix = ".apk")
 
         if (!updatesDirectory.exists() && !updatesDirectory.mkdirs()) {
             mutableState.value = UpdateState.Error("Unable to prepare update storage.")

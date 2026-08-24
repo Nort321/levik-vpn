@@ -7,12 +7,12 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-class GitHubReleasePolicyTest {
+class DirectReleasePolicyTest {
     private val json = Json { explicitNulls = false }
 
     @Test
     fun `parses the single latest stable release response`() {
-        val selected = GitHubReleaseParser.parseLatestStableRelease(
+        val selected = DirectReleaseParser.parseLatestStableRelease(
             json.encodeToString(release(tag = "v2.0.0")).encodeToByteArray(),
             json,
         )
@@ -22,7 +22,7 @@ class GitHubReleasePolicyTest {
 
     @Test
     fun `rejects a draft returned by the latest endpoint`() {
-        val selected = GitHubReleaseParser.parseLatestStableRelease(
+        val selected = DirectReleaseParser.parseLatestStableRelease(
             json.encodeToString(release(tag = "draft", draft = true)).encodeToByteArray(),
             json,
         )
@@ -32,12 +32,29 @@ class GitHubReleasePolicyTest {
 
     @Test
     fun `rejects a prerelease returned by the latest endpoint`() {
-        val selected = GitHubReleaseParser.parseLatestStableRelease(
+        val selected = DirectReleaseParser.parseLatestStableRelease(
             json.encodeToString(release(tag = "preview", prerelease = true)).encodeToByteArray(),
             json,
         )
 
         assertNull(selected)
+    }
+
+    @Test
+    fun `rejects an unsupported channel or malformed stable tag`() {
+        org.junit.Assert.assertThrows(java.io.IOException::class.java) {
+            DirectReleaseParser.parseLatestStableRelease(
+                json.encodeToString(release(tag = "v2.0.0").copy(channel = "beta"))
+                    .encodeToByteArray(),
+                json,
+            )
+        }
+        org.junit.Assert.assertThrows(java.io.IOException::class.java) {
+            DirectReleaseParser.parseLatestStableRelease(
+                json.encodeToString(release(tag = "../v2.0.0")).encodeToByteArray(),
+                json,
+            )
+        }
     }
 
     @Test
@@ -66,26 +83,28 @@ class GitHubReleasePolicyTest {
         tag: String,
         draft: Boolean = false,
         prerelease: Boolean = false,
-    ): GitHubRelease = GitHubRelease(
+    ): DirectReleaseFeed = DirectReleaseFeed(
+        schemaVersion = 1,
+        channel = "stable",
         tagName = tag,
         draft = draft,
         prerelease = prerelease,
         assets = listOf(
-            GitHubReleaseAsset(
-                name = GitHubReleaseClient.MANIFEST_ASSET_NAME,
+            DirectReleaseAsset(
+                name = DirectReleaseClient.MANIFEST_ASSET_NAME,
                 size = 512,
-                browserDownloadUrl = "$RELEASE_PREFIX/$tag/update.json",
+                url = "$RELEASE_PREFIX/$tag/update.json",
             ),
-            GitHubReleaseAsset(
-                name = GitHubReleaseClient.SIGNATURE_ASSET_NAME,
+            DirectReleaseAsset(
+                name = DirectReleaseClient.SIGNATURE_ASSET_NAME,
                 size = 96,
-                browserDownloadUrl = "$RELEASE_PREFIX/$tag/update.json.sig",
+                url = "$RELEASE_PREFIX/$tag/update.json.sig",
             ),
         ),
     )
 
     companion object {
         private const val RELEASE_PREFIX =
-            "https://github.com/Nort321/levik-vpn/releases/download"
+            "https://leviknet.com/downloads/android/stable"
     }
 }
