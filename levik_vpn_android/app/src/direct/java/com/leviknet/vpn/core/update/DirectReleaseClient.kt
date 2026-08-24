@@ -274,7 +274,9 @@ internal class DirectReleaseClient(
         UpdateManifestVerifier.requireDirectReleaseAssetUrl(url, expectedSuffix = ".apk")
         var current = URI(url)
         repeat(MAX_REDIRECTS + 1) { redirectCount ->
-            validateHttpsOrigin(current, setOf(RELEASE_HOST))
+            if (!isAllowedApkDownloadUri(current)) {
+                throw IOException("APK download origin is not allowed")
+            }
             val connection = (URL(current.toASCIIString()).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 connectTimeout = CONNECT_TIMEOUT_MS
@@ -482,6 +484,26 @@ internal class DirectReleaseClient(
         const val SIGNATURE_ASSET_NAME = "update.json.sig"
 
         private const val RELEASE_HOST = "leviknet.com"
+        internal fun isAllowedApkDownloadUri(uri: URI): Boolean {
+            val hasValidOrigin = uri.scheme == "https" &&
+                uri.port in setOf(-1, 443) &&
+                uri.rawUserInfo == null &&
+                uri.rawFragment == null
+            if (!hasValidOrigin) return false
+
+            return when (uri.host) {
+                RELEASE_HOST -> uri.rawQuery == null &&
+                    uri.rawPath.startsWith("/downloads/android/stable/") &&
+                    uri.rawPath.endsWith(".apk")
+                "github.com" -> uri.rawQuery == null &&
+                    uri.rawPath.startsWith("/Nort321/levik-vpn/releases/download/") &&
+                    uri.rawPath.endsWith(".apk")
+                "release-assets.githubusercontent.com" ->
+                    !uri.rawQuery.isNullOrBlank() &&
+                        uri.rawPath.startsWith("/github-production-release-asset/")
+                else -> false
+            }
+        }
         private const val JSON_ACCEPT = "application/json"
         private const val USER_AGENT = "LevikVPN-Android-Direct"
         private const val CONNECT_TIMEOUT_MS = 15_000

@@ -2,6 +2,7 @@ package com.leviknet.vpn.core.update
 
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.net.URI
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -140,6 +141,35 @@ class DirectReleasePolicyTest {
                 silent = false,
                 retryAt = retryAt,
                 now = 10_000L,
+            ),
+        )
+    }
+
+    @Test
+    fun `APK redirects allow only the bounded GitHub release chain`() {
+        assertTrue(
+            DirectReleaseClient.isAllowedApkDownloadUri(
+                URI("https://leviknet.com/downloads/android/stable/v2.0.13/LevikVPN-direct-2.0.13.apk"),
+            ),
+        )
+        assertTrue(
+            DirectReleaseClient.isAllowedApkDownloadUri(
+                URI("https://github.com/Nort321/levik-vpn/releases/download/v2.0.13/LevikVPN-direct-2.0.13.apk"),
+            ),
+        )
+        assertTrue(
+            DirectReleaseClient.isAllowedApkDownloadUri(
+                URI("https://release-assets.githubusercontent.com/github-production-release-asset/1/file?sig=test"),
+            ),
+        )
+        assertFalse(
+            DirectReleaseClient.isAllowedApkDownloadUri(
+                URI("https://github.com/attacker/repository/releases/download/v1/app.apk"),
+            ),
+        )
+        assertFalse(
+            DirectReleaseClient.isAllowedApkDownloadUri(
+                URI("https://release-assets.githubusercontent.com/github-production-release-asset/1/file"),
             ),
         )
     }
