@@ -69,7 +69,7 @@ class UpdateManifestVerifierTest {
 
     @Test
     fun `rejects untrusted origin and mismatched published size`() {
-        val foreignUrl = "https://example.com/Nort321/levik-vpn/releases/download/v2.0.0/app.apk"
+        val foreignUrl = "https://example.com/downloads/android/stable/v2.0.0/app.apk"
         val foreignManifest = manifestBytes(validManifest().copy(apkUrl = foreignUrl))
         assertThrows(UpdateVerificationException::class.java) {
             verifier().verify(
@@ -92,10 +92,10 @@ class UpdateManifestVerifierTest {
     @Test
     fun `rejects encoded or nested release asset paths`() {
         val invalidUrls = listOf(
-            "https://github.com/Nort321/levik-vpn/releases/download/v2.0.0/nested/app.apk",
-            "https://github.com/Nort321/levik-vpn/releases/download/v2.0.0%2fescape/app.apk",
-            "https://github.com/Nort321/levik-vpn/releases/download/%2e%2e/app.apk",
-            "https://github.com/Nort321/levik-vpn/releases/download/../app.apk",
+            "https://leviknet.com/downloads/android/stable/v2.0.0/nested/app.apk",
+            "https://leviknet.com/downloads/android/stable/v2.0.0%2fescape/app.apk",
+            "https://leviknet.com/downloads/android/stable/%2e%2e/app.apk",
+            "https://leviknet.com/downloads/android/stable/../app.apk",
         )
 
         invalidUrls.forEach { invalidUrl ->
@@ -153,6 +153,6 @@ class UpdateManifestVerifierTest {
 
     companion object {
         private const val RELEASE_PREFIX =
-            "https://github.com/Nort321/levik-vpn/releases/download/v2.0.0"
+            "https://leviknet.com/downloads/android/stable/v2.0.0"
     }
 }

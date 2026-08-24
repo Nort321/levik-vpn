@@ -91,7 +91,7 @@ internal class UpdateManifestVerifier(
             throw UpdateVerificationException("Update signing certificate does not match the pinned certificate")
         }
 
-        requireGitHubReleaseAssetUrl(manifest.apkUrl, expectedSuffix = ".apk")
+        requireDirectReleaseAssetUrl(manifest.apkUrl, expectedSuffix = ".apk")
         val publishedApk = releaseAssets.singleOrNull { asset -> asset.url == manifest.apkUrl }
             ?: throw UpdateVerificationException("Signed APK is not an asset of the selected stable release")
         if (publishedApk.size != manifest.apkSize || !publishedApk.name.endsWith(".apk")) {
@@ -183,33 +183,33 @@ internal class UpdateManifestVerifier(
             return normalized
         }
 
-        internal fun requireGitHubReleaseAssetUrl(
+        internal fun requireDirectReleaseAssetUrl(
             value: String,
             expectedSuffix: String,
         ): URI {
             val uri = try {
                 URI(value)
             } catch (error: Exception) {
-                throw UpdateVerificationException("Invalid GitHub release asset URL", error)
+                throw UpdateVerificationException("Invalid Direct release asset URL", error)
             }
             val rawPath = uri.rawPath.orEmpty()
             val releasePathSegments = rawPath
-                .removePrefix(GITHUB_RELEASE_PATH_PREFIX)
+                .removePrefix(DIRECT_RELEASE_PATH_PREFIX)
                 .split('/')
             val valid = uri.scheme == "https" &&
-                uri.host == GITHUB_RELEASE_HOST &&
+                uri.host == DIRECT_RELEASE_HOST &&
                 uri.port in setOf(-1, 443) &&
                 uri.rawUserInfo == null &&
                 uri.rawQuery == null &&
                 uri.rawFragment == null &&
-                rawPath.startsWith(GITHUB_RELEASE_PATH_PREFIX) &&
+                rawPath.startsWith(DIRECT_RELEASE_PATH_PREFIX) &&
                 releasePathSegments.size == 2 &&
                 releasePathSegments.all { segment ->
                     SAFE_RELEASE_PATH_SEGMENT.matches(segment) && segment !in DOT_SEGMENTS
                 } &&
                 rawPath.endsWith(expectedSuffix, ignoreCase = false)
             if (!valid) {
-                throw UpdateVerificationException("Update asset URL is outside the allowed GitHub release origin")
+                throw UpdateVerificationException("Update asset URL is outside the trusted Direct release origin")
             }
             return uri
         }
@@ -245,8 +245,8 @@ internal class UpdateManifestVerifier(
                 params.cofactor == expected.cofactor
         }
 
-        private const val GITHUB_RELEASE_HOST = "github.com"
-        private const val GITHUB_RELEASE_PATH_PREFIX = "/Nort321/levik-vpn/releases/download/"
+        private const val DIRECT_RELEASE_HOST = "leviknet.com"
+        private const val DIRECT_RELEASE_PATH_PREFIX = "/downloads/android/stable/"
         private val SAFE_RELEASE_PATH_SEGMENT = Regex("^[A-Za-z0-9._+-]+$")
         private val DOT_SEGMENTS = setOf(".", "..")
     }

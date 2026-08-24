@@ -18,21 +18,23 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 @Serializable
-internal data class GitHubReleaseAsset(
+internal data class DirectReleaseAsset(
     val name: String,
     val size: Long,
-    @SerialName("browser_download_url") val browserDownloadUrl: String,
+    val url: String,
 )
 
 @Serializable
-internal data class GitHubRelease(
+internal data class DirectReleaseFeed(
+    val schemaVersion: Int,
+    val channel: String,
     @SerialName("tag_name") val tagName: String,
     val draft: Boolean,
     val prerelease: Boolean,
-    val assets: List<GitHubReleaseAsset>,
+    val assets: List<DirectReleaseAsset>,
 )
 
-internal data class StableGitHubRelease(
+internal data class StableDirectRelease(
     val tagName: String,
     val manifestUrl: String,
     val signatureUrl: String,
@@ -40,34 +42,40 @@ internal data class StableGitHubRelease(
 )
 
 internal sealed interface ReleaseLookupResult {
-    data class Found(val release: StableGitHubRelease) : ReleaseLookupResult
+    data class Found(val release: StableDirectRelease) : ReleaseLookupResult
     data object NoStableRelease : ReleaseLookupResult
     data object Skipped : ReleaseLookupResult
     data class Unavailable(val message: String, val cause: Throwable? = null) : ReleaseLookupResult
 }
 
-internal object GitHubReleaseParser {
-    fun parseLatestStableRelease(body: ByteArray, json: Json): StableGitHubRelease? {
+internal object DirectReleaseParser {
+    fun parseLatestStableRelease(body: ByteArray, json: Json): StableDirectRelease? {
         val release = try {
-            json.decodeFromString(GitHubRelease.serializer(), body.decodeToString())
+            json.decodeFromString(DirectReleaseFeed.serializer(), body.decodeToString())
         } catch (error: Exception) {
-            throw IOException("Invalid GitHub release response", error)
+            throw IOException("Invalid Direct release feed", error)
+        }
+        if (release.schemaVersion != SUPPORTED_SCHEMA_VERSION || release.channel != STABLE_CHANNEL) {
+            throw IOException("Unsupported Direct release feed")
         }
         if (release.draft || release.prerelease) return null
+        if (!STABLE_TAG_PATTERN.matches(release.tagName)) {
+            throw IOException("Invalid stable release tag")
+        }
         val manifest = release.assets.singleOrNull { asset ->
-            asset.name == GitHubReleaseClient.MANIFEST_ASSET_NAME
+            asset.name == DirectReleaseClient.MANIFEST_ASSET_NAME
         } ?: throw IOException("Latest stable release does not contain update.json")
         val signature = release.assets.singleOrNull { asset ->
-            asset.name == GitHubReleaseClient.SIGNATURE_ASSET_NAME
+            asset.name == DirectReleaseClient.SIGNATURE_ASSET_NAME
         } ?: throw IOException("Latest stable release does not contain update.json.sig")
 
-        UpdateManifestVerifier.requireGitHubReleaseAssetUrl(
-            manifest.browserDownloadUrl,
-            GitHubReleaseClient.MANIFEST_ASSET_NAME,
+        UpdateManifestVerifier.requireDirectReleaseAssetUrl(
+            manifest.url,
+            DirectReleaseClient.MANIFEST_ASSET_NAME,
         )
-        UpdateManifestVerifier.requireGitHubReleaseAssetUrl(
-            signature.browserDownloadUrl,
-            GitHubReleaseClient.SIGNATURE_ASSET_NAME,
+        UpdateManifestVerifier.requireDirectReleaseAssetUrl(
+            signature.url,
+            DirectReleaseClient.SIGNATURE_ASSET_NAME,
         )
         if (manifest.size !in 1..UpdateManifestVerifier.MAX_MANIFEST_BYTES.toLong()) {
             throw IOException("Published update manifest size is invalid")
@@ -76,28 +84,30 @@ internal object GitHubReleaseParser {
             throw IOException("Published update signature size is invalid")
         }
 
-        return StableGitHubRelease(
-            tagName = release.tagName.take(MAX_TAG_LENGTH),
-            manifestUrl = manifest.browserDownloadUrl,
-            signatureUrl = signature.browserDownloadUrl,
+        return StableDirectRelease(
+            tagName = release.tagName,
+            manifestUrl = manifest.url,
+            signatureUrl = signature.url,
             assets = release.assets.map { asset ->
                 PublishedReleaseAsset(
                     name = asset.name,
-                    url = asset.browserDownloadUrl,
+                    url = asset.url,
                     size = asset.size,
                 )
             },
         )
     }
 
-    private const val MAX_TAG_LENGTH = 128
+    private const val SUPPORTED_SCHEMA_VERSION = 1
+    private const val STABLE_CHANNEL = "stable"
+    private val STABLE_TAG_PATTERN = Regex("^v[0-9]+\\.[0-9]+\\.[0-9]+$")
 }
 
-internal class GitHubHttpException(
+internal class ReleaseHttpException(
     val statusCode: Int,
     val retryAfterSeconds: Long?,
     val rateLimitResetEpochSeconds: Long?,
-) : IOException("GitHub request failed with HTTP $statusCode")
+) : IOException("Update service request failed with HTTP $statusCode")
 
 internal object UpdateCheckSchedule {
     const val SUCCESS_INTERVAL_MS = 18L * 60 * 60 * 1000
@@ -122,7 +132,7 @@ internal object UpdateCheckSchedule {
     }
 }
 
-internal class GitHubReleaseClient(
+internal class DirectReleaseClient(
     context: Context,
     private val json: Json = Json {
         ignoreUnknownKeys = true
@@ -152,17 +162,16 @@ internal class GitHubReleaseClient(
 
         return try {
             val headers = buildMap {
-                put("Accept", GITHUB_ACCEPT)
-                put("X-GitHub-Api-Version", GITHUB_API_VERSION)
+                put("Accept", JSON_ACCEPT)
                 preferences.getString(KEY_ETAG, null)
                     ?.takeIf { etag -> etag.length <= MAX_ETAG_LENGTH }
                     ?.let { etag -> put("If-None-Match", etag) }
             }
             val response = request(
-                url = RELEASES_API_URL,
+                url = RELEASE_FEED_URL,
                 headers = headers,
                 maxBytes = MAX_RELEASE_RESPONSE_BYTES,
-                allowedHosts = setOf(GITHUB_API_HOST),
+                allowedHosts = setOf(RELEASE_HOST),
                 allowRedirects = false,
             )
             val body = when (response.statusCode) {
@@ -177,20 +186,20 @@ internal class GitHubReleaseClient(
                 HttpURLConnection.HTTP_NOT_MODIFIED -> {
                     readCache() ?: run {
                         preferences.edit().remove(KEY_ETAG).apply()
-                        throw IOException("GitHub returned 304 without cached metadata")
+                        throw IOException("Update feed returned 304 without cached metadata")
                     }
                 }
-                else -> throw GitHubHttpException(
+                else -> throw ReleaseHttpException(
                     statusCode = response.statusCode,
                     retryAfterSeconds = response.retryAfterSeconds,
                     rateLimitResetEpochSeconds = response.rateLimitResetEpochSeconds,
                 )
             }
 
-            val release = GitHubReleaseParser.parseLatestStableRelease(body, json)
+            val release = DirectReleaseParser.parseLatestStableRelease(body, json)
             recordSuccess(now)
             release?.let(ReleaseLookupResult::Found) ?: ReleaseLookupResult.NoStableRelease
-        } catch (error: GitHubHttpException) {
+        } catch (error: ReleaseHttpException) {
             recordHttpFailure(error, now)
             ReleaseLookupResult.Unavailable(httpFailureMessage(error.statusCode), error)
         } catch (error: Exception) {
@@ -200,7 +209,7 @@ internal class GitHubReleaseClient(
     }
 
     fun fetchReleaseAsset(url: String, maxBytes: Int): ByteArray {
-        UpdateManifestVerifier.requireGitHubReleaseAssetUrl(
+        UpdateManifestVerifier.requireDirectReleaseAssetUrl(
             value = url,
             expectedSuffix = if (url.endsWith(SIGNATURE_ASSET_NAME)) SIGNATURE_ASSET_NAME else MANIFEST_ASSET_NAME,
         )
@@ -208,11 +217,11 @@ internal class GitHubReleaseClient(
             url = url,
             headers = mapOf("Accept" to "application/octet-stream"),
             maxBytes = maxBytes,
-            allowedHosts = ASSET_REDIRECT_HOSTS,
-            allowRedirects = true,
+            allowedHosts = setOf(RELEASE_HOST),
+            allowRedirects = false,
         )
         if (response.statusCode !in 200..299) {
-            throw GitHubHttpException(
+            throw ReleaseHttpException(
                 statusCode = response.statusCode,
                 retryAfterSeconds = response.retryAfterSeconds,
                 rateLimitResetEpochSeconds = response.rateLimitResetEpochSeconds,
@@ -227,10 +236,10 @@ internal class GitHubReleaseClient(
         output: OutputStream,
         onProgress: (downloadedBytes: Long) -> Unit,
     ) {
-        UpdateManifestVerifier.requireGitHubReleaseAssetUrl(url, expectedSuffix = ".apk")
+        UpdateManifestVerifier.requireDirectReleaseAssetUrl(url, expectedSuffix = ".apk")
         var current = URI(url)
         repeat(MAX_REDIRECTS + 1) { redirectCount ->
-            validateHttpsOrigin(current, ASSET_REDIRECT_HOSTS)
+            validateHttpsOrigin(current, setOf(RELEASE_HOST))
             val connection = (URL(current.toASCIIString()).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 connectTimeout = CONNECT_TIMEOUT_MS
@@ -250,7 +259,7 @@ internal class GitHubReleaseClient(
                     return@repeat
                 }
                 if (status !in 200..299) {
-                    throw GitHubHttpException(
+                    throw ReleaseHttpException(
                         statusCode = status,
                         retryAfterSeconds = connection.getHeaderField("Retry-After")?.toLongOrNull(),
                         rateLimitResetEpochSeconds = connection
@@ -289,7 +298,7 @@ internal class GitHubReleaseClient(
 
     fun recordAssetFailure(error: Exception) {
         val now = nowMillis()
-        if (error is GitHubHttpException) {
+        if (error is ReleaseHttpException) {
             recordHttpFailure(error, now)
         } else {
             recordTransientFailure(now)
@@ -356,6 +365,7 @@ internal class GitHubReleaseClient(
             uri.host in allowedHosts &&
             uri.port in setOf(-1, 443) &&
             uri.rawUserInfo == null &&
+            uri.rawQuery == null &&
             uri.rawFragment == null
         if (!valid) throw IOException("HTTPS origin is not allowed")
     }
@@ -426,7 +436,7 @@ internal class GitHubReleaseClient(
             .apply()
     }
 
-    private fun recordHttpFailure(error: GitHubHttpException, now: Long) {
+    private fun recordHttpFailure(error: ReleaseHttpException, now: Long) {
         val backoff = when (error.statusCode) {
             HttpURLConnection.HTTP_FORBIDDEN, 429 -> UpdateCheckSchedule.rateLimitBackoffMs(
                 nowMillis = now,
@@ -446,9 +456,9 @@ internal class GitHubReleaseClient(
     }
 
     private fun httpFailureMessage(status: Int): String = when (status) {
-        HttpURLConnection.HTTP_FORBIDDEN, 429 -> "GitHub update checks are temporarily rate limited."
+        HttpURLConnection.HTTP_FORBIDDEN, 429 -> "Update checks are temporarily rate limited."
         HttpURLConnection.HTTP_NOT_FOUND -> "No published update channel is available."
-        else -> "GitHub update service is temporarily unavailable."
+        else -> "Update service is temporarily unavailable."
     }
 
     private data class HttpResponse(
@@ -460,14 +470,13 @@ internal class GitHubReleaseClient(
     )
 
     companion object {
-        const val RELEASES_API_URL =
-            "https://api.github.com/repos/Nort321/levik-vpn/releases/latest"
+        const val RELEASE_FEED_URL =
+            "https://leviknet.com/downloads/android/stable/latest.json"
         const val MANIFEST_ASSET_NAME = "update.json"
         const val SIGNATURE_ASSET_NAME = "update.json.sig"
 
-        private const val GITHUB_API_HOST = "api.github.com"
-        private const val GITHUB_ACCEPT = "application/vnd.github+json"
-        private const val GITHUB_API_VERSION = "2022-11-28"
+        private const val RELEASE_HOST = "leviknet.com"
+        private const val JSON_ACCEPT = "application/json"
         private const val USER_AGENT = "LevikVPN-Android-Direct"
         private const val CONNECT_TIMEOUT_MS = 15_000
         private const val READ_TIMEOUT_MS = 30_000
@@ -477,17 +486,11 @@ internal class GitHubReleaseClient(
         private const val MAX_ETAG_LENGTH = 512
         private const val PREFERENCES_NAME = "direct_update_checks"
         private const val METADATA_DIRECTORY_NAME = "update-metadata"
-        private const val RELEASE_CACHE_FILE_NAME = "github-releases.json"
+        private const val RELEASE_CACHE_FILE_NAME = "direct-release-feed.json"
         private const val KEY_ETAG = "github_etag"
         private const val KEY_NEXT_CHECK_AT = "next_check_at"
         private const val KEY_RETRY_AT = "retry_at"
         private const val KEY_FAILURE_COUNT = "failure_count"
         private val REDIRECT_STATUS_CODES = setOf(301, 302, 303, 307, 308)
-        private val ASSET_REDIRECT_HOSTS = setOf(
-            "github.com",
-            "release-assets.githubusercontent.com",
-            "objects.githubusercontent.com",
-            "github-releases.githubusercontent.com",
-        )
     }
 }
