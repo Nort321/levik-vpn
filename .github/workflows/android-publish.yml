@@ -301,22 +301,38 @@ jobs:
         run: |
           set -euo pipefail
           readonly public_base="https://leviknet.com/downloads/android/stable"
-          curl --fail --silent --show-error \
-            --proto '=https' --tlsv1.2 \
+          fetch_matching() {
+            local url="$1"
+            local expected="$2"
+            local output="$3"
+            local attempt
+            for attempt in {1..12}; do
+              if curl --fail --silent --show-error \
+                  --proto '=https' --tlsv1.2 \
+                  --connect-timeout 10 --max-time 30 \
+                  "${url}" --output "${output}" &&
+                cmp --silent "${expected}" "${output}"; then
+                return 0
+              fi
+              if [[ "${attempt}" -lt 12 ]]; then
+                sleep 5
+              fi
+            done
+            printf 'ERROR: public release asset did not become available: %s\n' "${url}" >&2
+            return 1
+          }
+          fetch_matching \
             "${public_base}/latest.json" \
-            --output "${RUNNER_TEMP}/published-latest.json"
-          cmp --silent \
             "${RUNNER_TEMP}/private-release/latest.json" \
             "${RUNNER_TEMP}/published-latest.json"
-          curl --fail --silent --show-error \
-            --proto '=https' --tlsv1.2 \
+          fetch_matching \
             "${public_base}/latest.json.sig" \
-            --output "${RUNNER_TEMP}/published-latest.json.sig"
-          cmp --silent \
             "${RUNNER_TEMP}/private-release/latest.json.sig" \
             "${RUNNER_TEMP}/published-latest.json.sig"
           curl --fail --silent --show-error --head \
             --proto '=https' --tlsv1.2 \
+            --retry 12 --retry-all-errors --retry-delay 5 \
+            --connect-timeout 10 --max-time 30 \
             "${public_base}/${RELEASE_TAG}/LevikVPN-direct-${VERSION_NAME}.apk"
 
       - name: Remove deployment material
