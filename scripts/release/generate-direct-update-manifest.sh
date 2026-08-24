@@ -96,7 +96,11 @@ fi
 apksigner verify --verbose --print-certs "${APK_PATH}" >/dev/null
 readonly ACTUAL_CERTIFICATE_SHA256="$({
   apksigner verify --print-certs "${APK_PATH}"
-} | awk -F ': ' '/certificate SHA-256 digest/ { print tolower($2); exit }')"
+} | awk -F ': ' '/certificate SHA-256 digest/ { print tolower($NF); exit }')"
+if [[ ! "${ACTUAL_CERTIFICATE_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
+  printf 'ERROR: unable to parse the APK signing certificate SHA-256 fingerprint.\n' >&2
+  exit 1
+fi
 if [[ "${ACTUAL_CERTIFICATE_SHA256}" != "${EXPECTED_CERTIFICATE_SHA256}" ]]; then
   printf 'ERROR: APK signing certificate SHA-256 does not match the protected release value (actual public fingerprint: %s).\n' \
     "${ACTUAL_CERTIFICATE_SHA256}" >&2
