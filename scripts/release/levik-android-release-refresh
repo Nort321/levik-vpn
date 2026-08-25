@@ -70,8 +70,8 @@ manifest_path = release_dir / "update.json"
 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 apk_name = f"LevikVPN-direct-{version}.apk"
 now = int(time.time())
-generated = feed.get("generated_at")
-expires = feed.get("expires_at")
+generated_at = feed.get("generated_at")
+expires_at = feed.get("expires_at")
 if (
     feed.get("schemaVersion") != 1
     or feed.get("channel") != "stable"
@@ -80,33 +80,33 @@ if (
     or feed.get("manifest_sha256") != hashlib.sha256(manifest_path.read_bytes()).hexdigest()
     or feed.get("draft") is not False
     or feed.get("prerelease") is not False
-    or not isinstance(generated, int)
-    or not isinstance(expires, int)
-    or generated > now + 300
-    or expires <= now
-    or expires <= generated
-    or expires - generated > 72 * 60 * 60
+    or not isinstance(generated_at, int)
+    or not isinstance(expires_at, int)
+    or generated_at > now + 300
+    or expires_at <= now
+    or expires_at <= generated_at
+    or expires_at - generated_at > 72 * 60 * 60
 ):
     raise SystemExit("invalid signed Direct release feed")
-expected = {
-    "update.json": manifest_path,
-    "update.json.sig": release_dir / "update.json.sig",
-    apk_name: release_dir / apk_name,
-}
+expected_names = {"update.json", "update.json.sig", apk_name}
 assets = feed.get("assets")
 if (
     not isinstance(assets, list)
     or not all(isinstance(item, dict) for item in assets)
-    or {item.get("name") for item in assets} != set(expected)
+    or {item.get("name") for item in assets} != expected_names
 ):
     raise SystemExit("invalid signed Direct release assets")
 base = f"https://leviknet.com/downloads/android/stable/{tag}"
 for item in assets:
     name = item["name"]
-    path = expected[name]
-    if not path.is_file() or path.is_symlink():
-        raise SystemExit("immutable release asset is unavailable")
-    if item.get("size") != path.stat().st_size or item.get("url") != f"{base}/{name}":
+    if name == apk_name:
+        expected_size = manifest.get("apkSize")
+    else:
+        path = release_dir / name
+        if not path.is_file() or path.is_symlink():
+            raise SystemExit("immutable release asset is unavailable")
+        expected_size = path.stat().st_size
+    if item.get("size") != expected_size or item.get("url") != f"{base}/{name}":
         raise SystemExit("signed Direct release asset metadata mismatch")
 PY
 
