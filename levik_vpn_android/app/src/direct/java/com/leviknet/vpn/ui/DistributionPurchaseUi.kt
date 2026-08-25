@@ -25,10 +25,8 @@ import androidx.compose.ui.unit.dp
 import com.leviknet.vpn.R
 import com.leviknet.vpn.ui.theme.LevikBlue
 
-private const val PLANS_URL = "https://leviknet.com/dashboard/plans"
-
 internal fun openDistributionPlans(viewModel: AppViewModel) {
-    viewModel.openExternalUrl(PLANS_URL)
+    viewModel.openPurchaseFlow()
 }
 
 @Composable

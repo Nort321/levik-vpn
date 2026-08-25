@@ -43,6 +43,26 @@ data class AuthStatusResponse(
 )
 
 @Serializable
+data class TrialActivationRequest(
+    val trialBinding: String,
+    val publicKeySpki: String,
+    val deviceLabel: String,
+    val deviceModel: String,
+    val deviceOs: String,
+    val appVersion: String,
+    val requestSigningAlgorithm: String,
+    val profileEncryptionAlgorithm: String,
+)
+
+@Serializable
+data class TrialActivationResponse(
+    val ok: Boolean,
+    val accessToken: String,
+    val expiresAt: String,
+    val subscriptionId: String,
+)
+
+@Serializable
 data class MobileAccountResponse(
     val ok: Boolean,
     val user: AccountUser,
@@ -84,7 +104,27 @@ data class SubscriptionSummary(
     val expireAt: String? = null,
     val traffic: TrafficSummary,
     val devices: DeviceSummary,
+    val components: SubscriptionComponents? = null,
+    val shield: ShieldSummary = ShieldSummary(),
     val actions: SubscriptionActions,
+)
+
+@Serializable
+data class SubscriptionComponents(
+    val regular: SubscriptionComponent,
+    val mobile: SubscriptionComponent,
+)
+
+@Serializable
+data class SubscriptionComponent(
+    val traffic: TrafficSummary,
+    val devices: DeviceSummary,
+)
+
+@Serializable
+data class ShieldSummary(
+    val supported: Boolean = false,
+    val enabled: Boolean = false,
 )
 
 @Serializable
@@ -125,6 +165,65 @@ data class OrderSummary(
     val amountRub: Int,
     val paymentMethodId: String,
     val createdAt: String,
+    val paymentUrl: String? = null,
+)
+
+@Serializable
+data class CatalogResponse(
+    val ok: Boolean,
+    val tariffs: List<CatalogTariff>,
+    val paymentMethods: List<CatalogPaymentMethod>,
+    val addons: List<CatalogAddon> = emptyList(),
+)
+
+@Serializable
+data class CatalogTariff(
+    val id: String,
+    val title: String,
+    val description: String,
+    val purchaseEnabled: Boolean,
+    val trafficLimitBytes: Long,
+    val deviceLimit: Int,
+    val periods: List<CatalogPeriod>,
+)
+
+@Serializable
+data class CatalogPeriod(
+    val months: Int,
+    val title: String,
+    val amountRub: Int,
+)
+
+@Serializable
+data class CatalogPaymentMethod(
+    val id: String,
+    val title: String,
+    val feePercent: Double,
+)
+
+@Serializable
+data class CatalogAddon(
+    val id: String,
+    val title: String,
+    val enabled: Boolean,
+    val amountRub: Int,
+    val deviceDelta: Int,
+    val trafficDeltaBytes: Long,
+)
+
+@Serializable
+data class CreateOrderRequest(
+    val kind: String,
+    val subscriptionId: String? = null,
+    val tariffId: String? = null,
+    val months: Int? = null,
+    val paymentMethodId: String,
+)
+
+@Serializable
+data class CreateOrderResponse(
+    val ok: Boolean,
+    val order: OrderSummary,
 )
 
 @Serializable
@@ -167,6 +266,18 @@ data class RevokeDeviceRequest(
 @Serializable
 data class SimpleSuccessResponse(
     val ok: Boolean = true,
+)
+
+@Serializable
+data class ShieldUpdateRequest(
+    val subscriptionId: String,
+    val enabled: Boolean,
+)
+
+@Serializable
+data class ShieldUpdateResponse(
+    val ok: Boolean,
+    val enabled: Boolean,
 )
 
 @Serializable
@@ -231,6 +342,25 @@ data class BrowserCheckReportEndpointResult(
     val id: String,
     val reachable: Boolean,
     val latencyMs: Long?,
+)
+
+@Serializable
+data class LevikStatusSnapshot(
+    val servers: List<LevikServerStatus> = emptyList(),
+    val fetchedAt: String = "",
+    val source: String = "stale",
+    val controlLatencyMs: Long = 0,
+)
+
+@Serializable
+data class LevikServerStatus(
+    val id: String,
+    val countryCode: String,
+    val state: String,
+    val load: Double? = null,
+    val uptimeSeconds: Double? = null,
+    val trafficUsedBytes: Long = 0,
+    val lastStatusChange: String? = null,
 )
 
 enum class LoginState {

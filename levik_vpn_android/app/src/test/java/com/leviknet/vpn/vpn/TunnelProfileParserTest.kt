@@ -27,6 +27,8 @@ class TunnelProfileParserTest {
 
         assertEquals("profile-123", profile.profileId)
         assertEquals("vless://example", profile.source.content)
+        assertEquals(listOf("domain:example.org"), profile.routing?.directDomains)
+        assertEquals(listOf("domain:blocked.example"), profile.routing?.proxyDomains)
     }
 
     @Test
@@ -68,7 +70,10 @@ class TunnelProfileParserTest {
             "content": "vless://example"
           },
           "routing": {
-            "directCidrs": ["192.0.2.0/24"]
+            "policyVersion": 3,
+            "directCidrs": ["192.0.2.0/24"],
+            "directDomains": ["domain:example.org"],
+            "proxyDomains": ["domain:blocked.example"]
           }
         }
         """.trimIndent()

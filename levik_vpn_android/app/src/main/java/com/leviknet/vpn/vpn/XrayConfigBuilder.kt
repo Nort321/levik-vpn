@@ -63,6 +63,7 @@ class XrayConfigBuilder(
             ).distinct()
 
         val directDomains = buildList {
+            addAll(profile.directDomains)
             if (isBypassRu) {
                 addAll(RUSSIAN_DOMAINS)
             }
@@ -75,6 +76,7 @@ class XrayConfigBuilder(
         }
 
         val proxyDomains = buildList {
+            addAll(profile.proxyDomains)
             if (isBlockedOnly) {
                 addAll(POPULAR_BLOCKED_DOMAINS)
             }

@@ -84,6 +84,8 @@ class XrayRuntime(
             subscriptionExpiresAt = profile.subscriptionExpiresAt,
             servers = servers,
             directCidrs = profile.routing?.directCidrs.orEmpty(),
+            directDomains = profile.routing?.directDomains.orEmpty(),
+            proxyDomains = profile.routing?.proxyDomains.orEmpty(),
         )
     }
 

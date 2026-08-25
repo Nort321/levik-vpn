@@ -174,6 +174,8 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     login = state.login,
                     snackbarHostState = snackbarHostState,
                     onLogin = viewModel::beginLogin,
+                    onTrial = viewModel::activateTrial,
+                    onFreeProxy = viewModel::openFreeProxyBot,
                     onOpenAgain = viewModel::openLoginUriAgain,
                     onPrivacyPolicy = viewModel::openPrivacyPolicy,
                 )
@@ -187,6 +189,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     onServerSelected = viewModel::selectServer,
                     onRefresh = viewModel::refreshAccount,
                     onSupport = viewModel::openSupport,
+                    onFreeProxy = viewModel::openFreeProxyBot,
                     onPrivacyPolicy = viewModel::openPrivacyPolicy,
                     onDeleteAccount = viewModel::openAccountDeletion,
                     onRelinkAccount = viewModel::beginLogin,
@@ -200,6 +203,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     onOpenWifiProtection = { showWifiProtectionDialog = true },
                     onAutomaticServer = viewModel::selectAutomaticServer,
                     onSubscriptionSelected = viewModel::selectSubscription,
+                    onSubscriptionShieldChanged = viewModel::setSubscriptionShield,
                     onToggleFavorite = viewModel::toggleFavoriteServer,
                     onSearchQueryChanged = viewModel::setServerSearchQuery,
                     onServerFilterChanged = viewModel::setServerFilter,
@@ -493,6 +497,16 @@ fun LevikVpnApp(viewModel: AppViewModel) {
         )
     }
 
+    state.purchaseCatalog?.let { catalog ->
+        PurchaseDialog(
+            catalog = catalog,
+            account = state.account,
+            loading = state.purchaseLoading,
+            onPurchase = viewModel::purchaseAccess,
+            onDismiss = viewModel::closePurchaseFlow,
+        )
+    }
+
     state.supportNoteUrl?.let { noteUrl ->
         SupportNoteDialog(
             noteUrl = noteUrl,
@@ -522,6 +536,170 @@ fun LevikVpnApp(viewModel: AppViewModel) {
 }
 
 @Composable
+private fun PurchaseDialog(
+    catalog: com.leviknet.vpn.core.network.CatalogResponse,
+    account: MobileAccountResponse?,
+    loading: Boolean,
+    onPurchase: (String, String?, String?, Int?, String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val availableTariffs = catalog.tariffs.filter { it.purchaseEnabled && it.periods.isNotEmpty() }
+    val choices = buildList {
+        add(PurchaseChoice("access_purchase", null, stringResource(R.string.purchase_new_access)))
+        account?.subscriptions.orEmpty().forEach { subscription ->
+            if (subscription.actions.renew) {
+                add(PurchaseChoice("access_renewal", subscription.uuid, stringResource(R.string.purchase_renew, subscription.title)))
+            }
+            if (subscription.actions.slotAddon) {
+                add(PurchaseChoice("slot_addon", subscription.uuid, stringResource(R.string.purchase_slot_addon, subscription.title)))
+            }
+            if (subscription.actions.trafficAddon) {
+                add(PurchaseChoice("traffic_addon", subscription.uuid, stringResource(R.string.purchase_traffic_addon, subscription.title)))
+            }
+        }
+    }
+    var choiceKey by remember(catalog, account) { mutableStateOf("access_purchase:") }
+    val choice = choices.firstOrNull { "${it.kind}:${it.subscriptionId.orEmpty()}" == choiceKey }
+        ?: choices.first()
+    val renewalTariffId = account?.subscriptions
+        ?.firstOrNull { it.uuid == choice.subscriptionId }
+        ?.tariffId
+    var tariffId by remember(catalog) { mutableStateOf(availableTariffs.firstOrNull()?.id.orEmpty()) }
+    val effectiveTariffId = if (choice.kind == "access_renewal") renewalTariffId.orEmpty() else tariffId
+    val selectedTariff = availableTariffs.firstOrNull { it.id == effectiveTariffId }
+    var months by remember(effectiveTariffId) { mutableStateOf(selectedTariff?.periods?.firstOrNull()?.months ?: 0) }
+    var paymentMethodId by remember(catalog) {
+        mutableStateOf(catalog.paymentMethods.firstOrNull()?.id.orEmpty())
+    }
+    val accessOrder = choice.kind in setOf("access_purchase", "access_renewal")
+    val canPurchase = (!accessOrder || (effectiveTariffId.isNotBlank() && months > 0)) &&
+        paymentMethodId.isNotBlank() && !loading
+
+    AlertDialog(
+        onDismissRequest = { if (!loading) onDismiss() },
+        shape = RoundedCornerShape(24.dp),
+        title = { Text(stringResource(R.string.purchase_title), fontWeight = FontWeight.Bold) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 520.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                choices.forEach { item ->
+                    val itemKey = "${item.kind}:${item.subscriptionId.orEmpty()}"
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .selectable(
+                                selected = itemKey == choiceKey,
+                                onClick = { choiceKey = itemKey },
+                                role = Role.RadioButton,
+                            ),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = itemKey == choiceKey, onClick = null)
+                        Text(item.label)
+                    }
+                }
+                if (choice.kind == "access_purchase") availableTariffs.forEach { tariff ->
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .selectable(
+                                selected = tariff.id == tariffId,
+                                onClick = { tariffId = tariff.id },
+                                role = Role.RadioButton,
+                            ),
+                        shape = RoundedCornerShape(14.dp),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (tariff.id == tariffId) LevikBlue else MaterialTheme.colorScheme.outline,
+                        ),
+                    ) {
+                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(selected = tariff.id == tariffId, onClick = null)
+                            Spacer(Modifier.width(8.dp))
+                            Column {
+                                Text(tariff.title, fontWeight = FontWeight.SemiBold)
+                                Text(tariff.description, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+                if (accessOrder) {
+                    Text(stringResource(R.string.purchase_period), fontWeight = FontWeight.SemiBold)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        selectedTariff?.periods.orEmpty().forEach { period ->
+                            FilterChip(
+                                selected = months == period.months,
+                                onClick = { months = period.months },
+                                label = { Text("${period.title} · ${period.amountRub} ₽") },
+                            )
+                        }
+                    }
+                } else {
+                    catalog.addons.firstOrNull { it.id == choice.kind }?.let { addon ->
+                        Text(
+                            text = "${addon.title} · ${addon.amountRub} ₽",
+                            fontWeight = FontWeight.SemiBold,
+                            color = LevikBlue,
+                        )
+                    }
+                }
+                Text(stringResource(R.string.purchase_payment_method), fontWeight = FontWeight.SemiBold)
+                catalog.paymentMethods.forEach { method ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .selectable(
+                                selected = method.id == paymentMethodId,
+                                onClick = { paymentMethodId = method.id },
+                                role = Role.RadioButton,
+                            ),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = method.id == paymentMethodId, onClick = null)
+                        Text(method.title)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onPurchase(
+                        choice.kind,
+                        choice.subscriptionId,
+                        effectiveTariffId.takeIf { accessOrder },
+                        months.takeIf { accessOrder },
+                        paymentMethodId,
+                    )
+                },
+                enabled = canPurchase,
+            ) {
+                if (loading) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                } else {
+                    Text(stringResource(R.string.purchase_continue))
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !loading) {
+                Text(stringResource(R.string.cancel))
+            }
+        },
+    )
+}
+
+private data class PurchaseChoice(
+    val kind: String,
+    val subscriptionId: String?,
+    val label: String,
+)
+
+@Composable
 private fun LoadingScreen() {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         CircularProgressIndicator()
@@ -533,6 +711,8 @@ private fun LoginScreen(
     login: LoginUiState,
     snackbarHostState: SnackbarHostState,
     onLogin: () -> Unit,
+    onTrial: () -> Unit,
+    onFreeProxy: () -> Unit,
     onOpenAgain: () -> Unit,
     onPrivacyPolicy: () -> Unit,
 ) {
@@ -644,7 +824,45 @@ private fun LoginScreen(
                     Text(stringResource(R.string.login_continue), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
+            if (login == LoginUiState.Idle) {
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = onTrial,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(LevikDimensions.ButtonHeight),
+                    shape = RoundedCornerShape(14.dp),
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_shield),
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        stringResource(R.string.login_trial),
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = stringResource(R.string.login_trial_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+            }
             Spacer(Modifier.height(14.dp))
+            TextButton(onClick = onFreeProxy) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_servers),
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.free_proxy_button))
+            }
             TextButton(
                 onClick = onPrivacyPolicy,
                 modifier = Modifier.height(LevikDimensions.ButtonHeight),
@@ -672,6 +890,7 @@ private fun MainContent(
     onServerSelected: (String) -> Unit,
     onRefresh: () -> Unit,
     onSupport: () -> Unit,
+    onFreeProxy: () -> Unit,
     onPrivacyPolicy: () -> Unit,
     onDeleteAccount: () -> Unit,
     onRelinkAccount: () -> Unit,
@@ -685,6 +904,7 @@ private fun MainContent(
     onOpenWifiProtection: () -> Unit,
     onAutomaticServer: () -> Unit,
     onSubscriptionSelected: (String) -> Unit,
+    onSubscriptionShieldChanged: (String, Boolean) -> Unit,
     onToggleFavorite: (String) -> Unit,
     onSearchQueryChanged: (String) -> Unit,
     onServerFilterChanged: (ServerFilterType) -> Unit,
@@ -769,6 +989,7 @@ private fun MainContent(
                 loading = state.refreshing,
                 onRefresh = onRefresh,
                 onSupport = onSupport,
+                onFreeProxy = onFreeProxy,
                 onPrivacyPolicy = onPrivacyPolicy,
                 onDeleteAccount = onDeleteAccount,
                 onRelinkAccount = onRelinkAccount,
@@ -789,6 +1010,7 @@ private fun MainContent(
                     VpnConnectionState.ERROR,
                 ),
                 onSubscriptionSelected = onSubscriptionSelected,
+                onSubscriptionShieldChanged = onSubscriptionShieldChanged,
                 onOpenDevices = onOpenDevices,
                 splitTunnelMode = state.splitTunnelMode,
                 splitTunnelSelectedCount = state.splitTunnelPackages.size,
@@ -922,6 +1144,60 @@ private fun HomeScreen(
                         modifier = Modifier.size(24.dp),
                         tint = LevikBlue,
                     )
+                }
+            }
+        }
+
+        state.levikStatus?.let { status ->
+            val incidents = status.servers.count { it.state != "online" }
+            val online = status.servers.count { it.state == "online" }
+            Spacer(Modifier.height(14.dp))
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                color = if (incidents == 0) {
+                    LevikGreen.copy(alpha = 0.10f)
+                } else {
+                    MaterialTheme.colorScheme.errorContainer
+                },
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    if (incidents == 0) LevikGreen.copy(alpha = 0.35f)
+                    else MaterialTheme.colorScheme.error.copy(alpha = 0.35f),
+                ),
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        painter = painterResource(
+                            if (incidents == 0) R.drawable.ic_shield else R.drawable.ic_anti_dpi,
+                        ),
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = if (incidents == 0) LevikGreen else MaterialTheme.colorScheme.error,
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            text = if (incidents == 0) {
+                                stringResource(R.string.levik_status_operational)
+                            } else {
+                                stringResource(R.string.levik_status_incidents, incidents)
+                            },
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = stringResource(
+                                R.string.levik_status_servers,
+                                online,
+                                status.servers.size,
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
@@ -2438,6 +2714,7 @@ private fun ProfileScreen(
     loading: Boolean,
     onRefresh: () -> Unit,
     onSupport: () -> Unit,
+    onFreeProxy: () -> Unit,
     onPrivacyPolicy: () -> Unit,
     onDeleteAccount: () -> Unit,
     onRelinkAccount: () -> Unit,
@@ -2455,6 +2732,7 @@ private fun ProfileScreen(
     selectedSubscriptionId: String?,
     subscriptionSelectionEnabled: Boolean,
     onSubscriptionSelected: (String) -> Unit,
+    onSubscriptionShieldChanged: (String, Boolean) -> Unit,
     onOpenDevices: (SubscriptionSummary) -> Unit,
     splitTunnelMode: SplitTunnelMode,
     splitTunnelSelectedCount: Int,
@@ -2560,7 +2838,13 @@ private fun ProfileScreen(
                     }
                 }
             }
-            SubscriptionCard(subscription, profile, onOpenDevices)
+            SubscriptionCard(
+                subscription = subscription,
+                profile = profile,
+                loading = loading,
+                onOpenDevices = onOpenDevices,
+                onShieldChanged = onSubscriptionShieldChanged,
+            )
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -3212,6 +3496,21 @@ private fun ProfileScreen(
                 }
             }
 
+            OutlinedButton(
+                onClick = onFreeProxy,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(LevikDimensions.ButtonHeight),
+                shape = RoundedCornerShape(14.dp),
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_servers),
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.free_proxy_button), fontWeight = FontWeight.SemiBold)
+            }
             OutlinedButton(
                 onClick = onSupport,
                 modifier = Modifier
@@ -4672,7 +4971,9 @@ private fun ReferralCard(
 private fun SubscriptionCard(
     subscription: SubscriptionSummary?,
     profile: PreparedTunnelProfile?,
+    loading: Boolean,
     onOpenDevices: (SubscriptionSummary) -> Unit = {},
+    onShieldChanged: (String, Boolean) -> Unit,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -4726,6 +5027,60 @@ private fun SubscriptionCard(
                 value = subscription?.let { "${it.devices.used} / ${it.devices.limit}" }
                     ?: stringResource(R.string.not_available),
             )
+
+            subscription?.components?.let { components ->
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = stringResource(R.string.multi_subscription_title),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                ProfileLine(
+                    label = stringResource(R.string.multi_regular_component),
+                    value = stringResource(
+                        R.string.multi_component_usage,
+                        formatBytes(components.regular.traffic.usedBytes),
+                        formatBytes(components.regular.traffic.limitBytes),
+                        components.regular.devices.used,
+                        components.regular.devices.limit,
+                    ),
+                )
+                ProfileLine(
+                    label = stringResource(R.string.multi_mobile_component),
+                    value = stringResource(
+                        R.string.multi_component_usage,
+                        formatBytes(components.mobile.traffic.usedBytes),
+                        formatBytes(components.mobile.traffic.limitBytes),
+                        components.mobile.devices.used,
+                        components.mobile.devices.limit,
+                    ),
+                )
+            }
+
+            if (subscription?.shield?.supported == true) {
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = stringResource(R.string.levik_shield_title),
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = stringResource(R.string.levik_shield_description),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = subscription.shield.enabled,
+                        enabled = !loading,
+                        onCheckedChange = { enabled ->
+                            onShieldChanged(subscription.uuid, enabled)
+                        },
+                        colors = LevikSwitchDefaults.colors(),
+                    )
+                }
+            }
 
             if (subscription != null) {
                 Spacer(Modifier.height(10.dp))

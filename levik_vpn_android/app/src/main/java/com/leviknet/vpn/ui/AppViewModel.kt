@@ -22,8 +22,11 @@ import com.leviknet.vpn.core.auth.DeepLinkRouter
 import com.leviknet.vpn.core.logger.AppLogger
 import com.leviknet.vpn.core.logger.LogEntry
 import com.leviknet.vpn.core.network.ApiException
+import com.leviknet.vpn.core.network.CensorshipRadarWorker
+import com.leviknet.vpn.core.network.CatalogResponse
 import com.leviknet.vpn.core.network.AuthChallengeResponse
 import com.leviknet.vpn.core.network.DiagnosticReport
+import com.leviknet.vpn.core.network.LevikStatusSnapshot
 import com.leviknet.vpn.core.network.MobileAccountResponse
 import com.leviknet.vpn.core.network.NetworkDiagnostics
 import com.leviknet.vpn.core.network.SubscriptionSummary
@@ -85,6 +88,7 @@ class AppViewModel(
     private val effectChannel = Channel<AppEffect>(Channel.BUFFERED)
     private var loginStartJob: Job? = null
     private var loginPollJob: Job? = null
+    private var pendingOnboardingAction = OnboardingAction.LOGIN
     private var connectionPending = false
     private var searchDebounceJob: Job? = null
     private var isRefreshingAccount = false
@@ -295,6 +299,7 @@ class AppViewModel(
         viewModelScope.launch {
             serverPingLoop()
         }
+        viewModelScope.launch { refreshLevikStatus() }
         viewModelScope.launch {
             val hadCachedProfile = repository.cachedTunnel() != null
             repository.initialize()
@@ -382,11 +387,20 @@ class AppViewModel(
     }
 
     fun beginLogin() {
+        beginOnboarding(OnboardingAction.LOGIN)
+    }
+
+    fun activateTrial() {
+        beginOnboarding(OnboardingAction.TRIAL)
+    }
+
+    private fun beginOnboarding(action: OnboardingAction) {
         if (mutableState.value.login is LoginUiState.Loading ||
             mutableState.value.showAppDataDisclosure
         ) {
             return
         }
+        pendingOnboardingAction = action
         loginStartJob?.cancel()
         loginStartJob = viewModelScope.launch {
             try {
@@ -394,10 +408,38 @@ class AppViewModel(
                     mutableState.update { it.copy(showAppDataDisclosure = true) }
                     return@launch
                 }
-                startLogin()
+                startOnboardingAction(action)
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
                 mutableState.update { it.copy(message = error.toUiMessage()) }
+            }
+        }
+    }
+
+    private fun startOnboardingAction(action: OnboardingAction) {
+        if (action == OnboardingAction.TRIAL) startTrial() else startLogin()
+    }
+
+    private fun startTrial() {
+        loginPollJob?.cancel()
+        loginPollJob = viewModelScope.launch {
+            mutableState.update { it.copy(login = LoginUiState.Loading, message = null) }
+            try {
+                val account = repository.activateTrial()
+                val profile = reconcileAuthenticatedProfile(
+                    account = account,
+                    hadCachedProfile = false,
+                    forceProfileRefresh = true,
+                )
+                if (profile != null && settings.automaticServer.value) {
+                    selectBestServer(profile)
+                }
+                mutableState.update { it.copy(login = LoginUiState.Idle) }
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                mutableState.update {
+                    it.copy(login = LoginUiState.Idle, message = error.toUiMessage())
+                }
             }
         }
     }
@@ -432,7 +474,7 @@ class AppViewModel(
             try {
                 repository.acceptAppDataDisclosure()
                 mutableState.update { it.copy(showAppDataDisclosure = false) }
-                startLogin()
+                startOnboardingAction(pendingOnboardingAction)
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
                 mutableState.update {
@@ -469,6 +511,79 @@ class AppViewModel(
 
     fun refreshAccount() {
         refreshSubscription(showErrors = true)
+        viewModelScope.launch { refreshLevikStatus() }
+    }
+
+    private suspend fun refreshLevikStatus() {
+        runCatching { apiClient.status() }
+            .onSuccess { status -> mutableState.update { it.copy(levikStatus = status) } }
+    }
+
+    fun setSubscriptionShield(subscriptionId: String, enabled: Boolean) {
+        if (mutableState.value.refreshing) return
+        viewModelScope.launch {
+            mutableState.update { it.copy(refreshing = true, message = null) }
+            try {
+                repository.setSubscriptionShield(subscriptionId, enabled)
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                mutableState.update { it.copy(message = error.toUiMessage()) }
+            } finally {
+                mutableState.update { it.copy(refreshing = false) }
+            }
+        }
+    }
+
+    fun openPurchaseFlow() {
+        if (!BuildConfig.EXTERNAL_PURCHASES_ENABLED || mutableState.value.purchaseLoading) return
+        viewModelScope.launch {
+            mutableState.update { it.copy(purchaseLoading = true, message = null) }
+            try {
+                val catalog = repository.catalog()
+                mutableState.update { it.copy(purchaseCatalog = catalog) }
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                mutableState.update { it.copy(message = error.toUiMessage()) }
+            } finally {
+                mutableState.update { it.copy(purchaseLoading = false) }
+            }
+        }
+    }
+
+    fun closePurchaseFlow() {
+        if (!mutableState.value.purchaseLoading) {
+            mutableState.update { it.copy(purchaseCatalog = null) }
+        }
+    }
+
+    fun purchaseAccess(
+        kind: String,
+        subscriptionId: String?,
+        tariffId: String?,
+        months: Int?,
+        paymentMethodId: String,
+    ) {
+        if (!BuildConfig.EXTERNAL_PURCHASES_ENABLED || mutableState.value.purchaseLoading) return
+        viewModelScope.launch {
+            mutableState.update { it.copy(purchaseLoading = true, message = null) }
+            try {
+                val order = repository.createOrder(
+                    kind,
+                    subscriptionId,
+                    tariffId,
+                    months,
+                    paymentMethodId,
+                )
+                val paymentUrl = requireNotNull(order.paymentUrl) { "Payment URL is unavailable" }
+                mutableState.update { it.copy(purchaseCatalog = null) }
+                effectChannel.send(AppEffect.OpenExternal(paymentUrl))
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                mutableState.update { it.copy(message = error.toUiMessage()) }
+            } finally {
+                mutableState.update { it.copy(purchaseLoading = false) }
+            }
+        }
     }
 
     private fun refreshSubscription(showErrors: Boolean) {
@@ -873,6 +988,12 @@ class AppViewModel(
     fun openSupport() {
         viewModelScope.launch {
             effectChannel.send(AppEffect.OpenExternal(SUPPORT_URL))
+        }
+    }
+
+    fun openFreeProxyBot() {
+        viewModelScope.launch {
+            effectChannel.send(AppEffect.OpenExternal(FREE_PROXY_BOT_URL))
         }
     }
 
@@ -1398,6 +1519,7 @@ class AppViewModel(
 
     fun setAnonymousTelemetryEnabled(enabled: Boolean) {
         settings.setAnonymousTelemetryEnabled(enabled)
+        appContext?.let { CensorshipRadarWorker.configure(it, enabled) }
     }
 
     fun shareDiagnosticReportAsNote() {
@@ -1485,7 +1607,8 @@ class AppViewModel(
             VpnConnectionState.DISCONNECTED,
             VpnConnectionState.ERROR,
         )
-        private const val SUPPORT_URL = "https://leviknet.com/dashboard/support"
+        private const val SUPPORT_URL = "https://t.me/leviksupportbot"
+        private const val FREE_PROXY_BOT_URL = "https://t.me/levikvpnbot"
         private const val ACCOUNT_DELETION_URL = "https://leviknet.com/account/delete"
         private const val PRIVACY_POLICY_URL = "https://leviknet.com/legal/privacy"
         private val ACTIVE_TUNNEL_STATES = setOf(
@@ -1628,7 +1751,7 @@ data class AppUiState(
     val favoriteServerIds: Set<String> = emptySet(),
     val customDirectDomains: Set<String> = emptySet(),
     val customProxyDomains: Set<String> = emptySet(),
-    val anonymousTelemetryEnabled: Boolean = true,
+    val anonymousTelemetryEnabled: Boolean = false,
     val serverSearchQuery: String = "",
     val serverFilter: ServerFilterType = ServerFilterType.ALL,
     val trafficHistory: List<DailyTraffic> = emptyList(),
@@ -1636,6 +1759,9 @@ data class AppUiState(
     val runningDiagnostics: Boolean = false,
     val updateState: UpdateState = UpdateState.Idle,
     val supportNoteUrl: String? = null,
+    val levikStatus: LevikStatusSnapshot? = null,
+    val purchaseCatalog: CatalogResponse? = null,
+    val purchaseLoading: Boolean = false,
     val isSharingNote: Boolean = false,
     val message: UiMessage? = null,
 )
@@ -1655,6 +1781,11 @@ sealed interface LoginUiState {
         val authorization: ChallengeAuthorization,
     ) : LoginUiState
     data object Expired : LoginUiState
+}
+
+private enum class OnboardingAction {
+    LOGIN,
+    TRIAL,
 }
 
 enum class UiMessage {

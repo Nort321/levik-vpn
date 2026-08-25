@@ -6,12 +6,17 @@ import com.leviknet.vpn.core.network.ApiException
 import com.leviknet.vpn.core.network.AuthChallengeRequest
 import com.leviknet.vpn.core.network.AuthChallengeResponse
 import com.leviknet.vpn.core.network.AuthStatusRequest
+import com.leviknet.vpn.core.network.CatalogResponse
+import com.leviknet.vpn.core.network.CreateOrderRequest
+import com.leviknet.vpn.core.network.OrderSummary
 import com.leviknet.vpn.core.network.LoginState
 import com.leviknet.vpn.core.network.MobileAccountResponse
 import com.leviknet.vpn.core.network.MobileApiClient
+import com.leviknet.vpn.core.network.TrialActivationRequest
 import com.leviknet.vpn.core.security.DeviceIdentity
 import com.leviknet.vpn.core.security.HybridProfileDecryptor
 import com.leviknet.vpn.core.security.SecureFileStore
+import com.leviknet.vpn.core.security.TrialDeviceBinding
 import com.leviknet.vpn.vpn.PreparedTunnelProfile
 import com.leviknet.vpn.vpn.TunnelProfileParser
 import com.leviknet.vpn.vpn.XrayRuntime
@@ -29,6 +34,7 @@ import kotlinx.serialization.json.Json
 class AppRepository(
     private val apiClient: MobileApiClient,
     private val deviceIdentity: DeviceIdentity,
+    private val trialDeviceBinding: TrialDeviceBinding,
     private val secureStore: SecureFileStore,
     private val profileDecryptor: HybridProfileDecryptor,
     private val xrayRuntime: XrayRuntime,
@@ -94,6 +100,34 @@ class AppRepository(
             )
         }
         apiClient.createChallenge(request)
+    }
+
+    suspend fun activateTrial(): MobileAccountResponse = authMutex.withLock {
+        val request = withContext(Dispatchers.IO) {
+            TrialActivationRequest(
+                trialBinding = trialDeviceBinding.value(),
+                publicKeySpki = deviceIdentity.publicKeySpkiBase64Url(),
+                deviceLabel = deviceLabel(),
+                deviceModel = Build.MODEL.sanitized(MAX_DEVICE_FIELD_LENGTH),
+                deviceOs = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
+                    .sanitized(MAX_DEVICE_FIELD_LENGTH),
+                appVersion = BuildConfig.VERSION_NAME,
+                requestSigningAlgorithm = deviceIdentity.requestSigningAlgorithm(),
+                profileEncryptionAlgorithm = deviceIdentity.profileEncryptionAlgorithm(),
+            )
+        }
+        val response = apiClient.activateTrial(request)
+        require(response.accessToken.length in 32..MAX_ACCESS_TOKEN_LENGTH) {
+            "Invalid access token"
+        }
+        withContext(Dispatchers.IO) {
+            secureStore.put(
+                SecureFileStore.SESSION_TOKEN,
+                response.accessToken.encodeToByteArray(),
+            )
+        }
+        _session.value = SessionStatus.Authenticated
+        refreshAccount()
     }
 
     suspend fun pollLogin(loginToken: String): LoginPollResult = authMutex.withLock {
@@ -229,6 +263,25 @@ class AppRepository(
         apiClient.revokeDevice(token, subscriptionId, deviceId)
         refreshAccount()
     }
+
+    suspend fun setSubscriptionShield(subscriptionId: String, enabled: Boolean) {
+        val token = requireToken()
+        apiClient.setSubscriptionShield(token, subscriptionId, enabled)
+        refreshAccount()
+    }
+
+    suspend fun catalog(): CatalogResponse = apiClient.catalog(requireToken())
+
+    suspend fun createOrder(
+        kind: String,
+        subscriptionId: String?,
+        tariffId: String?,
+        months: Int?,
+        paymentMethodId: String,
+    ): OrderSummary = apiClient.createOrder(
+        requireToken(),
+        CreateOrderRequest(kind, subscriptionId, tariffId, months, paymentMethodId),
+    ).order
 
     suspend fun logout() {
         val token = readToken()

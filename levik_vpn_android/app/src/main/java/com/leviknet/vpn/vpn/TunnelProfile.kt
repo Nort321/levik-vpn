@@ -22,7 +22,10 @@ data class TunnelProfileSource(
 
 @Serializable
 data class TunnelRouting(
+    val policyVersion: Int = 0,
     val directCidrs: List<String> = emptyList(),
+    val directDomains: List<String> = emptyList(),
+    val proxyDomains: List<String> = emptyList(),
 )
 
 @Serializable
@@ -34,6 +37,8 @@ data class PreparedTunnelProfile(
     val subscriptionExpiresAt: String? = null,
     val servers: List<TunnelServer>,
     val directCidrs: List<String> = emptyList(),
+    val directDomains: List<String> = emptyList(),
+    val proxyDomains: List<String> = emptyList(),
 )
 
 @Serializable

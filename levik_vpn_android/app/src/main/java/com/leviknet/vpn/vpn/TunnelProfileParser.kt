@@ -48,6 +48,21 @@ class TunnelProfileParser(
                 "Invalid direct route"
             }
         }
+        val routing = profile.routing
+        require((routing?.policyVersion ?: 0) in 0..MAX_POLICY_VERSION) {
+            "Invalid routing policy version"
+        }
+        listOf(
+            routing?.directDomains.orEmpty(),
+            routing?.proxyDomains.orEmpty(),
+        ).forEach { rules ->
+            require(rules.size <= MAX_DOMAIN_RULES) { "Too many domain rules" }
+            rules.forEach { rule ->
+                require(rule.length in 3..MAX_DOMAIN_RULE_LENGTH && rule.matches(SAFE_DOMAIN_RULE)) {
+                    "Invalid domain rule"
+                }
+            }
+        }
 
         return profile
     }
@@ -67,7 +82,11 @@ class TunnelProfileParser(
         private const val MAX_CLOCK_SKEW_SECONDS = 5 * 60L
         private const val MAX_DIRECT_CIDRS = 64
         private const val MAX_CIDR_LENGTH = 64
+        private const val MAX_POLICY_VERSION = 1_000_000
+        private const val MAX_DOMAIN_RULES = 500
+        private const val MAX_DOMAIN_RULE_LENGTH = 253
         private val SAFE_ID = Regex("[A-Za-z0-9._:-]{1,128}")
         private val SAFE_CIDR = Regex("[0-9A-Fa-f:.]+/[0-9]{1,3}")
+        private val SAFE_DOMAIN_RULE = Regex("(?:domain|full):[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?")
     }
 }

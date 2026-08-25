@@ -280,7 +280,7 @@ class AppSettings(context: Context) {
         preferences.getStringSet(CUSTOM_PROXY_DOMAINS, emptySet()) ?: emptySet(),
     )
     private val mutableAnonymousTelemetryEnabled = MutableStateFlow(
-        preferences.getBoolean(ANONYMOUS_TELEMETRY_ENABLED, true),
+        preferences.getBoolean(ANONYMOUS_TELEMETRY_ENABLED, false),
     )
     private val mutablePausedUntilMs = MutableStateFlow(
         preferences.getLong(PAUSED_UNTIL_MS, 0L),

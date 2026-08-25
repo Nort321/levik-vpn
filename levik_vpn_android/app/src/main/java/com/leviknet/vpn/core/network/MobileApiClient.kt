@@ -50,6 +50,17 @@ class MobileApiClient(
         return response
     }
 
+    suspend fun activateTrial(request: TrialActivationRequest): TrialActivationResponse {
+        val response = post<TrialActivationRequest, TrialActivationResponse>(
+            path = TRIAL_ACTIVATE_PATH,
+            request = request,
+            accessToken = null,
+            requiresIntegrity = true,
+        )
+        checkSuccess(response.ok)
+        return response
+    }
+
     suspend fun account(accessToken: String): MobileAccountResponse {
         val response = request<MobileAccountResponse>(
             method = METHOD_GET,
@@ -57,6 +68,32 @@ class MobileApiClient(
             body = EMPTY_BODY,
             accessToken = accessToken,
             requiresIntegrity = false,
+        )
+        checkSuccess(response.ok)
+        return response
+    }
+
+    suspend fun catalog(accessToken: String): CatalogResponse {
+        val response = request<CatalogResponse>(
+            method = METHOD_GET,
+            path = CATALOG_PATH,
+            body = EMPTY_BODY,
+            accessToken = accessToken,
+            requiresIntegrity = false,
+        )
+        checkSuccess(response.ok)
+        return response
+    }
+
+    suspend fun createOrder(
+        accessToken: String,
+        request: CreateOrderRequest,
+    ): CreateOrderResponse {
+        val response = post<CreateOrderRequest, CreateOrderResponse>(
+            path = ORDER_CREATE_PATH,
+            request = request,
+            accessToken = accessToken,
+            requiresIntegrity = true,
         )
         checkSuccess(response.ok)
         return response
@@ -101,6 +138,21 @@ class MobileApiClient(
         checkSuccess(response.ok)
     }
 
+    suspend fun setSubscriptionShield(
+        accessToken: String,
+        subscriptionId: String,
+        enabled: Boolean,
+    ): Boolean {
+        val response = post<ShieldUpdateRequest, ShieldUpdateResponse>(
+            path = SUBSCRIPTION_SHIELD_PATH,
+            request = ShieldUpdateRequest(subscriptionId, enabled),
+            accessToken = accessToken,
+            requiresIntegrity = false,
+        )
+        checkSuccess(response.ok)
+        return response.enabled
+    }
+
     suspend fun checkIp(): IpCheckResponse {
         return request<IpCheckResponse>(
             method = METHOD_GET,
@@ -110,6 +162,14 @@ class MobileApiClient(
             requiresIntegrity = false,
         )
     }
+
+    suspend fun status(): LevikStatusSnapshot = request(
+        method = METHOD_GET,
+        path = STATUS_PATH,
+        body = EMPTY_BODY,
+        accessToken = null,
+        requiresIntegrity = false,
+    )
 
     suspend fun createSupportNote(noteRequest: CreateNoteRequest): CreateNoteResponse {
         return post<CreateNoteRequest, CreateNoteResponse>(
@@ -304,10 +364,15 @@ class MobileApiClient(
         private const val AUTH_CHALLENGE_PATH = "/api/mobile/v1/auth/challenge"
         private const val AUTH_STATUS_PATH = "/api/mobile/v1/auth/status"
         private const val AUTH_LOGOUT_PATH = "/api/mobile/v1/auth/logout"
+        private const val TRIAL_ACTIVATE_PATH = "/api/mobile/v1/trial/activate"
         private const val REVOKE_DEVICE_PATH = "/api/mobile/v1/devices/revoke"
+        private const val SUBSCRIPTION_SHIELD_PATH = "/api/mobile/v1/subscriptions/shield"
         private const val ACCOUNT_PATH = "/api/mobile/v1/account"
+        private const val CATALOG_PATH = "/api/mobile/v1/catalog"
+        private const val ORDER_CREATE_PATH = "/api/mobile/v1/orders/create"
         private const val TUNNEL_PROFILE_PATH = "/api/mobile/v1/tunnel-profile"
         private const val CHECK_IP_PATH = "/api/check"
+        private const val STATUS_PATH = "/api/status"
         private const val NOTES_PATH = "/api/notes"
         private const val BROWSER_CHECKS_PATH = "/api/monitor/v1/browser-checks"
         private const val METHOD_GET = "GET"
