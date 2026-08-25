@@ -39,6 +39,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -109,6 +110,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.leviknet.vpn.R
 import com.leviknet.vpn.core.logger.LogEntry
 import com.leviknet.vpn.core.network.DiagnosticReport
+import com.leviknet.vpn.core.network.LevikStatusSnapshot
 import com.leviknet.vpn.core.network.MobileAccountResponse
 import com.leviknet.vpn.core.network.SubscriptionSummary
 import com.leviknet.vpn.data.AntiDpiPreset
@@ -967,6 +969,7 @@ private fun MainContent(
                 onSearchQueryChanged = onSearchQueryChanged,
                 filterType = state.serverFilter,
                 onFilterChanged = onServerFilterChanged,
+                levikStatus = state.levikStatus,
             )
             AppTab.STATS -> StatsScreen(
                 modifier = Modifier.padding(padding),
@@ -1144,60 +1147,6 @@ private fun HomeScreen(
                         modifier = Modifier.size(24.dp),
                         tint = LevikBlue,
                     )
-                }
-            }
-        }
-
-        state.levikStatus?.let { status ->
-            val incidents = status.servers.count { it.state != "online" }
-            val online = status.servers.count { it.state == "online" }
-            Spacer(Modifier.height(14.dp))
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(14.dp),
-                color = if (incidents == 0) {
-                    LevikGreen.copy(alpha = 0.10f)
-                } else {
-                    MaterialTheme.colorScheme.errorContainer
-                },
-                border = androidx.compose.foundation.BorderStroke(
-                    1.dp,
-                    if (incidents == 0) LevikGreen.copy(alpha = 0.35f)
-                    else MaterialTheme.colorScheme.error.copy(alpha = 0.35f),
-                ),
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        painter = painterResource(
-                            if (incidents == 0) R.drawable.ic_shield else R.drawable.ic_anti_dpi,
-                        ),
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                        tint = if (incidents == 0) LevikGreen else MaterialTheme.colorScheme.error,
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Column {
-                        Text(
-                            text = if (incidents == 0) {
-                                stringResource(R.string.levik_status_operational)
-                            } else {
-                                stringResource(R.string.levik_status_incidents, incidents)
-                            },
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Text(
-                            text = stringResource(
-                                R.string.levik_status_servers,
-                                online,
-                                status.servers.size,
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
                 }
             }
         }
@@ -1751,15 +1700,17 @@ private fun ServerSummaryCard(
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
-                        text = stringResource(
-                            if (automaticServer) {
-                                R.string.selected_server_automatic
-                            } else {
-                                R.string.selected_server
-                            },
-                        ),
+                        text = when {
+                            automaticServer -> stringResource(R.string.selected_server_automatic)
+                            server?.isMobileServer() == true -> stringResource(R.string.selected_server_mobile)
+                            else -> stringResource(R.string.selected_server_regular)
+                        },
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (server?.isMobileServer() == true && !automaticServer) {
+                            if (isDark) Color(0xFFFBBF24) else Color(0xFFD97706)
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
                     )
                     Spacer(Modifier.height(2.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1771,6 +1722,21 @@ private fun ServerSummaryCard(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
+                        if (!automaticServer && server?.isMobileServer() == true) {
+                            Spacer(Modifier.width(6.dp))
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = (if (isDark) Color(0xFFF59E0B) else Color(0xFFD97706)).copy(alpha = 0.15f),
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.server_badge_mobile),
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isDark) Color(0xFFFBBF24) else Color(0xFFD97706),
+                                )
+                            }
+                        }
                         Spacer(Modifier.width(6.dp))
                         Icon(
                             painter = painterResource(R.drawable.ic_chevron_down),
@@ -1957,6 +1923,13 @@ private fun flagEmoji(countryCode: String?): String {
 
 private fun String.displayName(): String = removePrefix("🚀").trimStart().ifBlank { this }
 
+private fun TunnelServer.isMobileServer(): Boolean {
+    val n = name.uppercase(Locale.ROOT)
+    val t = tag.uppercase(Locale.ROOT)
+    return n.contains("LTE") || n.contains("MOBILE") || n.contains("МОБИЛЬН") ||
+        t.contains("LTE") || t.contains("MOBILE")
+}
+
 @Composable
 private fun flagDescription(countryCode: String?): String =
     stringResource(R.string.content_server_code, countryCode ?: "XX")
@@ -1979,12 +1952,69 @@ private fun ServersScreen(
     onSearchQueryChanged: (String) -> Unit,
     filterType: ServerFilterType,
     onFilterChanged: (ServerFilterType) -> Unit,
+    levikStatus: LevikStatusSnapshot? = null,
 ) {
     Column(modifier.fillMaxSize()) {
         ScreenHeader(
             title = stringResource(R.string.servers_title),
             subtitle = stringResource(R.string.servers_description),
         )
+
+        levikStatus?.let { status ->
+            val incidents = status.servers.count { it.state != "online" }
+            val online = status.servers.count { it.state == "online" }
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp),
+                shape = RoundedCornerShape(14.dp),
+                color = if (incidents == 0) {
+                    LevikGreen.copy(alpha = 0.10f)
+                } else {
+                    MaterialTheme.colorScheme.errorContainer
+                },
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    if (incidents == 0) LevikGreen.copy(alpha = 0.35f)
+                    else MaterialTheme.colorScheme.error.copy(alpha = 0.35f),
+                ),
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        painter = painterResource(
+                            if (incidents == 0) R.drawable.ic_shield else R.drawable.ic_anti_dpi,
+                        ),
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = if (incidents == 0) LevikGreen else MaterialTheme.colorScheme.error,
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            text = if (incidents == 0) {
+                                stringResource(R.string.levik_status_operational)
+                            } else {
+                                stringResource(R.string.levik_status_incidents, incidents)
+                            },
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = stringResource(
+                                R.string.levik_status_servers,
+                                online,
+                                status.servers.size,
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+        }
 
         // Search and Filter Bar
         val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
@@ -2011,11 +2041,15 @@ private fun ServersScreen(
             )
             Spacer(Modifier.height(10.dp))
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 listOf(
                     ServerFilterType.ALL to stringResource(R.string.filter_all),
+                    ServerFilterType.REGULAR to stringResource(R.string.filter_regular),
+                    ServerFilterType.MOBILE to stringResource(R.string.filter_mobile),
                     ServerFilterType.FAVORITES to stringResource(R.string.filter_favorites),
                     ServerFilterType.FASTEST to stringResource(R.string.filter_fastest),
                 ).forEach { (type, label) ->
@@ -2066,6 +2100,8 @@ private fun ServersScreen(
                         server.countryCode.lowercase().contains(query)
                     val matchesFilter = when (filterType) {
                         ServerFilterType.ALL -> true
+                        ServerFilterType.REGULAR -> !server.isMobileServer()
+                        ServerFilterType.MOBILE -> server.isMobileServer()
                         ServerFilterType.FAVORITES -> favoriteServerIds.contains(server.id)
                         ServerFilterType.FASTEST -> true
                     }
@@ -2125,7 +2161,7 @@ private fun ServersScreen(
                                         Text(
                                             text = if (pingingServers) {
                                                 stringResource(R.string.server_ping_checking)
-                                            } else {
+                                             } else {
                                                 stringResource(R.string.server_automatic_description)
                                             },
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2160,94 +2196,228 @@ private fun ServersScreen(
                                 )
                             }
                         }
-                    } else {
-                        items(filtered, key = TunnelServer::id) { server ->
-                            val selected = !automaticServer && server.id == selectedServerId
-                            val isFav = favoriteServerIds.contains(server.id)
-                            val flagDescriptionText = flagDescription(server.countryCode)
-                            val pingValue = serverPings[server.id]
+                    } else if (filterType == ServerFilterType.ALL && searchQuery.isEmpty()) {
+                        val regularServers = filtered.filter { !it.isMobileServer() }
+                        val mobileServers = filtered.filter { it.isMobileServer() }
 
-                            Surface(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .selectable(
-                                        selected = selected,
-                                        role = Role.RadioButton,
-                                        onClick = { onServerSelected(server.id) },
-                                    ),
-                                shape = RoundedCornerShape(18.dp),
-                                color = MaterialTheme.colorScheme.surface,
-                                border = androidx.compose.foundation.BorderStroke(
-                                    if (selected) 1.5.dp else 1.dp,
-                                    if (selected) LevikBlue else MaterialTheme.colorScheme.outline,
-                                ),
-                            ) {
-                                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+                        if (regularServers.isNotEmpty() && mobileServers.isNotEmpty()) {
+                            item(key = "section_regular_header") {
+                                Column(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 8.dp, bottom = 2.dp),
+                                ) {
+                                    Text(
+                                        text = stringResource(R.string.servers_category_regular),
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                    Text(
+                                        text = stringResource(R.string.servers_category_regular_desc),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                            items(regularServers, key = TunnelServer::id) { server ->
+                                ServerItemCard(
+                                    server = server,
+                                    selected = !automaticServer && server.id == selectedServerId,
+                                    isFav = favoriteServerIds.contains(server.id),
+                                    pingValue = serverPings[server.id],
+                                    pingingServers = pingingServers,
+                                    isDark = isDark,
+                                    onServerSelected = onServerSelected,
+                                    onToggleFavorite = onToggleFavorite,
+                                )
+                            }
+                            item(key = "section_mobile_header") {
+                                Column(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 16.dp, bottom = 2.dp),
+                                ) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text(
-                                            text = flagEmoji(server.countryCode),
-                                            fontSize = 28.sp,
-                                            modifier = Modifier.semantics {
-                                                contentDescription = flagDescriptionText
-                                            },
-                                        )
-                                        Spacer(Modifier.width(14.dp))
-                                        Text(
-                                            text = server.name.displayName(),
-                                            modifier = Modifier.weight(1f),
+                                            text = stringResource(R.string.servers_category_mobile),
                                             style = MaterialTheme.typography.titleMedium,
                                             fontWeight = FontWeight.Bold,
-                                            maxLines = 2,
-                                            overflow = TextOverflow.Ellipsis,
+                                            color = if (isDark) Color(0xFFFBBF24) else Color(0xFFD97706),
                                         )
-                                        IconButton(
-                                            onClick = { onToggleFavorite(server.id) },
-                                            modifier = Modifier.size(LevikDimensions.IconButtonSize),
+                                        Spacer(Modifier.width(8.dp))
+                                        Surface(
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = (if (isDark) Color(0xFFF59E0B) else Color(0xFFD97706)).copy(alpha = 0.15f),
                                         ) {
-                                            Icon(
-                                                painter = painterResource(
-                                                    if (isFav) R.drawable.ic_crown else R.drawable.ic_shield
-                                                ),
-                                                contentDescription = stringResource(R.string.favorite_toggle),
-                                                tint = if (isFav) LevikBlue else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                                                modifier = Modifier.size(20.dp),
+                                            Text(
+                                                text = stringResource(R.string.server_badge_mobile),
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (isDark) Color(0xFFFBBF24) else Color(0xFFD97706),
                                             )
                                         }
-                                        RadioButton(selected = selected, onClick = null)
                                     }
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.End,
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Text(
-                                            text = when {
-                                                server.id !in serverPings && pingingServers ->
-                                                    stringResource(R.string.server_ping_checking_short)
-                                                pingValue != null -> stringResource(
-                                                    R.string.ping_ms,
-                                                    pingValue.toInt(),
-                                                )
-                                                else -> stringResource(R.string.not_available)
-                                            },
-                                            color = pingValue?.let { ping ->
-                                                when {
-                                                    ping < 100 -> if (isDark) Color(0xFF4ADE80) else Color(0xFF16A34A)
-                                                    ping < 250 -> if (isDark) Color(0xFF38BDF8) else Color(0xFF2563EB)
-                                                    else -> MaterialTheme.colorScheme.error
-                                                }
-                                            } ?: MaterialTheme.colorScheme.onSurfaceVariant,
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            fontWeight = FontWeight.Bold,
-                                        )
-                                        Spacer(Modifier.width(6.dp))
-                                        SignalBarsIndicator(pingMs = pingValue)
-                                    }
+                                    Text(
+                                        text = stringResource(R.string.servers_category_mobile_desc),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
                                 }
+                            }
+                            items(mobileServers, key = TunnelServer::id) { server ->
+                                ServerItemCard(
+                                    server = server,
+                                    selected = !automaticServer && server.id == selectedServerId,
+                                    isFav = favoriteServerIds.contains(server.id),
+                                    pingValue = serverPings[server.id],
+                                    pingingServers = pingingServers,
+                                    isDark = isDark,
+                                    onServerSelected = onServerSelected,
+                                    onToggleFavorite = onToggleFavorite,
+                                )
+                            }
+                        } else {
+                            items(filtered, key = TunnelServer::id) { server ->
+                                ServerItemCard(
+                                    server = server,
+                                    selected = !automaticServer && server.id == selectedServerId,
+                                    isFav = favoriteServerIds.contains(server.id),
+                                    pingValue = serverPings[server.id],
+                                    pingingServers = pingingServers,
+                                    isDark = isDark,
+                                    onServerSelected = onServerSelected,
+                                    onToggleFavorite = onToggleFavorite,
+                                )
+                            }
+                        }
+                    } else {
+                        items(filtered, key = TunnelServer::id) { server ->
+                            ServerItemCard(
+                                server = server,
+                                selected = !automaticServer && server.id == selectedServerId,
+                                isFav = favoriteServerIds.contains(server.id),
+                                pingValue = serverPings[server.id],
+                                pingingServers = pingingServers,
+                                isDark = isDark,
+                                onServerSelected = onServerSelected,
+                                onToggleFavorite = onToggleFavorite,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ServerItemCard(
+    server: TunnelServer,
+    selected: Boolean,
+    isFav: Boolean,
+    pingValue: Long?,
+    pingingServers: Boolean,
+    isDark: Boolean,
+    onServerSelected: (String) -> Unit,
+    onToggleFavorite: (String) -> Unit,
+) {
+    val flagDescriptionText = flagDescription(server.countryCode)
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .selectable(
+                selected = selected,
+                role = Role.RadioButton,
+                onClick = { onServerSelected(server.id) },
+            ),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = androidx.compose.foundation.BorderStroke(
+            if (selected) 1.5.dp else 1.dp,
+            if (selected) LevikBlue else MaterialTheme.colorScheme.outline,
+        ),
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = flagEmoji(server.countryCode),
+                    fontSize = 28.sp,
+                    modifier = Modifier.semantics {
+                        contentDescription = flagDescriptionText
+                    },
+                )
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = server.name.displayName(),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        if (server.isMobileServer()) {
+                            Spacer(Modifier.width(6.dp))
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = (if (isDark) Color(0xFFF59E0B) else Color(0xFFD97706)).copy(alpha = 0.15f),
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.server_badge_mobile),
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isDark) Color(0xFFFBBF24) else Color(0xFFD97706),
+                                )
                             }
                         }
                     }
                 }
+                IconButton(
+                    onClick = { onToggleFavorite(server.id) },
+                    modifier = Modifier.size(LevikDimensions.IconButtonSize),
+                ) {
+                    Icon(
+                        painter = painterResource(
+                            if (isFav) R.drawable.ic_crown else R.drawable.ic_shield,
+                        ),
+                        contentDescription = stringResource(R.string.favorite_toggle),
+                        tint = if (isFav) LevikBlue else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+                RadioButton(selected = selected, onClick = null)
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = when {
+                        pingValue == null && pingingServers ->
+                            stringResource(R.string.server_ping_checking_short)
+                        pingValue != null -> stringResource(
+                            R.string.ping_ms,
+                            pingValue.toInt(),
+                        )
+                        else -> stringResource(R.string.not_available)
+                    },
+                    color = pingValue?.let { ping ->
+                        when {
+                            ping < 100 -> if (isDark) Color(0xFF4ADE80) else Color(0xFF16A34A)
+                            ping < 250 -> if (isDark) Color(0xFF38BDF8) else Color(0xFF2563EB)
+                            else -> MaterialTheme.colorScheme.error
+                        }
+                    } ?: MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(Modifier.width(6.dp))
+                SignalBarsIndicator(pingMs = pingValue)
             }
         }
     }

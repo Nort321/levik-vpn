@@ -993,9 +993,12 @@ class AppViewModel(
 
     fun openFreeProxyBot() {
         viewModelScope.launch {
-            effectChannel.send(AppEffect.OpenExternal(FREE_PROXY_BOT_URL))
+            val link = repository.fetchFreeProxyLink()
+            effectChannel.send(AppEffect.OpenExternal(link))
         }
     }
+
+    fun openFreeProxy() = openFreeProxyBot()
 
     fun openPrivacyPolicy() {
         viewModelScope.launch {
@@ -1703,6 +1706,8 @@ data class SpeedSample(
 
 enum class ServerFilterType {
     ALL,
+    REGULAR,
+    MOBILE,
     FAVORITES,
     FASTEST,
 }

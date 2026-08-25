@@ -81,7 +81,7 @@
     <string name="multi_mobile_component">Мобильный VPN</string>
     <string name="multi_component_usage">%1$s / %2$s · устройств %3$d / %4$d</string>
     <string name="levik_shield_title">Levik Shield</string>
-    <string name="levik_shield_description">Дополнительная защита этой подписки</string>
+    <string name="levik_shield_description">Защита от рекламы</string>
     <string name="free_proxy_button">Бесплатный Telegram-прокси</string>
     <string name="levik_status_operational">Сервисы Levik работают штатно</string>
     <string name="levik_status_incidents">Активных инцидентов: %1$d</string>
@@ -237,8 +237,18 @@
 
     <string name="search_servers">Поиск серверов и стран…</string>
     <string name="filter_all">Все</string>
+    <string name="filter_regular">Обычные</string>
+    <string name="filter_mobile">Мобильные (LTE)</string>
     <string name="filter_favorites">Избранные</string>
     <string name="filter_fastest">Быстрые</string>
+    <string name="servers_category_regular">Обычные серверы</string>
+    <string name="servers_category_regular_desc">Безлимитный трафик для любых устройств</string>
+    <string name="servers_category_mobile">Серверы для мобильных устройств (LTE)</string>
+    <string name="servers_category_mobile_desc">Оптимизировано для мобильных сетей · расходует лимит мультиподписки</string>
+    <string name="server_badge_mobile">LTE</string>
+    <string name="server_badge_regular">Безлимит</string>
+    <string name="selected_server_mobile">Мобильный сервер (LTE)</string>
+    <string name="selected_server_regular">Обычный сервер</string>
     <string name="favorite_toggle">В избранное</string>
     <string name="no_favorite_servers">Нет серверов в избранном</string>
 

@@ -171,6 +171,14 @@ class MobileApiClient(
         requiresIntegrity = false,
     )
 
+    suspend fun freeProxy(): FreeProxyResponse = request(
+        method = METHOD_POST,
+        path = FREE_PROXY_PATH,
+        body = EMPTY_JSON_BODY,
+        accessToken = null,
+        requiresIntegrity = false,
+    )
+
     suspend fun createSupportNote(noteRequest: CreateNoteRequest): CreateNoteResponse {
         return post<CreateNoteRequest, CreateNoteResponse>(
             path = NOTES_PATH,
@@ -373,6 +381,7 @@ class MobileApiClient(
         private const val TUNNEL_PROFILE_PATH = "/api/mobile/v1/tunnel-profile"
         private const val CHECK_IP_PATH = "/api/check"
         private const val STATUS_PATH = "/api/status"
+        private const val FREE_PROXY_PATH = "/api/free-proxy"
         private const val NOTES_PATH = "/api/notes"
         private const val BROWSER_CHECKS_PATH = "/api/monitor/v1/browser-checks"
         private const val METHOD_GET = "GET"

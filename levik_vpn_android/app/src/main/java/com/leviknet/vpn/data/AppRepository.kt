@@ -270,6 +270,12 @@ class AppRepository(
         refreshAccount()
     }
 
+    suspend fun fetchFreeProxyLink(): String {
+        val response = runCatching { apiClient.freeProxy() }.getOrNull()
+        val link = response?.link?.takeIf { response.ok && it.startsWith("tg://") }
+        return link ?: DEFAULT_FREE_PROXY_TG_LINK
+    }
+
     suspend fun catalog(): CatalogResponse = apiClient.catalog(requireToken())
 
     suspend fun createOrder(
@@ -417,6 +423,8 @@ class AppRepository(
         private val MULTIPLE_SPACES = Regex("\\s{2,}")
         private val UUID_OR_SAFE_ID = Regex("[A-Za-z0-9._:-]{8,128}")
         private val SHA_256_HEX = Regex("[a-f0-9]{64}")
+        const val DEFAULT_FREE_PROXY_TG_LINK =
+            "tg://proxy?server=mt.leviknet.com&port=31443&secret=1cb61164c70fc4d193569b05f34e3f7d"
     }
 }
 

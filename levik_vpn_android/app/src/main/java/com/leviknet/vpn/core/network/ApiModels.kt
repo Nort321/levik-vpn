@@ -233,6 +233,15 @@ data class FreeProxySummary(
 )
 
 @Serializable
+data class FreeProxyResponse(
+    val ok: Boolean,
+    val link: String? = null,
+    val deviceLimit: Int? = null,
+    val rateLimitMbps: Int? = null,
+    val message: String? = null,
+)
+
+@Serializable
 data class TunnelProfileRequest(
     val subscriptionId: String,
 )

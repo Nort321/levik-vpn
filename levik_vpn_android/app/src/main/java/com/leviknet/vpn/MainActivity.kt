@@ -178,18 +178,35 @@ class MainActivity : ComponentActivity() {
         try {
             startActivity(Intent(Intent.ACTION_VIEW, uri))
         } catch (_: ActivityNotFoundException) {
-            if (uri.scheme == "tg") {
-                val domain = uri.getQueryParameter("domain") ?: return
-                val start = uri.getQueryParameter("start")
-                val fallback = Uri.Builder()
-                    .scheme("https")
-                    .authority("t.me")
-                    .appendPath(domain)
-                    .apply {
-                        if (!start.isNullOrBlank()) appendQueryParameter("start", start)
+            if (uri.scheme?.equals("tg", ignoreCase = true) == true) {
+                val fallback = when (uri.host?.lowercase(java.util.Locale.ROOT)) {
+                    "proxy" -> {
+                        val query = uri.encodedQuery
+                        if (!query.isNullOrBlank()) {
+                            "https://t.me/proxy?$query".toUri()
+                        } else {
+                            "https://t.me/proxy".toUri()
+                        }
                     }
-                    .build()
-                runCatching { startActivity(Intent(Intent.ACTION_VIEW, fallback)) }
+                    "resolve" -> {
+                        val domain = uri.getQueryParameter("domain")
+                        if (!domain.isNullOrBlank()) {
+                            val start = uri.getQueryParameter("start")
+                            Uri.Builder()
+                                .scheme("https")
+                                .authority("t.me")
+                                .appendPath(domain)
+                                .apply {
+                                    if (!start.isNullOrBlank()) appendQueryParameter("start", start)
+                                }
+                                .build()
+                        } else null
+                    }
+                    else -> null
+                }
+                if (fallback != null) {
+                    runCatching { startActivity(Intent(Intent.ACTION_VIEW, fallback)) }
+                }
             }
         }
     }

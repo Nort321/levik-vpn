@@ -81,7 +81,7 @@
     <string name="multi_mobile_component">Mobile VPN</string>
     <string name="multi_component_usage">%1$s / %2$s · devices %3$d / %4$d</string>
     <string name="levik_shield_title">Levik Shield</string>
-    <string name="levik_shield_description">Additional protection for this subscription</string>
+    <string name="levik_shield_description">Ad protection</string>
     <string name="free_proxy_button">Free Telegram proxy</string>
     <string name="levik_status_operational">Levik services are operational</string>
     <string name="levik_status_incidents">Active incidents: %1$d</string>
@@ -237,8 +237,18 @@
 
     <string name="search_servers">Search servers or countries…</string>
     <string name="filter_all">All</string>
+    <string name="filter_regular">Regular</string>
+    <string name="filter_mobile">Mobile (LTE)</string>
     <string name="filter_favorites">Favorites</string>
     <string name="filter_fastest">Fastest</string>
+    <string name="servers_category_regular">Regular servers</string>
+    <string name="servers_category_regular_desc">Unlimited traffic for all your devices</string>
+    <string name="servers_category_mobile">Mobile servers (LTE)</string>
+    <string name="servers_category_mobile_desc">Optimized for mobile network · uses mobile quota</string>
+    <string name="server_badge_mobile">LTE</string>
+    <string name="server_badge_regular">Unlimited</string>
+    <string name="selected_server_mobile">Mobile server (LTE)</string>
+    <string name="selected_server_regular">Regular server</string>
     <string name="favorite_toggle">Toggle Favorite</string>
     <string name="no_favorite_servers">No favorite servers marked yet</string>
 
