@@ -1,5 +1,6 @@
 package com.leviknet.vpn.vpn
 
+import java.util.Locale
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 
@@ -49,3 +50,13 @@ data class TunnelServer(
     val countryCode: String,
     val outbound: JsonObject,
 )
+
+fun TunnelServer.isMobileServer(): Boolean {
+    val normalizedName = name.uppercase(Locale.ROOT)
+    val normalizedTag = tag.uppercase(Locale.ROOT)
+    return normalizedName.contains("LTE") ||
+        normalizedName.contains("MOBILE") ||
+        normalizedName.contains("МОБИЛЬН") ||
+        normalizedTag.contains("LTE") ||
+        normalizedTag.contains("MOBILE")
+}

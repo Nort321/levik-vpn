@@ -30,6 +30,7 @@ import com.leviknet.vpn.core.network.LevikStatusSnapshot
 import com.leviknet.vpn.core.network.MobileAccountResponse
 import com.leviknet.vpn.core.network.NetworkDiagnostics
 import com.leviknet.vpn.core.network.SubscriptionSummary
+import com.leviknet.vpn.core.network.TrafficSummary
 import com.leviknet.vpn.data.AntiDpiPreset
 import com.leviknet.vpn.data.AppRepository
 import com.leviknet.vpn.data.AppSettings
@@ -48,6 +49,7 @@ import com.leviknet.vpn.vpn.TunnelServer
 import com.leviknet.vpn.vpn.VpnConnectionState
 import com.leviknet.vpn.vpn.VpnController
 import com.leviknet.vpn.vpn.VpnSnapshot
+import com.leviknet.vpn.vpn.isMobileServer
 import java.time.Instant
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -88,14 +90,15 @@ class AppViewModel(
     private val effectChannel = Channel<AppEffect>(Channel.BUFFERED)
     private var loginStartJob: Job? = null
     private var loginPollJob: Job? = null
-    private var pendingOnboardingAction = OnboardingAction.LOGIN
     private var connectionPending = false
     private var searchDebounceJob: Job? = null
     private var isRefreshingAccount = false
     private var profileRefreshPending = false
+    private var lteTrafficSyncJob: Job? = null
     private var pendingWifiAutoConnect = false
     private val serverPingMutex = Mutex()
     private val perAppBaselineMutex = Mutex()
+    private val lteTrafficAccumulator = LteTrafficAccumulator()
 
     /** uid -> (rx, tx) captured at VPN connect; per-app stats show deltas from it. */
     @Volatile
@@ -112,7 +115,12 @@ class AppViewModel(
         }
         viewModelScope.launch {
             repository.account.collect { account ->
-                mutableState.update { it.copy(account = account) }
+                mutableState.update { current ->
+                    val withAccount = current.copy(account = account)
+                    withAccount.copy(
+                        lteTraffic = calculateLteTraffic(withAccount, current.vpn),
+                    )
+                }
             }
         }
         viewModelScope.launch {
@@ -139,8 +147,10 @@ class AppViewModel(
                         downloadBps = vpn.downloadBytesPerSecond,
                         uploadBps = vpn.uploadBytesPerSecond,
                     )).takeLast(30)
-                    current.copy(vpn = vpn, liveSpeedHistory = newHistory)
+                    val withVpn = current.copy(vpn = vpn, liveSpeedHistory = newHistory)
+                    withVpn.copy(lteTraffic = calculateLteTraffic(withVpn, vpn))
                 }
+                updateLteTrafficSync(vpn)
             }
         }
         viewModelScope.launch {
@@ -387,20 +397,11 @@ class AppViewModel(
     }
 
     fun beginLogin() {
-        beginOnboarding(OnboardingAction.LOGIN)
-    }
-
-    fun activateTrial() {
-        beginOnboarding(OnboardingAction.TRIAL)
-    }
-
-    private fun beginOnboarding(action: OnboardingAction) {
         if (mutableState.value.login is LoginUiState.Loading ||
             mutableState.value.showAppDataDisclosure
         ) {
             return
         }
-        pendingOnboardingAction = action
         loginStartJob?.cancel()
         loginStartJob = viewModelScope.launch {
             try {
@@ -408,7 +409,7 @@ class AppViewModel(
                     mutableState.update { it.copy(showAppDataDisclosure = true) }
                     return@launch
                 }
-                startOnboardingAction(action)
+                startLogin()
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
                 mutableState.update { it.copy(message = error.toUiMessage()) }
@@ -416,8 +417,16 @@ class AppViewModel(
         }
     }
 
-    private fun startOnboardingAction(action: OnboardingAction) {
-        if (action == OnboardingAction.TRIAL) startTrial() else startLogin()
+    fun activateTrial() {
+        if (
+            mutableState.value.session != SessionStatus.Authenticated ||
+            mutableState.value.account?.trial?.eligible != true ||
+            mutableState.value.login is LoginUiState.Loading ||
+            mutableState.value.refreshing
+        ) {
+            return
+        }
+        startTrial()
     }
 
     private fun startTrial() {
@@ -474,7 +483,7 @@ class AppViewModel(
             try {
                 repository.acceptAppDataDisclosure()
                 mutableState.update { it.copy(showAppDataDisclosure = false) }
-                startOnboardingAction(pendingOnboardingAction)
+                startLogin()
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
                 mutableState.update {
@@ -513,6 +522,63 @@ class AppViewModel(
         refreshSubscription(showErrors = true)
         viewModelScope.launch { refreshLevikStatus() }
     }
+
+    private fun calculateLteTraffic(
+        state: AppUiState,
+        vpn: VpnSnapshot,
+    ): TrafficSummary? {
+        if (vpn.state !in LTE_TRAFFIC_STATES) return null
+        val server = state.profile?.servers?.firstOrNull {
+            it.id == state.selectedServerId
+        } ?: return null
+        if (!server.isMobileServer()) return null
+        val account = state.account ?: return null
+        val subscriptionId = state.profile?.subscriptionId
+            ?: state.selectedSubscriptionId
+            ?: return null
+        val subscription = account.subscriptions.firstOrNull {
+            it.uuid == subscriptionId
+        } ?: return null
+        val traffic = subscription.components?.mobile?.traffic ?: subscription.traffic
+        if (traffic.limitBytes <= 0L) return null
+        val sessionBytes = saturatingAdd(
+            vpn.downloadedBytes.coerceAtLeast(0L),
+            vpn.uploadedBytes.coerceAtLeast(0L),
+        )
+        return traffic.copy(
+            usedBytes = lteTrafficAccumulator.estimateUsedBytes(
+                subscriptionId = subscriptionId,
+                serverId = server.id,
+                serverUsedBytes = traffic.usedBytes,
+                sessionBytes = sessionBytes,
+            ),
+        )
+    }
+
+    private fun updateLteTrafficSync(vpn: VpnSnapshot) {
+        val state = mutableState.value
+        val shouldSync = vpn.state == VpnConnectionState.CONNECTED &&
+            state.profile?.servers?.firstOrNull { it.id == state.selectedServerId }
+                ?.isMobileServer() == true
+        if (!shouldSync) {
+            lteTrafficSyncJob?.cancel()
+            lteTrafficSyncJob = null
+            return
+        }
+        if (lteTrafficSyncJob?.isActive == true) return
+        lteTrafficSyncJob = viewModelScope.launch {
+            while (true) {
+                delay(LTE_TRAFFIC_SYNC_INTERVAL_MS)
+                runCatching { repository.refreshAccount() }
+                    .onFailure { error ->
+                        if (error is CancellationException) throw error
+                    }
+            }
+        }
+    }
+
+    private fun saturatingAdd(left: Long, right: Long): Long =
+        if (Long.MAX_VALUE - left < right) Long.MAX_VALUE else left + right
 
     private suspend fun refreshLevikStatus() {
         runCatching { apiClient.status() }
@@ -1606,6 +1672,7 @@ class AppViewModel(
         private const val MIN_POLL_SECONDS = 2
         private const val MAX_POLL_SECONDS = 10
         private const val SERVER_PING_INTERVAL_MS = 30_000L
+        private const val LTE_TRAFFIC_SYNC_INTERVAL_MS = 15_000L
         private val PINGABLE_STATES = setOf(
             VpnConnectionState.DISCONNECTED,
             VpnConnectionState.ERROR,
@@ -1618,6 +1685,11 @@ class AppViewModel(
             VpnConnectionState.CONNECTED,
             VpnConnectionState.CONNECTING,
             VpnConnectionState.RECONNECTING,
+        )
+        private val LTE_TRAFFIC_STATES = setOf(
+            VpnConnectionState.CONNECTED,
+            VpnConnectionState.RECONNECTING,
+            VpnConnectionState.PAUSED,
         )
 
         fun factory(container: AppContainer): ViewModelProvider.Factory =
@@ -1719,6 +1791,7 @@ data class AppUiState(
     val selectedServerId: String? = null,
     val selectedSubscriptionId: String? = null,
     val vpn: VpnSnapshot = VpnSnapshot(),
+    val lteTraffic: TrafficSummary? = null,
     val pingMs: Long? = null,
     val serverPings: Map<String, Long?> = emptyMap(),
     val pingingServers: Boolean = false,
@@ -1786,11 +1859,6 @@ sealed interface LoginUiState {
         val authorization: ChallengeAuthorization,
     ) : LoginUiState
     data object Expired : LoginUiState
-}
-
-private enum class OnboardingAction {
-    LOGIN,
-    TRIAL,
 }
 
 enum class UiMessage {

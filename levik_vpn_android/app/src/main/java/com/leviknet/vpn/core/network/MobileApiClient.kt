@@ -50,11 +50,11 @@ class MobileApiClient(
         return response
     }
 
-    suspend fun activateTrial(request: TrialActivationRequest): TrialActivationResponse {
+    suspend fun activateTrial(accessToken: String): TrialActivationResponse {
         val response = post<TrialActivationRequest, TrialActivationResponse>(
             path = TRIAL_ACTIVATE_PATH,
-            request = request,
-            accessToken = null,
+            request = TrialActivationRequest(),
+            accessToken = accessToken,
             requiresIntegrity = true,
         )
         checkSuccess(response.ok)

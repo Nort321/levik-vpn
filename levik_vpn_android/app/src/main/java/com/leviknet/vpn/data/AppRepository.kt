@@ -12,11 +12,9 @@ import com.leviknet.vpn.core.network.OrderSummary
 import com.leviknet.vpn.core.network.LoginState
 import com.leviknet.vpn.core.network.MobileAccountResponse
 import com.leviknet.vpn.core.network.MobileApiClient
-import com.leviknet.vpn.core.network.TrialActivationRequest
 import com.leviknet.vpn.core.security.DeviceIdentity
 import com.leviknet.vpn.core.security.HybridProfileDecryptor
 import com.leviknet.vpn.core.security.SecureFileStore
-import com.leviknet.vpn.core.security.TrialDeviceBinding
 import com.leviknet.vpn.vpn.PreparedTunnelProfile
 import com.leviknet.vpn.vpn.TunnelProfileParser
 import com.leviknet.vpn.vpn.XrayRuntime
@@ -34,7 +32,6 @@ import kotlinx.serialization.json.Json
 class AppRepository(
     private val apiClient: MobileApiClient,
     private val deviceIdentity: DeviceIdentity,
-    private val trialDeviceBinding: TrialDeviceBinding,
     private val secureStore: SecureFileStore,
     private val profileDecryptor: HybridProfileDecryptor,
     private val xrayRuntime: XrayRuntime,
@@ -88,7 +85,7 @@ class AppRepository(
     suspend fun beginLogin(): AuthChallengeResponse = authMutex.withLock {
         val request = withContext(Dispatchers.IO) {
             AuthChallengeRequest(
-                accountActivationSupported = true,
+                accountActivationSupported = false,
                 publicKeySpki = deviceIdentity.publicKeySpkiBase64Url(),
                 deviceLabel = deviceLabel(),
                 deviceModel = Build.MODEL.sanitized(MAX_DEVICE_FIELD_LENGTH),
@@ -103,30 +100,8 @@ class AppRepository(
     }
 
     suspend fun activateTrial(): MobileAccountResponse = authMutex.withLock {
-        val request = withContext(Dispatchers.IO) {
-            TrialActivationRequest(
-                trialBinding = trialDeviceBinding.value(),
-                publicKeySpki = deviceIdentity.publicKeySpkiBase64Url(),
-                deviceLabel = deviceLabel(),
-                deviceModel = Build.MODEL.sanitized(MAX_DEVICE_FIELD_LENGTH),
-                deviceOs = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
-                    .sanitized(MAX_DEVICE_FIELD_LENGTH),
-                appVersion = BuildConfig.VERSION_NAME,
-                requestSigningAlgorithm = deviceIdentity.requestSigningAlgorithm(),
-                profileEncryptionAlgorithm = deviceIdentity.profileEncryptionAlgorithm(),
-            )
-        }
-        val response = apiClient.activateTrial(request)
-        require(response.accessToken.length in 32..MAX_ACCESS_TOKEN_LENGTH) {
-            "Invalid access token"
-        }
-        withContext(Dispatchers.IO) {
-            secureStore.put(
-                SecureFileStore.SESSION_TOKEN,
-                response.accessToken.encodeToByteArray(),
-            )
-        }
-        _session.value = SessionStatus.Authenticated
+        val token = requireToken()
+        apiClient.activateTrial(token)
         refreshAccount()
     }
 

@@ -113,6 +113,7 @@ import com.leviknet.vpn.core.network.DiagnosticReport
 import com.leviknet.vpn.core.network.LevikStatusSnapshot
 import com.leviknet.vpn.core.network.MobileAccountResponse
 import com.leviknet.vpn.core.network.SubscriptionSummary
+import com.leviknet.vpn.core.network.TrafficSummary
 import com.leviknet.vpn.data.AntiDpiPreset
 import com.leviknet.vpn.data.DailyTraffic
 import com.leviknet.vpn.data.DnsProvider
@@ -127,6 +128,7 @@ import com.leviknet.vpn.vpn.TunnelServer
 import com.leviknet.vpn.vpn.VpnConnectionState
 import com.leviknet.vpn.vpn.VpnFailure
 import com.leviknet.vpn.vpn.VpnSnapshot
+import com.leviknet.vpn.vpn.isMobileServer
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -176,7 +178,6 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     login = state.login,
                     snackbarHostState = snackbarHostState,
                     onLogin = viewModel::beginLogin,
-                    onTrial = viewModel::activateTrial,
                     onFreeProxy = viewModel::openFreeProxyBot,
                     onOpenAgain = viewModel::openLoginUriAgain,
                     onPrivacyPolicy = viewModel::openPrivacyPolicy,
@@ -186,6 +187,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     snackbarHostState = snackbarHostState,
                     onTabSelected = viewModel::selectTab,
                     onConnect = viewModel::connectOrDisconnect,
+                    onTrial = viewModel::activateTrial,
                     onOpenPauseVpn = { showPauseDialog = true },
                     onResumeVpn = viewModel::resumeVpn,
                     onServerSelected = viewModel::selectServer,
@@ -713,7 +715,6 @@ private fun LoginScreen(
     login: LoginUiState,
     snackbarHostState: SnackbarHostState,
     onLogin: () -> Unit,
-    onTrial: () -> Unit,
     onFreeProxy: () -> Unit,
     onOpenAgain: () -> Unit,
     onPrivacyPolicy: () -> Unit,
@@ -826,35 +827,6 @@ private fun LoginScreen(
                     Text(stringResource(R.string.login_continue), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
-            if (login == LoginUiState.Idle) {
-                Spacer(Modifier.height(10.dp))
-                OutlinedButton(
-                    onClick = onTrial,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(LevikDimensions.ButtonHeight),
-                    shape = RoundedCornerShape(14.dp),
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_shield),
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp),
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        stringResource(R.string.login_trial),
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                }
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = stringResource(R.string.login_trial_note),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                )
-            }
             Spacer(Modifier.height(14.dp))
             TextButton(onClick = onFreeProxy) {
                 Icon(
@@ -887,6 +859,7 @@ private fun MainContent(
     snackbarHostState: SnackbarHostState,
     onTabSelected: (AppTab) -> Unit,
     onConnect: () -> Unit,
+    onTrial: () -> Unit,
     onOpenPauseVpn: () -> Unit,
     onResumeVpn: () -> Unit,
     onServerSelected: (String) -> Unit,
@@ -945,6 +918,7 @@ private fun MainContent(
                 modifier = Modifier.padding(padding),
                 state = state,
                 onConnect = onConnect,
+                onTrial = onTrial,
                 onOpenPauseVpn = onOpenPauseVpn,
                 onResumeVpn = onResumeVpn,
                 onProfile = { onTabSelected(AppTab.PROFILE) },
@@ -1107,6 +1081,7 @@ private fun HomeScreen(
     modifier: Modifier,
     state: AppUiState,
     onConnect: () -> Unit,
+    onTrial: () -> Unit,
     onOpenPauseVpn: () -> Unit,
     onResumeVpn: () -> Unit,
     onProfile: () -> Unit,
@@ -1118,6 +1093,8 @@ private fun HomeScreen(
         it.id == state.selectedServerId
     }
     val isConnected = state.vpn.state == VpnConnectionState.CONNECTED
+    val account = state.account
+    val trialAvailable = account?.trial?.eligible == true
 
     Column(
         modifier = modifier
@@ -1254,6 +1231,52 @@ private fun HomeScreen(
             }
         }
 
+        if (trialAvailable) {
+            Spacer(Modifier.height(22.dp))
+            ElevatedCard(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.elevatedCardColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                ),
+                elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
+            ) {
+                Column(Modifier.padding(18.dp)) {
+                    Text(
+                        text = stringResource(R.string.trial_mobile_title),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = stringResource(R.string.trial_mobile_description),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(14.dp))
+                    Button(
+                        onClick = onTrial,
+                        enabled = !state.refreshing && state.login !is LoginUiState.Loading,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(LevikDimensions.ButtonHeight),
+                        shape = RoundedCornerShape(14.dp),
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_shield),
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            stringResource(R.string.trial_mobile_activate),
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+            }
+        }
+
         // Central Power Button with Glowing Ring and Status
         Spacer(Modifier.height(28.dp))
         Box(
@@ -1362,6 +1385,7 @@ private fun HomeScreen(
         ServerSummaryCard(
             server = selectedServer,
             vpn = state.vpn,
+            lteTraffic = state.lteTraffic,
             pingMs = state.pingMs,
             automaticServer = state.automaticServer,
             onClick = onServers,
@@ -1670,6 +1694,7 @@ private fun PowerButton(
 private fun ServerSummaryCard(
     server: TunnelServer?,
     vpn: VpnSnapshot,
+    lteTraffic: TrafficSummary?,
     pingMs: Long?,
     automaticServer: Boolean,
     onClick: () -> Unit,
@@ -1800,13 +1825,25 @@ private fun ServerSummaryCard(
                         )
                         Spacer(Modifier.width(7.dp))
                         Text(
-                            text = stringResource(R.string.total_data_usage),
+                            text = stringResource(
+                                if (lteTraffic == null) {
+                                    R.string.total_data_usage
+                                } else {
+                                    R.string.lte_traffic_usage
+                                },
+                            ),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                     Spacer(Modifier.height(5.dp))
-                    Text(text = dataUsageValue(vpn.downloadedBytes + vpn.uploadedBytes))
+                    Text(
+                        text = if (lteTraffic == null) {
+                            dataUsageValue(vpn.downloadedBytes + vpn.uploadedBytes)
+                        } else {
+                            trafficLimitValue(lteTraffic.usedBytes, lteTraffic.limitBytes)
+                        },
+                    )
                 }
                 Spacer(Modifier.width(14.dp))
                 Box(
@@ -1840,6 +1877,20 @@ private fun ServerSummaryCard(
                     )
                 }
             }
+            if (lteTraffic != null) {
+                Spacer(Modifier.height(14.dp))
+                LinearProgressIndicator(
+                    progress = {
+                        (lteTraffic.usedBytes.toDouble() / lteTraffic.limitBytes.toDouble())
+                            .coerceIn(0.0, 1.0)
+                            .toFloat()
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp)),
+                )
+            }
         }
     }
 }
@@ -1867,6 +1918,25 @@ private fun dataUsageValue(bytes: Long): AnnotatedString {
         withStyle(unitStyle) {
             append(formatted.substring(separator + 1))
         }
+    }
+}
+
+@Composable
+private fun trafficLimitValue(usedBytes: Long, limitBytes: Long): AnnotatedString {
+    val valueStyle = SpanStyle(
+        fontSize = 17.sp,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onSurface,
+    )
+    val separatorStyle = SpanStyle(
+        fontSize = 13.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    return buildAnnotatedString {
+        withStyle(valueStyle) { append(formatBytes(usedBytes)) }
+        withStyle(separatorStyle) { append(" / ") }
+        withStyle(valueStyle) { append(formatBytes(limitBytes)) }
     }
 }
 
@@ -1922,13 +1992,6 @@ private fun flagEmoji(countryCode: String?): String {
 }
 
 private fun String.displayName(): String = removePrefix("🚀").trimStart().ifBlank { this }
-
-private fun TunnelServer.isMobileServer(): Boolean {
-    val n = name.uppercase(Locale.ROOT)
-    val t = tag.uppercase(Locale.ROOT)
-    return n.contains("LTE") || n.contains("MOBILE") || n.contains("МОБИЛЬН") ||
-        t.contains("LTE") || t.contains("MOBILE")
-}
 
 @Composable
 private fun flagDescription(countryCode: String?): String =

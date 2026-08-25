@@ -43,22 +43,11 @@ data class AuthStatusResponse(
 )
 
 @Serializable
-data class TrialActivationRequest(
-    val trialBinding: String,
-    val publicKeySpki: String,
-    val deviceLabel: String,
-    val deviceModel: String,
-    val deviceOs: String,
-    val appVersion: String,
-    val requestSigningAlgorithm: String,
-    val profileEncryptionAlgorithm: String,
-)
+class TrialActivationRequest
 
 @Serializable
 data class TrialActivationResponse(
     val ok: Boolean,
-    val accessToken: String,
-    val expiresAt: String,
     val subscriptionId: String,
 )
 
