@@ -308,27 +308,15 @@ class MobileApiClient(
             )
 
             if (status !in 200..299) {
-                if (status == HttpsURLConnection.HTTP_UNAUTHORIZED) {
-                    throw ApiException.Unauthorized()
-                }
-                if (isJson && responseBody.isNotEmpty()) {
-                    val failure = runCatching {
+                val failure = if (isJson && responseBody.isNotEmpty()) {
+                    runCatching {
                         json.decodeFromString<ApiFailureResponse>(responseBody.decodeToString())
-                    }.getOrNull()
-                    if (failure != null) {
-                        throw ApiException.Rejected(
-                            code = failure.error.code,
-                            retryable = failure.error.retryable,
-                            status = status,
-                        )
-                    }
+                    }.getOrNull()?.error
+                } else {
+                    null
                 }
-                val retryable = status in setOf(408, 425, 429, 500, 502, 503, 504)
-                throw ApiException.Rejected(
-                    code = "http_$status",
-                    retryable = retryable,
-                    status = status,
-                )
+                responseBody.fill(0)
+                throw mobileApiExceptionForHttpFailure(status, failure)
             }
 
             if (!isJson) {
@@ -409,3 +397,34 @@ class MobileApiClient(
             "LevikVPN-Android/${BuildConfig.VERSION_NAME} (${BuildConfig.APPLICATION_ID})"
     }
 }
+
+internal fun mobileApiExceptionForHttpFailure(
+    status: Int,
+    failure: ApiFailure?,
+): ApiException {
+    if (
+        status == HttpsURLConnection.HTTP_UNAUTHORIZED &&
+        failure?.code in TERMINAL_SESSION_ERROR_CODES
+    ) {
+        return ApiException.Unauthorized()
+    }
+    if (failure != null) {
+        return ApiException.Rejected(
+            code = failure.code,
+            retryable = failure.retryable,
+            status = status,
+        )
+    }
+    return ApiException.Rejected(
+        code = "http_$status",
+        retryable = status in RETRYABLE_HTTP_STATUSES,
+        status = status,
+    )
+}
+
+private val TERMINAL_SESSION_ERROR_CODES = setOf(
+    "authentication_required",
+    "session_expired",
+)
+
+private val RETRYABLE_HTTP_STATUSES = setOf(408, 425, 429, 500, 502, 503, 504)
