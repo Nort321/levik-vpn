@@ -371,7 +371,7 @@ class AppViewModel(
 
             for (subscription in orderedSubs) {
                 try {
-                    val profile = repository.prepareTunnel(subscription.uuid)
+                    val profile = prepareTunnelWithRetry(subscription.uuid)
                     ensureSelectedSubscription(subscription.uuid)
                     val selected = selectServerForProfile(profile)
                     mutableState.update {
@@ -814,7 +814,7 @@ class AppViewModel(
                         reusableCached
                     } else {
                         try {
-                            repository.prepareTunnel(subscription.uuid).also {
+                            prepareTunnelWithRetry(subscription.uuid).also {
                                 profileRefreshPending = false
                             }
                         } catch (error: Throwable) {
@@ -963,7 +963,7 @@ class AppViewModel(
         viewModelScope.launch {
             mutableState.update { it.copy(refreshing = true, message = null) }
             try {
-                val profile = repository.prepareTunnel(subscription.uuid)
+                val profile = prepareTunnelWithRetry(subscription.uuid)
                 ensureSelectedSubscription(subscription.uuid)
                 profileRefreshPending = false
                 val selected = selectServerForProfile(profile)
@@ -1242,7 +1242,7 @@ class AppViewModel(
                 return syncCachedProfile()
             }
             return try {
-                val refreshed = repository.prepareTunnel(requireNotNull(matchingSubscription).uuid)
+                val refreshed = prepareTunnelWithRetry(requireNotNull(matchingSubscription).uuid)
                 profileRefreshPending = false
                 syncCachedProfile()
                 refreshed
@@ -1264,6 +1264,27 @@ class AppViewModel(
             vpnController.disconnect()
         }
         return profile
+    }
+
+    private suspend fun prepareTunnelWithRetry(
+        subscriptionId: String,
+    ): PreparedTunnelProfile {
+        var failedAttempts = 0
+        while (true) {
+            try {
+                return repository.prepareTunnel(subscriptionId)
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                val retryDelay = profileLoadRetryDelayMillis(error, failedAttempts)
+                    ?: throw error
+                failedAttempts += 1
+                AppLogger.w(
+                    "AppViewModel",
+                    "Tunnel profile load failed temporarily; retrying (attempt $failedAttempts)",
+                )
+                delay(retryDelay)
+            }
+        }
     }
 
     private suspend fun selectServerForProfile(profile: PreparedTunnelProfile): String {
@@ -1789,6 +1810,18 @@ class AppViewModel(
                 }
             }
     }
+}
+
+private val PROFILE_LOAD_RETRY_DELAYS_MS = longArrayOf(400L, 1_200L, 2_400L)
+
+internal fun profileLoadRetryDelayMillis(
+    error: Throwable,
+    failedAttempts: Int,
+): Long? {
+    if (failedAttempts !in PROFILE_LOAD_RETRY_DELAYS_MS.indices) return null
+    val retryable = error is ApiException.Network ||
+        error is ApiException.Rejected && error.retryable
+    return PROFILE_LOAD_RETRY_DELAYS_MS[failedAttempts].takeIf { retryable }
 }
 
 internal fun cachedProfileIsUsable(
