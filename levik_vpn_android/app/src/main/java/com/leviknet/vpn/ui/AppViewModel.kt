@@ -90,6 +90,8 @@ class AppViewModel(
     private val effectChannel = Channel<AppEffect>(Channel.BUFFERED)
     private var loginStartJob: Job? = null
     private var loginPollJob: Job? = null
+    private var updateCheckJob: Job? = null
+    private var pendingOnboardingAction: OnboardingAction? = null
     private var connectionPending = false
     private var searchDebounceJob: Job? = null
     private var isRefreshingAccount = false
@@ -294,10 +296,6 @@ class AppViewModel(
                     mutableState.update { it.copy(updateState = updateState) }
                 }
             }
-            viewModelScope.launch {
-                delay(2000L)
-                updateManager.checkForUpdates(silent = true)
-            }
         }
         trafficHistoryStore?.let { store ->
             viewModelScope.launch {
@@ -396,12 +394,33 @@ class AppViewModel(
         }
     }
 
-    fun beginLogin() {
+    fun beginTelegramLogin() = beginOnboarding(OnboardingAction.TELEGRAM_LOGIN)
+
+    fun beginWebsiteLogin() = beginOnboarding(OnboardingAction.WEBSITE_LOGIN)
+
+    fun activateDeviceTrial() = beginOnboarding(OnboardingAction.DEVICE_TRIAL)
+
+    fun activateLteTrial() {
+        if (mutableState.value.session == SessionStatus.Authenticated) {
+            if (
+                mutableState.value.account?.trial?.eligible == true &&
+                mutableState.value.login !is LoginUiState.Loading &&
+                !mutableState.value.refreshing
+            ) {
+                startMobileTrial()
+            }
+        } else {
+            beginOnboarding(OnboardingAction.TELEGRAM_LTE_TRIAL)
+        }
+    }
+
+    private fun beginOnboarding(action: OnboardingAction) {
         if (mutableState.value.login is LoginUiState.Loading ||
             mutableState.value.showAppDataDisclosure
         ) {
             return
         }
+        pendingOnboardingAction = action
         loginStartJob?.cancel()
         loginStartJob = viewModelScope.launch {
             try {
@@ -409,7 +428,7 @@ class AppViewModel(
                     mutableState.update { it.copy(showAppDataDisclosure = true) }
                     return@launch
                 }
-                startLogin()
+                startOnboardingAction(action)
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
                 mutableState.update { it.copy(message = error.toUiMessage()) }
@@ -417,27 +436,65 @@ class AppViewModel(
         }
     }
 
-    fun activateTrial() {
-        if (
-            mutableState.value.session != SessionStatus.Authenticated ||
-            mutableState.value.account?.trial?.eligible != true ||
-            mutableState.value.login is LoginUiState.Loading ||
-            mutableState.value.refreshing
-        ) {
-            return
-        }
-        startTrial()
+    fun retryLogin() {
+        startOnboardingAction(
+            pendingOnboardingAction ?: OnboardingAction.TELEGRAM_LOGIN,
+        )
     }
 
-    private fun startTrial() {
+    private fun startOnboardingAction(action: OnboardingAction) {
+        when (action) {
+            OnboardingAction.DEVICE_TRIAL -> startDeviceTrial()
+            OnboardingAction.TELEGRAM_LOGIN -> startLogin(
+                accountActivationSupported = false,
+                activateLteTrialAfterLogin = false,
+            )
+            OnboardingAction.TELEGRAM_LTE_TRIAL -> startLogin(
+                accountActivationSupported = false,
+                activateLteTrialAfterLogin = true,
+            )
+            OnboardingAction.WEBSITE_LOGIN -> startLogin(
+                accountActivationSupported = true,
+                activateLteTrialAfterLogin = false,
+            )
+        }
+    }
+
+    private fun startDeviceTrial() {
         loginPollJob?.cancel()
         loginPollJob = viewModelScope.launch {
             mutableState.update { it.copy(login = LoginUiState.Loading, message = null) }
             try {
-                val account = repository.activateTrial()
+                val account = repository.activateDeviceTrial()
                 val profile = reconcileAuthenticatedProfile(
                     account = account,
                     hadCachedProfile = false,
+                    forceProfileRefresh = true,
+                )
+                if (profile != null && settings.automaticServer.value) {
+                    selectBestServer(profile)
+                }
+                mutableState.update { it.copy(login = LoginUiState.Idle) }
+                pendingOnboardingAction = null
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                mutableState.update {
+                    it.copy(login = LoginUiState.Idle, message = error.toUiMessage())
+                }
+                pendingOnboardingAction = null
+            }
+        }
+    }
+
+    private fun startMobileTrial() {
+        loginPollJob?.cancel()
+        loginPollJob = viewModelScope.launch {
+            mutableState.update { it.copy(login = LoginUiState.Loading, message = null) }
+            try {
+                val account = repository.activateMobileTrial()
+                val profile = reconcileAuthenticatedProfile(
+                    account = account,
+                    hadCachedProfile = mutableState.value.profile != null,
                     forceProfileRefresh = true,
                 )
                 if (profile != null && settings.automaticServer.value) {
@@ -453,12 +510,15 @@ class AppViewModel(
         }
     }
 
-    private fun startLogin() {
+    private fun startLogin(
+        accountActivationSupported: Boolean,
+        activateLteTrialAfterLogin: Boolean,
+    ) {
         loginPollJob?.cancel()
         loginPollJob = viewModelScope.launch {
             mutableState.update { it.copy(login = LoginUiState.Loading, message = null) }
             try {
-                val challenge = repository.beginLogin()
+                val challenge = repository.beginLogin(accountActivationSupported)
                 val authorization = requireNotNull(
                     AuthorizationChallengePolicy.resolve(challenge),
                 ) {
@@ -468,8 +528,9 @@ class AppViewModel(
                     it.copy(login = LoginUiState.Waiting(challenge, authorization))
                 }
                 openChallengeAuthorization(authorization)
-                pollChallenge(challenge)
+                pollChallenge(challenge, activateLteTrialAfterLogin)
             } catch (error: Throwable) {
+                if (error is CancellationException) throw error
                 mutableState.update {
                     it.copy(login = LoginUiState.Idle, message = error.toUiMessage())
                 }
@@ -483,7 +544,9 @@ class AppViewModel(
             try {
                 repository.acceptAppDataDisclosure()
                 mutableState.update { it.copy(showAppDataDisclosure = false) }
-                startLogin()
+                startOnboardingAction(
+                    pendingOnboardingAction ?: OnboardingAction.TELEGRAM_LOGIN,
+                )
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
                 mutableState.update {
@@ -497,6 +560,7 @@ class AppViewModel(
     }
 
     fun declineAppDataDisclosure() {
+        pendingOnboardingAction = null
         mutableState.update { it.copy(showAppDataDisclosure = false) }
     }
 
@@ -1082,7 +1146,10 @@ class AppViewModel(
         mutableState.update { it.copy(message = null) }
     }
 
-    private suspend fun pollChallenge(challenge: AuthChallengeResponse) {
+    private suspend fun pollChallenge(
+        challenge: AuthChallengeResponse,
+        activateLteTrialAfterLogin: Boolean,
+    ) {
         val expiresAt = Instant.parse(challenge.expiresAt)
         var interval = challenge.pollIntervalSeconds.coerceIn(MIN_POLL_SECONDS, MAX_POLL_SECONDS)
         while (Instant.now().isBefore(expiresAt)) {
@@ -1096,14 +1163,20 @@ class AppViewModel(
                 }
                 LoginPollResult.Authenticated -> {
                     val hadCachedProfile = mutableState.value.profile != null
-                    repository.account.value?.let { account ->
+                    val account = if (activateLteTrialAfterLogin) {
+                        repository.activateMobileTrial()
+                    } else {
+                        repository.account.value
+                    }
+                    account?.let {
                         reconcileAuthenticatedProfile(
-                            account = account,
+                            account = it,
                             hadCachedProfile = hadCachedProfile,
                             forceProfileRefresh = true,
                         )
                     }
                     mutableState.update { it.copy(login = LoginUiState.Idle, message = null) }
+                    pendingOnboardingAction = null
                     return
                 }
                 LoginPollResult.Expired -> {
@@ -1574,6 +1647,13 @@ class AppViewModel(
         }
     }
 
+    fun onAppForegrounded() {
+        if (!BuildConfig.SELF_UPDATE_ENABLED || updateCheckJob?.isActive == true) return
+        updateCheckJob = viewModelScope.launch {
+            updateManager.checkForUpdates(silent = true)
+        }
+    }
+
     fun downloadAndInstallUpdate(update: AppUpdateDto) {
         if (!BuildConfig.SELF_UPDATE_ENABLED) return
         viewModelScope.launch {
@@ -1849,6 +1929,13 @@ enum class AppTab {
     SERVERS,
     STATS,
     PROFILE,
+}
+
+private enum class OnboardingAction {
+    DEVICE_TRIAL,
+    TELEGRAM_LOGIN,
+    TELEGRAM_LTE_TRIAL,
+    WEBSITE_LOGIN,
 }
 
 sealed interface LoginUiState {

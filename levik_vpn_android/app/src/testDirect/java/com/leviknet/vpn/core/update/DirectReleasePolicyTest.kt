@@ -104,11 +104,10 @@ class DirectReleasePolicyTest {
     }
 
     @Test
-    fun `normal interval is between twelve and twenty four hours`() {
-        val twelveHours = 12L * 60 * 60 * 1000
-        val twentyFourHours = 24L * 60 * 60 * 1000
+    fun `foreground checks refresh the stable channel every six hours`() {
+        val sixHours = 6L * 60 * 60 * 1000
 
-        assertTrue(UpdateCheckSchedule.SUCCESS_INTERVAL_MS in twelveHours..twentyFourHours)
+        assertEquals(sixHours, UpdateCheckSchedule.SUCCESS_INTERVAL_MS)
     }
 
     @Test

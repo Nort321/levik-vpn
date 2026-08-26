@@ -8,6 +8,7 @@ import com.leviknet.vpn.core.network.AuthChallengeResponse
 import com.leviknet.vpn.core.network.AuthStatusRequest
 import com.leviknet.vpn.core.network.CatalogResponse
 import com.leviknet.vpn.core.network.CreateOrderRequest
+import com.leviknet.vpn.core.network.DeviceTrialActivationRequest
 import com.leviknet.vpn.core.network.OrderSummary
 import com.leviknet.vpn.core.network.LoginState
 import com.leviknet.vpn.core.network.MobileAccountResponse
@@ -15,6 +16,7 @@ import com.leviknet.vpn.core.network.MobileApiClient
 import com.leviknet.vpn.core.security.DeviceIdentity
 import com.leviknet.vpn.core.security.HybridProfileDecryptor
 import com.leviknet.vpn.core.security.SecureFileStore
+import com.leviknet.vpn.core.security.TrialDeviceBinding
 import com.leviknet.vpn.vpn.PreparedTunnelProfile
 import com.leviknet.vpn.vpn.TunnelProfileParser
 import com.leviknet.vpn.vpn.XrayRuntime
@@ -32,6 +34,7 @@ import kotlinx.serialization.json.Json
 class AppRepository(
     private val apiClient: MobileApiClient,
     private val deviceIdentity: DeviceIdentity,
+    private val trialDeviceBinding: TrialDeviceBinding,
     private val secureStore: SecureFileStore,
     private val profileDecryptor: HybridProfileDecryptor,
     private val xrayRuntime: XrayRuntime,
@@ -82,10 +85,29 @@ class AppRepository(
         )
     }
 
-    suspend fun beginLogin(): AuthChallengeResponse = authMutex.withLock {
+    suspend fun beginLogin(accountActivationSupported: Boolean): AuthChallengeResponse =
+        authMutex.withLock {
+            val request = withContext(Dispatchers.IO) {
+                AuthChallengeRequest(
+                    accountActivationSupported = accountActivationSupported,
+                    publicKeySpki = deviceIdentity.publicKeySpkiBase64Url(),
+                    deviceLabel = deviceLabel(),
+                    deviceModel = Build.MODEL.sanitized(MAX_DEVICE_FIELD_LENGTH),
+                    deviceOs = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
+                        .sanitized(MAX_DEVICE_FIELD_LENGTH),
+                    appVersion = BuildConfig.VERSION_NAME,
+                    requestSigningAlgorithm = deviceIdentity.requestSigningAlgorithm(),
+                    profileEncryptionAlgorithm = deviceIdentity.profileEncryptionAlgorithm(),
+                )
+            }
+            apiClient.createChallenge(request)
+        }
+
+    suspend fun activateDeviceTrial(): MobileAccountResponse = authMutex.withLock {
+        check(readToken() == null) { "A signed-in session cannot be replaced by a device trial" }
         val request = withContext(Dispatchers.IO) {
-            AuthChallengeRequest(
-                accountActivationSupported = false,
+            DeviceTrialActivationRequest(
+                trialBinding = trialDeviceBinding.value(),
                 publicKeySpki = deviceIdentity.publicKeySpkiBase64Url(),
                 deviceLabel = deviceLabel(),
                 deviceModel = Build.MODEL.sanitized(MAX_DEVICE_FIELD_LENGTH),
@@ -96,12 +118,24 @@ class AppRepository(
                 profileEncryptionAlgorithm = deviceIdentity.profileEncryptionAlgorithm(),
             )
         }
-        apiClient.createChallenge(request)
+        val response = apiClient.activateDeviceTrial(request)
+        val accessToken = requireNotNull(response.accessToken)
+        require(accessToken.length in 32..MAX_ACCESS_TOKEN_LENGTH) {
+            "Invalid access token"
+        }
+        withContext(Dispatchers.IO) {
+            secureStore.put(
+                SecureFileStore.SESSION_TOKEN,
+                accessToken.encodeToByteArray(),
+            )
+        }
+        _session.value = SessionStatus.Authenticated
+        refreshAccount()
     }
 
-    suspend fun activateTrial(): MobileAccountResponse = authMutex.withLock {
+    suspend fun activateMobileTrial(): MobileAccountResponse = authMutex.withLock {
         val token = requireToken()
-        apiClient.activateTrial(token)
+        apiClient.activateMobileTrial(token)
         refreshAccount()
     }
 

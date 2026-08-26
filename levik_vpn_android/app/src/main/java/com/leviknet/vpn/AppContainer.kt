@@ -9,6 +9,7 @@ import com.leviknet.vpn.core.network.createAppAttestationProvider
 import com.leviknet.vpn.core.security.DeviceIdentity
 import com.leviknet.vpn.core.security.HybridProfileDecryptor
 import com.leviknet.vpn.core.security.SecureFileStore
+import com.leviknet.vpn.core.security.TrialDeviceBinding
 import com.leviknet.vpn.core.update.createAppUpdateManager
 import com.leviknet.vpn.data.AppRepository
 import com.leviknet.vpn.data.AppSettings
@@ -39,6 +40,7 @@ class AppContainer(application: Application) {
     }
 
     val deviceIdentity = DeviceIdentity()
+    private val trialDeviceBinding = TrialDeviceBinding(application)
     val secureStore = SecureFileStore(application)
     val settings = AppSettings(application)
     val russianRoutingData = RussianRoutingData(application)
@@ -66,6 +68,7 @@ class AppContainer(application: Application) {
     val repository = AppRepository(
         apiClient = apiClient,
         deviceIdentity = deviceIdentity,
+        trialDeviceBinding = trialDeviceBinding,
         secureStore = secureStore,
         profileDecryptor = profileDecryptor,
         xrayRuntime = xrayRuntime,

@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -108,6 +109,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.leviknet.vpn.R
+import com.leviknet.vpn.core.auth.ChallengeAuthorization
 import com.leviknet.vpn.core.logger.LogEntry
 import com.leviknet.vpn.core.network.DiagnosticReport
 import com.leviknet.vpn.core.network.LevikStatusSnapshot
@@ -177,9 +179,13 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                 state.session == SessionStatus.SignedOut && state.profile == null -> LoginScreen(
                     login = state.login,
                     snackbarHostState = snackbarHostState,
-                    onLogin = viewModel::beginLogin,
+                    onTelegramLogin = viewModel::beginTelegramLogin,
+                    onWebsiteLogin = viewModel::beginWebsiteLogin,
+                    onDeviceTrial = viewModel::activateDeviceTrial,
+                    onLteTrial = viewModel::activateLteTrial,
                     onFreeProxy = viewModel::openFreeProxyBot,
                     onOpenAgain = viewModel::openLoginUriAgain,
+                    onRetry = viewModel::retryLogin,
                     onPrivacyPolicy = viewModel::openPrivacyPolicy,
                 )
                 else -> MainContent(
@@ -187,7 +193,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     snackbarHostState = snackbarHostState,
                     onTabSelected = viewModel::selectTab,
                     onConnect = viewModel::connectOrDisconnect,
-                    onTrial = viewModel::activateTrial,
+                    onTrial = viewModel::activateLteTrial,
                     onOpenPauseVpn = { showPauseDialog = true },
                     onResumeVpn = viewModel::resumeVpn,
                     onServerSelected = viewModel::selectServer,
@@ -196,7 +202,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     onFreeProxy = viewModel::openFreeProxyBot,
                     onPrivacyPolicy = viewModel::openPrivacyPolicy,
                     onDeleteAccount = viewModel::openAccountDeletion,
-                    onRelinkAccount = viewModel::beginLogin,
+                    onRelinkAccount = viewModel::beginTelegramLogin,
                     onLogout = viewModel::requestLogout,
                     onRoutingPresetSelected = viewModel::setRoutingPreset,
                     onOpenRoutingPreset = { showRoutingPresetDialog = true },
@@ -714,11 +720,94 @@ private fun LoadingScreen() {
 private fun LoginScreen(
     login: LoginUiState,
     snackbarHostState: SnackbarHostState,
-    onLogin: () -> Unit,
+    onTelegramLogin: () -> Unit,
+    onWebsiteLogin: () -> Unit,
+    onDeviceTrial: () -> Unit,
+    onLteTrial: () -> Unit,
     onFreeProxy: () -> Unit,
     onOpenAgain: () -> Unit,
+    onRetry: () -> Unit,
     onPrivacyPolicy: () -> Unit,
 ) {
+    var showTrialChoice by remember { mutableStateOf(false) }
+    val waitingForWebsite =
+        (login as? LoginUiState.Waiting)?.authorization is ChallengeAuthorization.AccountActivation
+
+    if (showTrialChoice) {
+        AlertDialog(
+            onDismissRequest = { showTrialChoice = false },
+            title = { Text(stringResource(R.string.trial_choice_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        text = stringResource(R.string.trial_choice_description),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            showTrialChoice = false
+                            onDeviceTrial()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_shield),
+                            contentDescription = null,
+                            modifier = Modifier.size(22.dp),
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                stringResource(R.string.trial_regular_title),
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                stringResource(R.string.trial_regular_description),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            showTrialChoice = false
+                            onLteTrial()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_speed),
+                            contentDescription = null,
+                            modifier = Modifier.size(22.dp),
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                stringResource(R.string.trial_lte_title),
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                stringResource(R.string.trial_lte_description),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showTrialChoice = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
+
     Scaffold(
         containerColor = Color.Transparent,
         contentWindowInsets = WindowInsets.safeDrawing,
@@ -728,7 +817,8 @@ private fun LoginScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(horizontal = 28.dp, vertical = 36.dp),
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 28.dp, vertical = 28.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
@@ -753,7 +843,13 @@ private fun LoginScreen(
             Spacer(Modifier.height(20.dp))
             Text(
                 text = when (login) {
-                    is LoginUiState.Waiting -> stringResource(R.string.login_waiting)
+                    is LoginUiState.Waiting -> stringResource(
+                        if (waitingForWebsite) {
+                            R.string.login_waiting_website
+                        } else {
+                            R.string.login_waiting_telegram
+                        },
+                    )
                     LoginUiState.Expired -> stringResource(R.string.login_expired)
                     else -> stringResource(R.string.login_title)
                 },
@@ -764,7 +860,13 @@ private fun LoginScreen(
             Spacer(Modifier.height(10.dp))
             Text(
                 text = if (login is LoginUiState.Waiting) {
-                    stringResource(R.string.login_waiting_description)
+                    stringResource(
+                        if (waitingForWebsite) {
+                            R.string.login_waiting_website_description
+                        } else {
+                            R.string.login_waiting_telegram_description
+                        },
+                    )
                 } else {
                     stringResource(R.string.login_description)
                 },
@@ -800,10 +902,20 @@ private fun LoginScreen(
                         .height(LevikDimensions.ButtonHeight),
                     shape = RoundedCornerShape(14.dp),
                 ) {
-                    Text(stringResource(R.string.login_open_again), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        stringResource(
+                            if (waitingForWebsite) {
+                                R.string.login_open_website_again
+                            } else {
+                                R.string.login_open_telegram_again
+                            },
+                        ),
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
                 }
                 LoginUiState.Expired -> Button(
-                    onClick = onLogin,
+                    onClick = onRetry,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(LevikDimensions.ButtonHeight),
@@ -811,23 +923,76 @@ private fun LoginScreen(
                 ) {
                     Text(stringResource(R.string.login_retry), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 }
-                LoginUiState.Idle -> Button(
-                    onClick = onLogin,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(LevikDimensions.ButtonHeight),
-                    shape = RoundedCornerShape(14.dp),
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_login),
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp),
+                LoginUiState.Idle -> {
+                    Button(
+                        onClick = { showTrialChoice = true },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(LevikDimensions.ButtonHeight),
+                        shape = RoundedCornerShape(14.dp),
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_shield),
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            stringResource(R.string.login_try_free),
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = onTelegramLogin,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(LevikDimensions.ButtonHeight),
+                        shape = RoundedCornerShape(14.dp),
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_telegram),
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            stringResource(R.string.login_confirm_telegram),
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = stringResource(R.string.login_telegram_privacy_note),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
                     )
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.login_continue), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = onWebsiteLogin,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(LevikDimensions.ButtonHeight),
+                        shape = RoundedCornerShape(14.dp),
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_web),
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            stringResource(R.string.login_website),
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
                 }
             }
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(10.dp))
             TextButton(onClick = onFreeProxy) {
                 Icon(
                     painter = painterResource(R.drawable.ic_servers),

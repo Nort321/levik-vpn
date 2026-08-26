@@ -80,6 +80,11 @@ class MainActivity : ComponentActivity() {
         intent.data?.let { uri -> viewModel.handleDeepLink(uri) }
     }
 
+    override fun onResume() {
+        super.onResume()
+        viewModel.onAppForegrounded()
+    }
+
     private fun handleEffect(effect: AppEffect) {
         when (effect) {
             is AppEffect.OpenAuthorization -> openAuthorization(effect.uri)

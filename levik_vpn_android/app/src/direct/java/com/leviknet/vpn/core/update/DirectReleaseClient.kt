@@ -141,7 +141,7 @@ internal class ReleaseHttpException(
 ) : IOException("Update service request failed with HTTP $statusCode")
 
 internal object UpdateCheckSchedule {
-    const val SUCCESS_INTERVAL_MS = 18L * 60 * 60 * 1000
+    const val SUCCESS_INTERVAL_MS = 6L * 60 * 60 * 1000
     const val NOT_FOUND_BACKOFF_MS = 12L * 60 * 60 * 1000
     const val MIN_RATE_LIMIT_BACKOFF_MS = 15L * 60 * 1000
     const val MAX_BACKOFF_MS = 24L * 60 * 60 * 1000

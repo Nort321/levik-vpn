@@ -107,7 +107,13 @@ class AuthorizationChallengePolicyTest {
                 verificationUriComplete = "https://t.me/levikvpnbot?start=legacy",
             ),
         )
-        assertTrue(legacy is ChallengeAuthorization.LegacyTelegram)
+        assertEquals(
+            ChallengeAuthorization.LegacyTelegram(
+                uri = "tg://resolve?domain=levikvpnbot&start=legacy",
+                code = "123456",
+            ),
+            legacy,
+        )
 
         assertNull(
             AuthorizationChallengePolicy.resolve(
@@ -118,6 +124,35 @@ class AuthorizationChallengePolicyTest {
                 ),
             ),
         )
+    }
+
+    @Test
+    fun `native Telegram challenge stays native and rejects unsafe targets`() {
+        assertEquals(
+            "tg://resolve?domain=levikvpnbot&start=web_test",
+            (AuthorizationChallengePolicy.resolve(
+                challenge(
+                    verificationCode = "123456",
+                    verificationUriComplete =
+                        "tg://resolve?domain=levikvpnbot&start=web_test",
+                ),
+            ) as ChallengeAuthorization.LegacyTelegram).uri,
+        )
+        listOf(
+            "https://t.me/otherbot?start=web_test",
+            "https://t.me/levikvpnbot?start=web_test&proxy=evil",
+            "tg://resolve?domain=levikvpnbot&start=web_test&start=duplicate",
+            "tg://resolve?domain=levikvpnbot&start=https%3A%2F%2Fevil.example",
+        ).forEach { uri ->
+            assertNull(
+                AuthorizationChallengePolicy.resolve(
+                    challenge(
+                        verificationCode = "123456",
+                        verificationUriComplete = uri,
+                    ),
+                ),
+            )
+        }
     }
 
     @Test
