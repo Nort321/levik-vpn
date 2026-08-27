@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.provider.Settings
 import java.util.Locale
 import androidx.annotation.DrawableRes
@@ -25,13 +26,17 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -58,6 +63,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -87,6 +95,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -115,6 +125,7 @@ import com.leviknet.vpn.core.network.LevikStatusSnapshot
 import com.leviknet.vpn.core.network.MobileAccountResponse
 import com.leviknet.vpn.core.network.SubscriptionSummary
 import com.leviknet.vpn.core.network.TrafficSummary
+import com.leviknet.vpn.core.network.WhitelistMode
 import com.leviknet.vpn.data.AntiDpiPreset
 import com.leviknet.vpn.data.DailyTraffic
 import com.leviknet.vpn.data.DnsProvider
@@ -292,6 +303,36 @@ fun LevikVpnApp(viewModel: AppViewModel) {
             dismissButton = {
                 TextButton(onClick = viewModel::declineVpnDisclosure) {
                     Text(stringResource(R.string.vpn_disclosure_decline))
+                }
+            },
+        )
+    }
+
+    if (state.showLteWhitelistWarning) {
+        AlertDialog(
+            onDismissRequest = viewModel::dismissLteWhitelistWarning,
+            title = { Text(stringResource(R.string.lte_whitelist_warning_title)) },
+            text = { Text(stringResource(R.string.lte_whitelist_warning_body)) },
+            confirmButton = {
+                Button(onClick = viewModel::confirmLteWhitelistWarning) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_power),
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.lte_whitelist_connect_anyway))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::dismissLteWhitelistWarning) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_close),
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.cancel))
                 }
             },
         )
@@ -1066,20 +1107,25 @@ private fun MainContent(
     onRequestBatteryOptimization: () -> Unit,
     onCheckForUpdates: () -> Unit,
 ) {
+    val isTelevision = LocalContext.current.resources.configuration.uiMode and
+        Configuration.UI_MODE_TYPE_MASK == Configuration.UI_MODE_TYPE_TELEVISION
     Scaffold(
         containerColor = Color.Transparent,
-        contentWindowInsets = WindowInsets.safeDrawing,
+        contentWindowInsets = if (isTelevision) WindowInsets(0, 0, 0, 0) else WindowInsets.safeDrawing,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
-            AppNavigationBar(
-                selected = state.tab,
-                onSelected = onTabSelected,
-            )
+            if (!isTelevision) {
+                AppNavigationBar(
+                    selected = state.tab,
+                    onSelected = onTabSelected,
+                )
+            }
         },
     ) { padding ->
-        when (state.tab) {
+        val tabContent: @Composable (Modifier) -> Unit = { contentModifier ->
+            when (state.tab) {
             AppTab.HOME -> HomeScreen(
-                modifier = Modifier.padding(padding),
+                modifier = contentModifier,
                 state = state,
                 onConnect = onConnect,
                 onTrial = onTrial,
@@ -1091,7 +1137,7 @@ private fun MainContent(
                 onOpenAntiDpi = onOpenAntiDpi,
             )
             AppTab.SERVERS -> ServersScreen(
-                modifier = Modifier.padding(padding),
+                modifier = contentModifier,
                 profile = state.profile,
                 selectedServerId = state.selectedServerId,
                 connectionState = state.vpn.state,
@@ -1110,7 +1156,7 @@ private fun MainContent(
                 levikStatus = state.levikStatus,
             )
             AppTab.STATS -> StatsScreen(
-                modifier = Modifier.padding(padding),
+                modifier = contentModifier,
                 vpn = state.vpn,
                 liveSpeedHistory = state.liveSpeedHistory,
                 trafficHistory = state.trafficHistory,
@@ -1122,7 +1168,7 @@ private fun MainContent(
                 onExportTrafficHistory = onExportTrafficHistory,
             )
             AppTab.PROFILE -> ProfileScreen(
-                modifier = Modifier.padding(padding),
+                modifier = contentModifier,
                 account = state.account,
                 profile = state.profile,
                 session = state.session,
@@ -1176,6 +1222,100 @@ private fun MainContent(
                 onCheckForUpdates = onCheckForUpdates,
                 onOpenLogs = onOpenLogs,
             )
+            }
+        }
+        if (isTelevision) {
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .safeDrawingPadding(),
+            ) {
+                TvNavigationRail(
+                    selected = state.tab,
+                    onSelected = onTabSelected,
+                )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                    contentAlignment = Alignment.TopCenter,
+                ) {
+                    tabContent(
+                        Modifier
+                            .fillMaxSize()
+                            .widthIn(max = 1_200.dp),
+                    )
+                }
+            }
+        } else {
+            tabContent(Modifier.padding(padding))
+        }
+    }
+}
+
+@Composable
+private fun TvNavigationRail(
+    selected: AppTab,
+    onSelected: (AppTab) -> Unit,
+) {
+    val initialFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        initialFocus.requestFocus()
+    }
+    Surface(
+        modifier = Modifier
+            .fillMaxHeight()
+            .padding(end = 12.dp),
+        shape = RoundedCornerShape(LevikDimensions.CardRadius),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.outline,
+        ),
+        shadowElevation = 4.dp,
+    ) {
+        NavigationRail(
+            containerColor = Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            header = { Spacer(Modifier.height(12.dp)) },
+        ) {
+            NavigationDestination.entries.forEach { destination ->
+                val isSelected = selected == destination.tab
+                NavigationRailItem(
+                    selected = isSelected,
+                    onClick = { onSelected(destination.tab) },
+                    modifier = if (isSelected) {
+                        Modifier.focusRequester(initialFocus)
+                    } else {
+                        Modifier
+                    },
+                    icon = {
+                        Icon(
+                            painter = painterResource(destination.icon),
+                            contentDescription = null,
+                            modifier = Modifier.size(24.dp),
+                        )
+                    },
+                    label = {
+                        Text(
+                            text = stringResource(destination.label),
+                            fontSize = 12.sp,
+                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                    alwaysShowLabel = true,
+                    colors = NavigationRailItemDefaults.colors(
+                        selectedIconColor = LevikBlue,
+                        selectedTextColor = LevikBlue,
+                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        indicatorColor = LevikBlue.copy(alpha = 0.12f),
+                    ),
+                )
+            }
         }
     }
 }
@@ -1189,6 +1329,7 @@ private fun AppNavigationBar(
         modifier = Modifier
             .fillMaxWidth()
             .background(Color.Transparent)
+            .navigationBarsPadding()
             .padding(horizontal = 12.dp, vertical = 8.dp),
     ) {
         Surface(
@@ -1205,6 +1346,7 @@ private fun AppNavigationBar(
             NavigationBar(
                 containerColor = Color.Transparent,
                 tonalElevation = 0.dp,
+                windowInsets = WindowInsets(0, 0, 0, 0),
                 modifier = Modifier.height(72.dp),
             ) {
                 NavigationDestination.entries.forEach { destination ->
@@ -1224,6 +1366,8 @@ private fun AppNavigationBar(
                                 text = stringResource(destination.label),
                                 fontSize = 12.sp,
                                 fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         },
                         colors = NavigationBarItemDefaults.colors(
@@ -1287,6 +1431,37 @@ private fun HomeScreen(
                         contentDescription = stringResource(R.string.content_plan),
                         modifier = Modifier.size(24.dp),
                         tint = LevikBlue,
+                    )
+                }
+            }
+        }
+        if (state.whitelistMode == WhitelistMode.ACTIVE) {
+            Spacer(Modifier.height(12.dp))
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.primaryContainer,
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    LevikBlue.copy(alpha = 0.35f),
+                ),
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_shield),
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = LevikBlue,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = stringResource(R.string.whitelist_active_banner),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
                     )
                 }
             }

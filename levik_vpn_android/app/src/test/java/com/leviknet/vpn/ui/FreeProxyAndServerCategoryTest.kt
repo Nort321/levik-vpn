@@ -3,6 +3,8 @@ package com.leviknet.vpn.ui
 import com.leviknet.vpn.core.network.FreeProxyResponse
 import com.leviknet.vpn.data.AppRepository
 import com.leviknet.vpn.vpn.TunnelServer
+import com.leviknet.vpn.vpn.isEligibleForAutomaticSelection
+import com.leviknet.vpn.vpn.isRussianServer
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -80,5 +82,28 @@ class FreeProxyAndServerCategoryTest {
         assertTrue(isMobile(lteServer1))
         assertTrue(isMobile(lteServer2))
         assertFalse(isMobile(regularServer))
+    }
+
+    @Test
+    fun `russian servers are manual-only`() {
+        val russian = TunnelServer(
+            id = "ru",
+            tag = "russia-fallback",
+            name = "Россия",
+            countryCode = "ru",
+            outbound = JsonObject(emptyMap()),
+        )
+        val german = TunnelServer(
+            id = "de",
+            tag = "germany",
+            name = "Germany",
+            countryCode = "DE",
+            outbound = JsonObject(emptyMap()),
+        )
+
+        assertTrue(russian.isRussianServer())
+        assertFalse(russian.isEligibleForAutomaticSelection())
+        assertTrue(german.isEligibleForAutomaticSelection())
+        assertTrue(german.copy(name = "LTE Germany").isEligibleForAutomaticSelection())
     }
 }

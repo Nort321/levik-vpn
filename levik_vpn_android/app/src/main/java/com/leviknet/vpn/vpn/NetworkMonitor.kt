@@ -17,7 +17,6 @@ class NetworkMonitor(
     private val request = NetworkRequest.Builder()
         .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
         .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
-        .addCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
         .build()
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
@@ -50,7 +49,14 @@ class NetworkMonitor(
 
     fun preference(network: Network): Int {
         val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return -1
-        return when {
+        val validationScore = if (
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        ) {
+            10
+        } else {
+            0
+        }
+        return validationScore + when {
             capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> 3
             capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> 2
             capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> 1
@@ -74,6 +80,5 @@ class NetworkMonitor(
         this != null &&
             hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
             hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) &&
-            hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) &&
             !hasTransport(NetworkCapabilities.TRANSPORT_VPN)
 }

@@ -31,6 +31,8 @@ import com.leviknet.vpn.core.network.MobileAccountResponse
 import com.leviknet.vpn.core.network.NetworkDiagnostics
 import com.leviknet.vpn.core.network.SubscriptionSummary
 import com.leviknet.vpn.core.network.TrafficSummary
+import com.leviknet.vpn.core.network.WhitelistDetector
+import com.leviknet.vpn.core.network.WhitelistMode
 import com.leviknet.vpn.data.AntiDpiPreset
 import com.leviknet.vpn.data.AppRepository
 import com.leviknet.vpn.data.AppSettings
@@ -49,6 +51,7 @@ import com.leviknet.vpn.vpn.TunnelServer
 import com.leviknet.vpn.vpn.VpnConnectionState
 import com.leviknet.vpn.vpn.VpnController
 import com.leviknet.vpn.vpn.VpnSnapshot
+import com.leviknet.vpn.vpn.isEligibleForAutomaticSelection
 import com.leviknet.vpn.vpn.isMobileServer
 import java.time.Instant
 import kotlinx.coroutines.CancellationException
@@ -97,10 +100,13 @@ class AppViewModel(
     private var isRefreshingAccount = false
     private var profileRefreshPending = false
     private var lteTrafficSyncJob: Job? = null
+    private var whitelistDetectionJob: Job? = null
+    private var pendingLteAction: PendingLteAction? = null
     private var pendingWifiAutoConnect = false
     private val serverPingMutex = Mutex()
     private val perAppBaselineMutex = Mutex()
     private val lteTrafficAccumulator = LteTrafficAccumulator()
+    private val whitelistDetector = appContext?.let(::WhitelistDetector)
 
     /** uid -> (rx, tx) captured at VPN connect; per-app stats show deltas from it. */
     @Volatile
@@ -129,7 +135,7 @@ class AppViewModel(
             repository.tunnelProfile.collect { profile ->
                 val selected = repository.selectedServerId()
                     ?.takeIf { id -> profile?.servers?.any { it.id == id } == true }
-                    ?: profile?.servers?.firstOrNull()?.id
+                    ?: profile?.servers?.firstOrNull(TunnelServer::isEligibleForAutomaticSelection)?.id
                 mutableState.update {
                     it.copy(profile = profile, selectedServerId = selected)
                 }
@@ -307,6 +313,7 @@ class AppViewModel(
         viewModelScope.launch {
             serverPingLoop()
         }
+        refreshWhitelistStatus()
         viewModelScope.launch { refreshLevikStatus() }
         viewModelScope.launch {
             val hadCachedProfile = repository.cachedTunnel() != null
@@ -772,7 +779,7 @@ class AppViewModel(
         }
     }
 
-    private fun prepareConnection() {
+    private fun prepareConnection(allowLteWithoutWhitelist: Boolean = false) {
         if (mutableState.value.refreshing) return
         viewModelScope.launch {
             val account = mutableState.value.account
@@ -831,6 +838,15 @@ class AppViewModel(
                 val selected = selectServerForProfile(profile)
                 mutableState.update {
                     it.copy(profile = profile, selectedServerId = selected)
+                }
+                val selectedServer = profile.servers.firstOrNull { it.id == selected }
+                if (!allowLteWithoutWhitelist &&
+                    selectedServer?.isMobileServer() == true &&
+                    mutableState.value.whitelistMode == WhitelistMode.INACTIVE
+                ) {
+                    pendingLteAction = PendingLteAction.Connect
+                    mutableState.update { it.copy(showLteWhitelistWarning = true) }
+                    return@launch
                 }
                 connectionPending = true
                 if (vpnController.hasDisclosureConsent()) {
@@ -898,8 +914,19 @@ class AppViewModel(
 
     fun selectServer(serverId: String) {
         val profile = mutableState.value.profile ?: return
-        if (profile.servers.none { it.id == serverId }) return
-        val activeState = mutableState.value.vpn.state
+        val server = profile.servers.firstOrNull { it.id == serverId } ?: return
+        if (server.isMobileServer() &&
+            mutableState.value.whitelistMode == WhitelistMode.INACTIVE &&
+            mutableState.value.vpn.state in ACTIVE_TUNNEL_STATES
+        ) {
+            pendingLteAction = PendingLteAction.SelectServer(serverId)
+            mutableState.update { it.copy(showLteWhitelistWarning = true) }
+            return
+        }
+        selectServerNow(serverId)
+    }
+
+    private fun selectServerNow(serverId: String) {
         viewModelScope.launch {
             runCatching {
                 settings.setAutomaticServer(false)
@@ -912,12 +939,7 @@ class AppViewModel(
                             pingMs = current.serverPings[serverId],
                         )
                     }
-                    if (activeState in setOf(
-                            VpnConnectionState.CONNECTED,
-                            VpnConnectionState.CONNECTING,
-                            VpnConnectionState.RECONNECTING,
-                        )
-                    ) {
+                    if (mutableState.value.vpn.state in ACTIVE_TUNNEL_STATES) {
                         AppLogger.i("AppViewModel", "Seamlessly switching to server $serverId")
                         vpnController.switchServer(serverId)
                     }
@@ -926,6 +948,21 @@ class AppViewModel(
                     mutableState.update { it.copy(message = error.toUiMessage()) }
                 }
         }
+    }
+
+    fun confirmLteWhitelistWarning() {
+        val action = pendingLteAction ?: return
+        pendingLteAction = null
+        mutableState.update { it.copy(showLteWhitelistWarning = false) }
+        when (action) {
+            PendingLteAction.Connect -> prepareConnection(allowLteWithoutWhitelist = true)
+            is PendingLteAction.SelectServer -> selectServerNow(action.serverId)
+        }
+    }
+
+    fun dismissLteWhitelistWarning() {
+        pendingLteAction = null
+        mutableState.update { it.copy(showLteWhitelistWarning = false) }
     }
 
     fun selectAutomaticServer() {
@@ -1291,7 +1328,8 @@ class AppViewModel(
         if (settings.automaticServer.value) return selectBestServer(profile)
         val selected = repository.selectedServerId()
             ?.takeIf { id -> profile.servers.any { it.id == id } }
-            ?: profile.servers.first().id
+            ?: profile.servers.firstOrNull(TunnelServer::isEligibleForAutomaticSelection)?.id
+            ?: error("No server is eligible for automatic selection")
         repository.selectServer(selected)
         viewModelScope.launch {
             runCatching {
@@ -1312,13 +1350,23 @@ class AppViewModel(
 
     private suspend fun selectBestServer(profile: PreparedTunnelProfile): String {
         val measured = measureServers(profile.servers)
+        val eligibleServerIds = profile.servers
+            .filter(TunnelServer::isEligibleForAutomaticSelection)
+            .mapTo(mutableSetOf(), TunnelServer::id)
+        require(eligibleServerIds.isNotEmpty()) {
+            "No server is eligible for automatic selection"
+        }
+        val regularServerIds = profile.servers
+            .filter { it.id in eligibleServerIds && !it.isMobileServer() }
+            .mapTo(mutableSetOf(), TunnelServer::id)
+        val preferredServerIds = regularServerIds.ifEmpty { eligibleServerIds }
         val selected = measured.entries
-            .filter { it.value != null }
+            .filter { it.key in preferredServerIds && it.value != null }
             .minByOrNull { requireNotNull(it.value) }
             ?.key
             ?: repository.selectedServerId()
-                ?.takeIf { id -> profile.servers.any { it.id == id } }
-            ?: profile.servers.first().id
+                ?.takeIf(preferredServerIds::contains)
+            ?: profile.servers.first { it.id in preferredServerIds }.id
         repository.selectServer(selected)
         mutableState.update { state ->
             state.copy(
@@ -1364,8 +1412,15 @@ class AppViewModel(
                     val profile = snapshot.profile
                     if (profile != null && !snapshot.refreshing) {
                         val measured = measureServers(profile.servers)
+                        val eligibleServerIds = profile.servers
+                            .filter(TunnelServer::isEligibleForAutomaticSelection)
+                            .mapTo(mutableSetOf(), TunnelServer::id)
+                        val regularServerIds = profile.servers
+                            .filter { it.id in eligibleServerIds && !it.isMobileServer() }
+                            .mapTo(mutableSetOf(), TunnelServer::id)
+                        val preferredServerIds = regularServerIds.ifEmpty { eligibleServerIds }
                         val bestServerId = measured.entries
-                            .filter { it.value != null }
+                            .filter { it.key in preferredServerIds && it.value != null }
                             .minByOrNull { requireNotNull(it.value) }
                             ?.key
                         if (snapshot.automaticServer &&
@@ -1669,9 +1724,25 @@ class AppViewModel(
     }
 
     fun onAppForegrounded() {
+        refreshWhitelistStatus()
         if (!BuildConfig.SELF_UPDATE_ENABLED || updateCheckJob?.isActive == true) return
         updateCheckJob = viewModelScope.launch {
             updateManager.checkForUpdates(silent = true)
+        }
+    }
+
+    private fun refreshWhitelistStatus() {
+        val detector = whitelistDetector ?: return
+        if (whitelistDetectionJob?.isActive == true) return
+        whitelistDetectionJob = viewModelScope.launch {
+            val mode = try {
+                detector.detect()
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                AppLogger.w("AppViewModel", "Allow-list detection failed")
+                WhitelistMode.UNKNOWN
+            }
+            mutableState.update { it.copy(whitelistMode = mode) }
         }
     }
 
@@ -1914,6 +1985,8 @@ data class AppUiState(
     val showAppDataDisclosure: Boolean = false,
     val showVpnDisclosure: Boolean = false,
     val showLogoutConfirmation: Boolean = false,
+    val showLteWhitelistWarning: Boolean = false,
+    val whitelistMode: WhitelistMode = WhitelistMode.UNKNOWN,
     val routingPreset: RoutingPreset = RoutingPreset.BYPASS_RU,
     val bypassRussianTraffic: Boolean = true,
     val antiDpiPreset: AntiDpiPreset = AntiDpiPreset.OFF,
@@ -1969,6 +2042,11 @@ private enum class OnboardingAction {
     TELEGRAM_LOGIN,
     TELEGRAM_LTE_TRIAL,
     WEBSITE_LOGIN,
+}
+
+private sealed interface PendingLteAction {
+    data object Connect : PendingLteAction
+    data class SelectServer(val serverId: String) : PendingLteAction
 }
 
 sealed interface LoginUiState {

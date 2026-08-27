@@ -60,3 +60,9 @@ fun TunnelServer.isMobileServer(): Boolean {
         normalizedTag.contains("LTE") ||
         normalizedTag.contains("MOBILE")
 }
+
+fun TunnelServer.isRussianServer(): Boolean =
+    countryCode.trim().equals("RU", ignoreCase = true)
+
+fun TunnelServer.isEligibleForAutomaticSelection(): Boolean =
+    !isRussianServer()

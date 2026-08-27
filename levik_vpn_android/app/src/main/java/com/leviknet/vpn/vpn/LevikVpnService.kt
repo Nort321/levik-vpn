@@ -283,10 +283,9 @@ class LevikVpnService : VpnService() {
                 }
             }
             val selectedId = readSelectedServerId()
-                ?: profile.servers.firstOrNull()?.id
-                ?: error("Tunnel profile has no servers")
             val selected = profile.servers.firstOrNull { it.id == selectedId }
-                ?: profile.servers.first()
+                ?: profile.servers.firstOrNull(TunnelServer::isEligibleForAutomaticSelection)
+                ?: error("Tunnel profile has no server eligible for automatic selection")
 
             AppLogger.i(LOG_TAG, "Establishing connection to server: ${selected.name} (${selected.id})")
 
@@ -487,14 +486,13 @@ class LevikVpnService : VpnService() {
             .setMtu(TUN_MTU)
             .addAddress(TUN_IPV4_ADDRESS, TUN_IPV4_PREFIX)
             .addAddress(TUN_IPV6_ADDRESS, TUN_IPV6_PREFIX)
-            .addRoute("0.0.0.0", 0)
-            .addRoute("::", 0)
             .addDnsServer(primaryDns)
             .addDnsServer(secondaryDns)
             .addDnsServer(primaryDnsIpv6)
             .addDnsServer(secondaryDnsIpv6)
             .setBlocking(true)
             .apply {
+                VpnRoutes.apply(this)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     setMetered(false)
                 }
@@ -699,7 +697,7 @@ class LevikVpnService : VpnService() {
 
     /**
      * Engages the app-level Kill Switch: re-establishes the TUN and routes every
-     * packet into a blackhole so nothing leaks while the tunnel is down.
+     * non-local packet into a blackhole so nothing leaks while the tunnel is down.
      * Must not be called while holding [connectionMutex]; the Locked variant is
      * for callers that already hold it.
      */
@@ -737,7 +735,7 @@ class LevikVpnService : VpnService() {
             )
             showForeground(VpnConnectionState.LOCKDOWN, null)
             acquireWakeLock()
-            AppLogger.w(LOG_TAG, "Kill Switch lockdown engaged, all traffic is blocked")
+            AppLogger.w(LOG_TAG, "Kill Switch lockdown engaged, non-local traffic is blocked")
             true
         } catch (error: Throwable) {
             if (error is CancellationException) throw error
@@ -781,7 +779,11 @@ class LevikVpnService : VpnService() {
         if (profile.servers.size <= 1) return false
 
         val currentId = readSelectedServerId() ?: profile.servers.firstOrNull()?.id ?: return false
-        val candidates = profile.servers.filter { it.id != currentId }
+        val candidates = profile.servers.filter { server ->
+            server.id != currentId &&
+                server.isEligibleForAutomaticSelection() &&
+                !server.isMobileServer()
+        }
         if (candidates.isEmpty()) return false
 
         AppLogger.i(LOG_TAG, "Server $currentId seems stalled, testing ${candidates.size} fallback servers")
