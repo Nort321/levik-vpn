@@ -97,6 +97,7 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -1107,7 +1108,7 @@ private fun MainContent(
     onRequestBatteryOptimization: () -> Unit,
     onCheckForUpdates: () -> Unit,
 ) {
-    val isTelevision = LocalContext.current.resources.configuration.uiMode and
+    val isTelevision = LocalConfiguration.current.uiMode and
         Configuration.UI_MODE_TYPE_MASK == Configuration.UI_MODE_TYPE_TELEVISION
     Scaffold(
         containerColor = Color.Transparent,
