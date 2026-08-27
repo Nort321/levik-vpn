@@ -9,6 +9,14 @@ import org.junit.Test
 
 class VpnRoutesTest {
     @Test
+    fun `native exclusions omit routes Android rejects`() {
+        assertFalse(VpnRoutes.nativeExcludedNetworks.contains("127.0.0.0/8"))
+        assertFalse(VpnRoutes.nativeExcludedNetworks.contains("::1/128"))
+        assertTrue(VpnRoutes.nativeExcludedNetworks.contains("192.168.0.0/16"))
+        assertTrue(VpnRoutes.nativeExcludedNetworks.contains("fc00::/7"))
+    }
+
+    @Test
     fun `legacy IPv6 route contains only global unicast space`() {
         assertEquals("2000::/3", VpnRoutes.PUBLIC_IPV6_ROUTE)
     }
@@ -34,6 +42,34 @@ class VpnRoutesTest {
             "224.0.0.251",
             "255.255.255.255",
         ).forEach { address -> assertFalse(address, isRouted(address)) }
+    }
+
+    @Test
+    fun `compatible routes are retried only for rejected native route parameters`() {
+        assertTrue(
+            VpnRoutes.shouldRetryWithCompatibleRoutes(
+                usedNativeExclusions = true,
+                error = IllegalArgumentException("rejected route"),
+            ),
+        )
+        assertTrue(
+            VpnRoutes.shouldRetryWithCompatibleRoutes(
+                usedNativeExclusions = true,
+                error = IllegalStateException("route cannot be applied"),
+            ),
+        )
+        assertFalse(
+            VpnRoutes.shouldRetryWithCompatibleRoutes(
+                usedNativeExclusions = false,
+                error = IllegalArgumentException("rejected route"),
+            ),
+        )
+        assertFalse(
+            VpnRoutes.shouldRetryWithCompatibleRoutes(
+                usedNativeExclusions = true,
+                error = SecurityException("permission revoked"),
+            ),
+        )
     }
 
     private fun isRouted(address: String): Boolean {

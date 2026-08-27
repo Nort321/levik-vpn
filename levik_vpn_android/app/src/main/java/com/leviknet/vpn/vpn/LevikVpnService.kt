@@ -462,6 +462,26 @@ class LevikVpnService : VpnService() {
     }
 
     private fun establishTun(serverName: String): ParcelFileDescriptor {
+        val useNativeExclusions = VpnRoutes.supportsNativeExclusions()
+        return try {
+            establishTun(serverName, useNativeExclusions)
+        } catch (error: RuntimeException) {
+            if (!VpnRoutes.shouldRetryWithCompatibleRoutes(useNativeExclusions, error)) {
+                throw error
+            }
+            AppLogger.w(
+                LOG_TAG,
+                "Android rejected native VPN route exclusions; retrying with compatible routes",
+                error,
+            )
+            establishTun(serverName, useNativeExclusions = false)
+        }
+    }
+
+    private fun establishTun(
+        serverName: String,
+        useNativeExclusions: Boolean,
+    ): ParcelFileDescriptor {
         val configureIntent = PendingIntent.getActivity(
             this,
             REQUEST_OPEN_APP,
@@ -492,7 +512,7 @@ class LevikVpnService : VpnService() {
             .addDnsServer(secondaryDnsIpv6)
             .setBlocking(true)
             .apply {
-                VpnRoutes.apply(this)
+                VpnRoutes.apply(this, useNativeExclusions)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     setMetered(false)
                 }

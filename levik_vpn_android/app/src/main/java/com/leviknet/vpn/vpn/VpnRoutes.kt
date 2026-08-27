@@ -7,8 +7,9 @@ import java.net.InetAddress
 
 /**
  * Keeps LAN, loopback, carrier-local, link-local and multicast traffic outside the VPN.
- * Android 13+ can express exclusions directly. Older releases receive the equivalent
- * allow-list of public destinations because a default route cannot be negated there.
+ * Android 13+ can express exclusions directly. Older releases, and Android builds that
+ * reject throw routes while establishing the interface, receive the equivalent allow-list
+ * of public destinations because a default route cannot be negated there.
  */
 internal object VpnRoutes {
     private val localNetworks = listOf(
@@ -29,6 +30,13 @@ internal object VpnRoutes {
         "fec0::/10",
         "ff00::/8",
     )
+
+    // VpnService.Builder rejects loopback destinations as invalid routes. Loopback never
+    // leaves the device, so it needs no RTN_THROW entry and remains part of the compatible
+    // public-route complement below.
+    internal val nativeExcludedNetworks = localNetworks.filterNot { cidr ->
+        cidr == "127.0.0.0/8" || cidr == "::1/128"
+    }
 
     // 0.0.0.0/0 minus the IPv4 entries in localNetworks.
     internal val publicIpv4Routes = listOf(
@@ -51,11 +59,14 @@ internal object VpnRoutes {
 
     internal const val PUBLIC_IPV6_ROUTE = "2000::/3"
 
-    fun apply(builder: VpnService.Builder) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+    fun apply(
+        builder: VpnService.Builder,
+        useNativeExclusions: Boolean = supportsNativeExclusions(),
+    ) {
+        if (useNativeExclusions) {
             builder.addRoute("0.0.0.0", 0)
             builder.addRoute("::", 0)
-            localNetworks.forEach { cidr ->
+            nativeExcludedNetworks.forEach { cidr ->
                 val (address, prefix) = splitCidr(cidr)
                 builder.excludeRoute(IpPrefix(InetAddress.getByName(address), prefix))
             }
@@ -69,6 +80,15 @@ internal object VpnRoutes {
         val (ipv6Address, ipv6Prefix) = splitCidr(PUBLIC_IPV6_ROUTE)
         builder.addRoute(ipv6Address, ipv6Prefix)
     }
+
+    internal fun supportsNativeExclusions(): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+
+    internal fun shouldRetryWithCompatibleRoutes(
+        usedNativeExclusions: Boolean,
+        error: Throwable,
+    ): Boolean = usedNativeExclusions &&
+        (error is IllegalArgumentException || error is IllegalStateException)
 
     internal fun splitCidr(cidr: String): Pair<String, Int> {
         val separator = cidr.lastIndexOf('/')
