@@ -3,6 +3,7 @@ package com.leviknet.vpn.vpn
 import android.net.IpPrefix
 import android.net.VpnService
 import android.os.Build
+import androidx.annotation.RequiresApi
 import java.net.InetAddress
 
 /**
@@ -63,13 +64,8 @@ internal object VpnRoutes {
         builder: VpnService.Builder,
         useNativeExclusions: Boolean = supportsNativeExclusions(),
     ) {
-        if (useNativeExclusions) {
-            builder.addRoute("0.0.0.0", 0)
-            builder.addRoute("::", 0)
-            nativeExcludedNetworks.forEach { cidr ->
-                val (address, prefix) = splitCidr(cidr)
-                builder.excludeRoute(IpPrefix(InetAddress.getByName(address), prefix))
-            }
+        if (useNativeExclusions && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            applyNativeExclusions(builder)
             return
         }
 
@@ -83,6 +79,16 @@ internal object VpnRoutes {
 
     internal fun supportsNativeExclusions(): Boolean =
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    private fun applyNativeExclusions(builder: VpnService.Builder) {
+        builder.addRoute("0.0.0.0", 0)
+        builder.addRoute("::", 0)
+        nativeExcludedNetworks.forEach { cidr ->
+            val (address, prefix) = splitCidr(cidr)
+            builder.excludeRoute(IpPrefix(InetAddress.getByName(address), prefix))
+        }
+    }
 
     internal fun shouldRetryWithCompatibleRoutes(
         usedNativeExclusions: Boolean,
