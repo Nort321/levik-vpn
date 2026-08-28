@@ -119,8 +119,6 @@ if [[ "${INPUT_MODE}" == "git" ]]; then
     README.md
     LICENSE
     SECURITY.md
-    CONTRIBUTING.md
-    CODE_OF_CONDUCT.md
     CHANGELOG.md
     THIRD_PARTY_NOTICES.md
     scripts/ci/check-repository-policy.sh
