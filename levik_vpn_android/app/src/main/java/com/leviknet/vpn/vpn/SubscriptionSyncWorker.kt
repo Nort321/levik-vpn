@@ -85,20 +85,24 @@ class SubscriptionSyncWorker(
 
             AppLogger.i(TAG, "Background subscription sync finished successfully")
             return Result.success()
-        } catch (error: ApiException.Unauthorized) {
-            AppLogger.w(TAG, "Session unauthorized during sync: ${error.message}")
-            if (container.vpnController.state.value.state !in setOf(
-                    VpnConnectionState.DISCONNECTED,
-                    VpnConnectionState.ERROR,
-                )
-            ) {
-                container.vpnController.disconnect()
-            }
-            SubscriptionNotificationManager.notifyDeviceRevoked(applicationContext)
-            return Result.success()
         } catch (error: Exception) {
-            AppLogger.e(TAG, "Subscription sync worker failed: ${error.message}")
-            return if (runAttemptCount < 3) Result.retry() else Result.failure()
+            return when (subscriptionSyncFailureAction(error, runAttemptCount)) {
+                SubscriptionSyncFailureAction.PRESERVE_OFFLINE_PROFILE -> {
+                    AppLogger.w(
+                        TAG,
+                        "Account session expired during sync; preserving the cached profile and VPN",
+                    )
+                    Result.success()
+                }
+                SubscriptionSyncFailureAction.RETRY -> {
+                    AppLogger.e(TAG, "Subscription sync worker failed: ${error.message}")
+                    Result.retry()
+                }
+                SubscriptionSyncFailureAction.FAIL -> {
+                    AppLogger.e(TAG, "Subscription sync worker failed: ${error.message}")
+                    Result.failure()
+                }
+            }
         }
     }
 
@@ -144,4 +148,19 @@ class SubscriptionSyncWorker(
             )
         }
     }
+}
+
+internal enum class SubscriptionSyncFailureAction {
+    PRESERVE_OFFLINE_PROFILE,
+    RETRY,
+    FAIL,
+}
+
+internal fun subscriptionSyncFailureAction(
+    error: Exception,
+    runAttemptCount: Int,
+): SubscriptionSyncFailureAction = when {
+    error is ApiException.Unauthorized -> SubscriptionSyncFailureAction.PRESERVE_OFFLINE_PROFILE
+    runAttemptCount < 3 -> SubscriptionSyncFailureAction.RETRY
+    else -> SubscriptionSyncFailureAction.FAIL
 }
