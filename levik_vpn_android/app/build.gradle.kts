@@ -138,7 +138,7 @@ android {
         applicationId = "com.leviknet.vpn"
         minSdk = 26
         targetSdk = 36
-        versionCode = 45
+        versionCode = 46
         versionName = rootProject.version.toString()
 
         buildConfigField("String", "CABINET_BASE_URL", "\"${cabinetBaseUrl.trimEnd('/')}\"")
@@ -258,6 +258,15 @@ android {
 
     testOptions {
         unitTests.isIncludeAndroidResources = true
+    }
+}
+
+androidComponents {
+    onVariants(selector().withFlavor("distribution" to "direct")) { variant ->
+        // The Direct APK contains the large libXray core for every supported ABI.
+        // Compress those libraries in the downloadable APK while keeping every ABI;
+        // Android extracts only the device-compatible library during installation.
+        variant.packaging.jniLibs.useLegacyPackaging.set(true)
     }
 }
 

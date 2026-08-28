@@ -23,7 +23,7 @@ readonly UPDATE_PRIVATE_KEY_PATH="$8"
 readonly UPDATE_PUBLIC_KEY_SPKI_BASE64="$9"
 readonly REQUESTED_OUTPUT_DIRECTORY="${10}"
 readonly EXPECTED_PACKAGE_NAME="com.leviknet.vpn"
-readonly MAX_APK_SIZE_BYTES=$((512 * 1024 * 1024))
+readonly MAX_APK_SIZE_BYTES=$((128 * 1024 * 1024))
 
 for command_name in apkanalyzer apksigner awk grep openssl python3 tr wc; do
   if ! command -v "${command_name}" >/dev/null 2>&1; then
@@ -82,6 +82,34 @@ if [[ ! "${APK_SIZE}" =~ ^[0-9]+$ || "${APK_SIZE}" -lt 1048576 || "${APK_SIZE}" 
   printf 'ERROR: Direct APK size is outside the allowed release bounds.\n' >&2
   exit 1
 fi
+
+python3 - "${APK_PATH}" <<'PY'
+import pathlib
+import sys
+import zipfile
+
+apk_path = pathlib.Path(sys.argv[1])
+expected_libxray_entries = {
+    f"lib/{abi}/libgojni.so"
+    for abi in ("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+}
+with zipfile.ZipFile(apk_path) as archive:
+    native_entries = {
+        info.filename: info
+        for info in archive.infolist()
+        if info.filename.startswith("lib/") and info.filename.endswith(".so")
+    }
+
+actual_libxray_entries = {
+    name for name in native_entries if name.endswith("/libgojni.so")
+}
+if actual_libxray_entries != expected_libxray_entries:
+    raise SystemExit("Direct APK does not contain libXray for every supported ABI")
+if not native_entries or any(
+    info.compress_type != zipfile.ZIP_DEFLATED for info in native_entries.values()
+):
+    raise SystemExit("Direct APK native libraries must be DEFLATE-compressed")
+PY
 
 readonly ACTUAL_PACKAGE_NAME="$(apkanalyzer manifest application-id "${APK_PATH}")"
 readonly ACTUAL_VERSION_CODE="$(apkanalyzer manifest version-code "${APK_PATH}")"
