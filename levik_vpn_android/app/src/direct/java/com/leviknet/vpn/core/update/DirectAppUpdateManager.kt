@@ -325,13 +325,24 @@ internal class ApkPackageValidator(
 
     @Suppress("DEPRECATION")
     private fun validateSigningCertificate(packageInfo: PackageInfo) {
+        val legacySignatures = packageInfo.signatures.orEmpty().toList()
         val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            packageInfo.signingInfo?.apkContentsSigners.orEmpty()
+            val signingInfo = packageInfo.signingInfo
+            resolveCurrentSigningCertificates(
+                signingInfoAvailable = signingInfo != null,
+                hasMultipleSigners = signingInfo?.hasMultipleSigners() == true,
+                apkContentsSigners = signingInfo?.apkContentsSigners.orEmpty().toList(),
+                signingCertificateHistory = signingInfo?.signingCertificateHistory.orEmpty().toList(),
+                legacySignatures = legacySignatures,
+            )
         } else {
-            packageInfo.signatures.orEmpty()
+            legacySignatures
         }
         if (signatures.size != 1) {
-            throw UpdateVerificationException("APK must have exactly one current signing certificate")
+            throw UpdateVerificationException(
+                "APK must have exactly one current signing certificate " +
+                    "(found ${signatures.size} on API ${Build.VERSION.SDK_INT})",
+            )
         }
         val fingerprint = MessageDigest.getInstance("SHA-256")
             .digest(signatures.single().toByteArray())
@@ -341,12 +352,29 @@ internal class ApkPackageValidator(
         }
     }
 
+    @Suppress("DEPRECATION")
     private fun signingFlags(): Int = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-        PackageManager.GET_SIGNING_CERTIFICATES
+        PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_SIGNATURES
     } else {
-        @Suppress("DEPRECATION")
         PackageManager.GET_SIGNATURES
     }
+}
+
+internal fun <T> resolveCurrentSigningCertificates(
+    signingInfoAvailable: Boolean,
+    hasMultipleSigners: Boolean,
+    apkContentsSigners: List<T>,
+    signingCertificateHistory: List<T>,
+    legacySignatures: List<T>,
+): List<T> {
+    if (!signingInfoAvailable) return legacySignatures
+    if (hasMultipleSigners) return apkContentsSigners
+
+    signingCertificateHistory.lastOrNull()?.let { currentCertificate ->
+        return listOf(currentCertificate)
+    }
+    if (legacySignatures.isNotEmpty()) return legacySignatures
+    return apkContentsSigners
 }
 
 private fun ByteArray.toHex(): String = joinToString("") { byte -> "%02x".format(byte) }
