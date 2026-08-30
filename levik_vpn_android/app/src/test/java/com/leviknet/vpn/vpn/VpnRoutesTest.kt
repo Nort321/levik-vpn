@@ -1,9 +1,8 @@
 package com.leviknet.vpn.vpn
 
-import java.net.Inet4Address
 import java.net.InetAddress
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -17,8 +16,17 @@ class VpnRoutesTest {
     }
 
     @Test
-    fun `legacy IPv6 route contains only global unicast space`() {
-        assertEquals("2000::/3", VpnRoutes.PUBLIC_IPV6_ROUTE)
+    fun `compatible IPv6 route fails closed over the complete address space`() {
+        assertEquals("::/0", VpnRoutes.COMPATIBLE_IPV6_ROUTE)
+        listOf(
+            "64:ff9b::c000:221",
+            "2001:db8::1",
+            "fc00::1",
+            "fe80::1",
+            "ff02::1",
+        ).forEach { address ->
+            assertTrue(address, isInRoute(address, VpnRoutes.COMPATIBLE_IPV6_ROUTE))
+        }
     }
 
     @Test
@@ -73,18 +81,22 @@ class VpnRoutesTest {
     }
 
     private fun isRouted(address: String): Boolean {
-        val target = (InetAddress.getByName(address) as Inet4Address).address
-        return VpnRoutes.publicIpv4Routes.any { cidr ->
-            val (networkAddress, prefixLength) = VpnRoutes.splitCidr(cidr)
-            val network = (InetAddress.getByName(networkAddress) as Inet4Address).address
-            var remaining = prefixLength
-            target.indices.all { index ->
-                if (remaining <= 0) return@all true
-                val bits = remaining.coerceAtMost(8)
-                val mask = (0xff shl (8 - bits)) and 0xff
-                remaining -= bits
-                (target[index].toInt() and mask) == (network[index].toInt() and mask)
-            }
+        return VpnRoutes.publicIpv4Routes.any { cidr -> isInRoute(address, cidr) }
+    }
+
+    private fun isInRoute(address: String, cidr: String): Boolean {
+        val target = InetAddress.getByName(address).address
+        val (networkAddress, prefixLength) = VpnRoutes.splitCidr(cidr)
+        val network = InetAddress.getByName(networkAddress).address
+        if (target.size != network.size) return false
+
+        var remaining = prefixLength
+        return target.indices.all { index ->
+            if (remaining <= 0) return@all true
+            val bits = remaining.coerceAtMost(8)
+            val mask = (0xff shl (8 - bits)) and 0xff
+            remaining -= bits
+            (target[index].toInt() and mask) == (network[index].toInt() and mask)
         }
     }
 }

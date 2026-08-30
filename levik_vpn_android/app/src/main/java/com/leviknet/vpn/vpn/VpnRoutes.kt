@@ -9,8 +9,9 @@ import java.net.InetAddress
 /**
  * Keeps LAN, loopback, carrier-local, link-local and multicast traffic outside the VPN.
  * Android 13+ can express exclusions directly. Older releases, and Android builds that
- * reject throw routes while establishing the interface, receive the equivalent allow-list
- * of public destinations because a default route cannot be negated there.
+ * reject throw routes while establishing the interface, keep IPv4 local exclusions but route
+ * all IPv6 into the tunnel. Older Android versions cannot safely express IPv6 exclusions, so
+ * the compatibility path fails closed instead of leaving part of IPv6 on the physical network.
  */
 internal object VpnRoutes {
     private val localNetworks = listOf(
@@ -58,7 +59,7 @@ internal object VpnRoutes {
         "199.0.0.0/8", "200.0.0.0/5", "208.0.0.0/4",
     )
 
-    internal const val PUBLIC_IPV6_ROUTE = "2000::/3"
+    internal const val COMPATIBLE_IPV6_ROUTE = "::/0"
 
     fun apply(
         builder: VpnService.Builder,
@@ -73,7 +74,7 @@ internal object VpnRoutes {
             val (address, prefix) = splitCidr(cidr)
             builder.addRoute(address, prefix)
         }
-        val (ipv6Address, ipv6Prefix) = splitCidr(PUBLIC_IPV6_ROUTE)
+        val (ipv6Address, ipv6Prefix) = splitCidr(COMPATIBLE_IPV6_ROUTE)
         builder.addRoute(ipv6Address, ipv6Prefix)
     }
 

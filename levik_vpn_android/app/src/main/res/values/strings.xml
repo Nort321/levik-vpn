@@ -291,18 +291,16 @@
     <string name="logs_viewer_title">Application Logs</string>
     <string name="logs_viewer_btn">View Logs</string>
     <string name="logs_clear_btn">Clear Logs</string>
-    <string name="logs_copy_btn">Copy Logs</string>
+    <string name="logs_share_btn">Share Logs</string>
     <string name="logs_send_support">Send to Support</string>
     <string name="logs_empty">No application logs captured yet</string>
-    <string name="logs_copied">Logs copied to clipboard</string>
 
     <string name="diagnostics_title">Network Diagnostics</string>
     <string name="diagnostics_btn">Run Diagnostics</string>
     <string name="diagnostics_running">Running connectivity tests…</string>
     <string name="diagnostics_report_title">Diagnostic Results</string>
-    <string name="diagnostics_copy">Copy Report</string>
+    <string name="diagnostics_share">Share Report</string>
     <string name="diagnostics_send_support">Send to Support</string>
-    <string name="diagnostics_copied">Diagnostic report copied to clipboard</string>
 
     <string name="traffic_history_title">Traffic Usage History</string>
     <string name="traffic_history_empty">No recorded traffic history yet</string>
@@ -314,7 +312,7 @@
     <string name="traffic_history_clear_confirm_message">Are you sure you want to delete all recorded traffic history? This action cannot be undone.</string>
     <string name="traffic_history_cleared">Traffic history cleared</string>
     <string name="traffic_history_export_title">LevikVPN Traffic History</string>
-    <string name="traffic_history_exported">Traffic history copied to clipboard</string>
+    <string name="traffic_history_exported">Traffic history is ready to share</string>
     <string name="traffic_today">Today</string>
     <string name="close">Close</string>
     <string name="save">Save</string>
@@ -379,7 +377,7 @@
     <string name="support_note_title">Encrypted Diagnostic Note</string>
     <string name="support_note_desc">Report is client-side encrypted with AES-GCM. Share this one-time link with support:</string>
     <string name="support_note_export_btn">Encrypt to Note</string>
-    <string name="support_note_copy">Copy Link</string>
+    <string name="support_note_share">Share Link</string>
     <string name="support_note_open_support">Open support</string>
     <string name="profile_local_never_expires">No expiration</string>
 </resources>

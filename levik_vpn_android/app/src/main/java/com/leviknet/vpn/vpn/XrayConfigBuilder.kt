@@ -297,11 +297,7 @@ class XrayConfigBuilder(
         if (!security.equals("reality", ignoreCase = true)) return
         val reality = stream["realitySettings"] as? JsonObject ?: return
         if (RealityRepair.hasUsableServerName(reality)) return
-        throw IllegalArgumentException(
-            "REALITY serverName is empty for \"${server.tag}\" " +
-                "(no sni in source link and no domain fallback); " +
-                "stream=${RealityRepair.describeStream(server.outbound)}",
-        )
+        throw IllegalArgumentException("REALITY server settings are incomplete")
     }
 
     private fun sanitizeAntiDpiParam(param: String, fallback: String): String {

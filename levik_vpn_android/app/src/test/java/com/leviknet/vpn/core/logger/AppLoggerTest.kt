@@ -33,4 +33,17 @@ class AppLoggerTest {
         assertFalse(formatted.contains(rawSecret))
         assertTrue(formatted.contains("[REDACTED]"))
     }
+
+    @Test
+    fun `sanitizes bare account and server identifiers`() {
+        val subscriptionId = "123e4567-e89b-12d3-a456-426614174000"
+        val serverId = "a".repeat(64)
+        val sanitized = AppLogger.sanitize(
+            "Subscription $subscriptionId failed while switching to server $serverId",
+        )
+
+        assertFalse(sanitized.contains(subscriptionId))
+        assertFalse(sanitized.contains(serverId))
+        assertTrue(sanitized.contains("[REDACTED]"))
+    }
 }

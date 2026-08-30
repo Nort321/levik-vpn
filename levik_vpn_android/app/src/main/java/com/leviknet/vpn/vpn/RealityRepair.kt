@@ -87,11 +87,6 @@ internal object RealityRepair {
         return candidates.filter(String::isNotBlank).distinct()
     }
 
-    /** Compact stream settings dump for diagnostics; contains no credentials. */
-    fun describeStream(outbound: JsonObject): String =
-        ((outbound["streamSettings"] as? JsonObject)?.toString() ?: "{}")
-            .take(MAX_DIAGNOSTIC_LENGTH)
-
     private fun JsonObject.serverNameText(): String? =
         (this["serverName"] as? JsonPrimitive)?.contentOrNull
 
@@ -117,7 +112,6 @@ internal object RealityRepair {
         value.all { character -> character.isDigit() || character == '.' } ||
             value.contains(':')
 
-    private const val MAX_DIAGNOSTIC_LENGTH = 220
     private val SERVER_ONLY_FIELDS = setOf(
         "masterKeyLog",
         "show",

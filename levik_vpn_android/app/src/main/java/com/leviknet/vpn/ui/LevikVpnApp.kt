@@ -154,6 +154,10 @@ fun LevikVpnApp(viewModel: AppViewModel) {
     val snackbarHostState = remember { SnackbarHostState() }
     val message = state.message?.localized()
     val context = LocalContext.current
+    val trafficHistoryShareTitle = stringResource(R.string.traffic_history_export_title)
+    val logsShareTitle = stringResource(R.string.logs_viewer_title)
+    val supportNoteShareTitle = stringResource(R.string.support_note_title)
+    val diagnosticsShareTitle = stringResource(R.string.diagnostics_report_title)
 
     var showPauseDialog by remember { mutableStateOf(false) }
     var showAntiDpiDialog by remember { mutableStateOf(false) }
@@ -236,7 +240,11 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                         viewModel.resetPerAppTrafficBaseline(context.packageManager, context)
                     },
                     onClearTrafficHistory = { showClearTrafficHistoryDialog = true },
-                    onExportTrafficHistory = { viewModel.exportTrafficHistory(context) },
+                    onExportTrafficHistory = {
+                        viewModel.exportTrafficHistory(
+                            trafficHistoryShareTitle,
+                        )
+                    },
                     onOpenDevices = { sub ->
                         selectedSubscriptionForDevices = sub
                         showDevicesDialog = true
@@ -479,9 +487,8 @@ fun LevikVpnApp(viewModel: AppViewModel) {
             logs = viewModel.getLogs(),
             formattedLogs = viewModel.getFormattedLogs(),
             onClear = viewModel::clearLogs,
-            onCopy = { logText ->
-                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                clipboard.setPrimaryClip(ClipData.newPlainText("Levik VPN Logs", logText))
+            onShare = { logText ->
+                viewModel.shareText(logsShareTitle, logText)
             },
             onSendSupport = viewModel::openSupport,
             onDismiss = { showLogsDialog = false },
@@ -562,9 +569,8 @@ fun LevikVpnApp(viewModel: AppViewModel) {
         SupportNoteDialog(
             noteUrl = noteUrl,
             onDismiss = viewModel::clearSupportNoteUrl,
-            onCopy = { url ->
-                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                clipboard.setPrimaryClip(ClipData.newPlainText("Levik VPN Support Note", url))
+            onShare = { url ->
+                viewModel.shareText(supportNoteShareTitle, url)
             },
             onOpenSupport = viewModel::openSupport,
         )
@@ -575,9 +581,8 @@ fun LevikVpnApp(viewModel: AppViewModel) {
             running = state.runningDiagnostics,
             report = state.diagnosticReport,
             isSharingNote = state.isSharingNote,
-            onCopy = { reportText ->
-                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                clipboard.setPrimaryClip(ClipData.newPlainText("Levik VPN Report", reportText))
+            onShare = { reportText ->
+                viewModel.shareText(diagnosticsShareTitle, reportText)
             },
             onSendSupport = viewModel::openSupport,
             onShareSupportNote = viewModel::shareDiagnosticReportAsNote,
@@ -4651,7 +4656,7 @@ private fun LogsViewerDialog(
     logs: List<LogEntry>,
     formattedLogs: String,
     onClear: () -> Unit,
-    onCopy: (String) -> Unit,
+    onShare: (String) -> Unit,
     onSendSupport: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -4695,11 +4700,11 @@ private fun LogsViewerDialog(
                     Text(stringResource(R.string.logs_clear_btn), fontWeight = FontWeight.SemiBold)
                 }
                 OutlinedButton(
-                    onClick = { onCopy(formattedLogs) },
+                    onClick = { onShare(formattedLogs) },
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.height(LevikDimensions.ButtonHeight),
                 ) {
-                    Text(stringResource(R.string.logs_copy_btn), fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(R.string.logs_share_btn), fontWeight = FontWeight.SemiBold)
                 }
                 Button(
                     onClick = onSendSupport,
@@ -5168,7 +5173,7 @@ private fun DiagnosticsDialog(
     running: Boolean,
     report: DiagnosticReport?,
     isSharingNote: Boolean,
-    onCopy: (String) -> Unit,
+    onShare: (String) -> Unit,
     onSendSupport: () -> Unit,
     onShareSupportNote: () -> Unit,
     onDismiss: () -> Unit,
@@ -5240,13 +5245,13 @@ private fun DiagnosticsDialog(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         OutlinedButton(
-                            onClick = { onCopy(report.toFormattedString()) },
+                            onClick = { onShare(report.toFormattedString()) },
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier
                                 .weight(1f)
                         .height(LevikDimensions.ButtonHeight),
                         ) {
-                            Text(stringResource(R.string.diagnostics_copy), fontWeight = FontWeight.SemiBold)
+                            Text(stringResource(R.string.diagnostics_share), fontWeight = FontWeight.SemiBold)
                         }
                         Button(
                             onClick = onShareSupportNote,
@@ -5356,7 +5361,7 @@ private fun PauseVpnDialog(
 private fun SupportNoteDialog(
     noteUrl: String,
     onDismiss: () -> Unit,
-    onCopy: (String) -> Unit,
+    onShare: (String) -> Unit,
     onOpenSupport: () -> Unit,
 ) {
     AlertDialog(
@@ -5396,11 +5401,11 @@ private fun SupportNoteDialog(
         },
         dismissButton = {
             OutlinedButton(
-                onClick = { onCopy(noteUrl) },
+                onClick = { onShare(noteUrl) },
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.height(LevikDimensions.ButtonHeight),
             ) {
-                Text(stringResource(R.string.support_note_copy), fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.support_note_share), fontWeight = FontWeight.SemiBold)
             }
         },
     )
@@ -5943,7 +5948,6 @@ private fun UiMessage.localized(): String = stringResource(
         UiMessage.ATTESTATION_UNAVAILABLE -> R.string.attestation_unavailable
         UiMessage.SUBSCRIPTION_UPDATED -> R.string.subscription_updated
         UiMessage.SERVER_PING_UNAVAILABLE -> R.string.server_ping_unavailable
-        UiMessage.DIAGNOSTICS_COPIED -> R.string.diagnostics_copied
         UiMessage.DEVICE_REVOKED_SUCCESS -> R.string.device_revoked_success
         UiMessage.DEVICE_REVOKE_FAILED -> R.string.device_revoke_failed
         UiMessage.TRAFFIC_HISTORY_CLEARED -> R.string.traffic_history_cleared

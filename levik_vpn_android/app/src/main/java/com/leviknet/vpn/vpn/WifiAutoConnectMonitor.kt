@@ -97,7 +97,7 @@ class WifiAutoConnectMonitor(
         if (now - lastAttempt < RETRY_INTERVAL_MS) return
         lastAttemptAtBySsid[rawSsid] = now
 
-        AppLogger.i(TAG, "Untrusted Wi-Fi \"$rawSsid\" detected, auto-connecting VPN")
+        AppLogger.i(TAG, "Untrusted Wi-Fi detected, auto-connecting VPN")
         runCatching { vpnController.connect() }
             .onFailure { error ->
                 AppLogger.w(TAG, "Wi-Fi auto-connect failed: ${error.message}")

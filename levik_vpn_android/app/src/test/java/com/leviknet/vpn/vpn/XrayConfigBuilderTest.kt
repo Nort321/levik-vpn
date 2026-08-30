@@ -174,8 +174,9 @@ class XrayConfigBuilderTest {
             .exceptionOrNull()
 
         assertTrue(error is IllegalArgumentException)
-        assertTrue(error?.message?.contains("REALITY serverName is empty") == true)
-        assertTrue(error?.message?.contains("\"security\":\"reality\"") == true)
+        assertEquals("REALITY server settings are incomplete", error?.message)
+        assertFalse(error?.message?.contains(selected.tag) == true)
+        assertFalse(error?.message?.contains("203.0.113.5") == true)
     }
 
     @Test

@@ -287,7 +287,7 @@ class LevikVpnService : VpnService() {
                 ?: profile.servers.firstOrNull(TunnelServer::isEligibleForAutomaticSelection)
                 ?: error("Tunnel profile has no server eligible for automatic selection")
 
-            AppLogger.i(LOG_TAG, "Establishing connection to server: ${selected.name} (${selected.id})")
+            AppLogger.i(LOG_TAG, "Establishing VPN connection")
 
             currentNetwork = networkMonitor.activeNetwork()
                 ?: throw NetworkSetupException("No validated underlying network")
@@ -384,7 +384,7 @@ class LevikVpnService : VpnService() {
                 return@connection
             }
             acquireWakeLock()
-            AppLogger.i(LOG_TAG, "Connected successfully to ${selected.name}")
+            AppLogger.i(LOG_TAG, "VPN connected successfully")
         } catch (error: CancellationException) {
             stopCoreAndTun()
             throw error
@@ -573,7 +573,7 @@ class LevikVpnService : VpnService() {
                 if (!setUnderlyingNetworks(arrayOf(network))) return@withLock
                 currentNetwork = network
                 underlyingNetwork.set(network)
-                AppLogger.i(LOG_TAG, "Network switched to $network, triggering seamless reconnect")
+                AppLogger.i(LOG_TAG, "Underlying network changed, triggering seamless reconnect")
                 scheduleReconnectLocked()
             }
         }
@@ -589,7 +589,7 @@ class LevikVpnService : VpnService() {
                 if (replacement != null && setUnderlyingNetworks(arrayOf(replacement))) {
                     currentNetwork = replacement
                     underlyingNetwork.set(replacement)
-                    AppLogger.i(LOG_TAG, "Network lost, switched to fallback $replacement")
+                    AppLogger.i(LOG_TAG, "Underlying network lost, switched to fallback network")
                     scheduleReconnectLocked()
                     return@withLock
                 }
@@ -806,7 +806,7 @@ class LevikVpnService : VpnService() {
         }
         if (candidates.isEmpty()) return false
 
-        AppLogger.i(LOG_TAG, "Server $currentId seems stalled, testing ${candidates.size} fallback servers")
+        AppLogger.i(LOG_TAG, "Current server seems stalled, testing ${candidates.size} fallback servers")
         var targetServer = candidates.first()
         val alive = candidates.mapNotNull { s ->
             val p = runCatching { ServerPinger.measure(s.outbound) }.getOrNull()
@@ -816,7 +816,7 @@ class LevikVpnService : VpnService() {
             targetServer = alive.minByOrNull { it.second }?.first ?: targetServer
         }
 
-        AppLogger.i(LOG_TAG, "Auto-failover: switching from $currentId to ${targetServer.id} (${targetServer.name})")
+        AppLogger.i(LOG_TAG, "Auto-failover selected a responsive server")
         container.secureStore.put(SecureFileStore.SELECTED_SERVER, targetServer.id.encodeToByteArray())
 
         connectionJob?.cancel()

@@ -291,18 +291,16 @@
     <string name="logs_viewer_title">Логи приложения</string>
     <string name="logs_viewer_btn">Просмотр логов</string>
     <string name="logs_clear_btn">Очистить логи</string>
-    <string name="logs_copy_btn">Копировать логи</string>
+    <string name="logs_share_btn">Поделиться логами</string>
     <string name="logs_send_support">Отправить в поддержку</string>
     <string name="logs_empty">Логи пока пусты</string>
-    <string name="logs_copied">Логи скопированы в буфер обмена</string>
 
     <string name="diagnostics_title">Диагностика сети</string>
     <string name="diagnostics_btn">Проверить сеть</string>
     <string name="diagnostics_running">Выполняется проверка сервисов…</string>
     <string name="diagnostics_report_title">Результаты диагностики</string>
-    <string name="diagnostics_copy">Скопировать отчёт</string>
+    <string name="diagnostics_share">Поделиться отчётом</string>
     <string name="diagnostics_send_support">Отправить в поддержку</string>
-    <string name="diagnostics_copied">Отчёт диагностики скопирован в буфер обмена</string>
 
     <string name="traffic_history_title">История расхода трафика</string>
     <string name="traffic_history_empty">История трафика пока пуста</string>
@@ -314,7 +312,7 @@
     <string name="traffic_history_clear_confirm_message">Вы действительно хотите удалить всю историю расхода трафика? Это действие нельзя отменить.</string>
     <string name="traffic_history_cleared">История трафика очищена</string>
     <string name="traffic_history_export_title">История трафика LevikVPN</string>
-    <string name="traffic_history_exported">История трафика скопирована в буфер обмена</string>
+    <string name="traffic_history_exported">История трафика готова к отправке</string>
     <string name="traffic_today">Сегодня</string>
     <string name="close">Закрыть</string>
     <string name="save">Сохранить</string>
@@ -379,7 +377,7 @@
     <string name="support_note_title">Зашифрованный отчет</string>
     <string name="support_note_desc">Отчет безопасно зашифрован ключом AES-GCM. Передайте ссылку в поддержку:</string>
     <string name="support_note_export_btn">Зашифровать в заметку</string>
-    <string name="support_note_copy">Копировать ссылку</string>
+    <string name="support_note_share">Поделиться ссылкой</string>
     <string name="support_note_open_support">Открыть поддержку</string>
     <string name="profile_local_never_expires">Бессрочно</string>
 </resources>

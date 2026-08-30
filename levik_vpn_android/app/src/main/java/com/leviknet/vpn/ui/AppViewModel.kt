@@ -2,8 +2,6 @@ package com.leviknet.vpn.ui
 
 import android.app.usage.NetworkStats
 import android.app.usage.NetworkStatsManager
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
@@ -389,7 +387,7 @@ class AppViewModel(
                 } catch (error: CancellationException) {
                     throw error
                 } catch (error: Throwable) {
-                    AppLogger.w("AppViewModel", "Subscription ${subscription.uuid} failed: ${error.message}")
+                    AppLogger.w("AppViewModel", "Subscription profile failed to load: ${error.message}")
                     lastError = error
                 }
             }
@@ -940,7 +938,7 @@ class AppViewModel(
                         )
                     }
                     if (mutableState.value.vpn.state in ACTIVE_TUNNEL_STATES) {
-                        AppLogger.i("AppViewModel", "Seamlessly switching to server $serverId")
+                        AppLogger.i("AppViewModel", "Seamlessly switching VPN server")
                         vpnController.switchServer(serverId)
                     }
                 }
@@ -1684,10 +1682,9 @@ class AppViewModel(
         mutableState.update { it.copy(message = UiMessage.TRAFFIC_HISTORY_CLEARED) }
     }
 
-    fun exportTrafficHistory(context: Context) {
+    fun exportTrafficHistory(shareTitle: String) {
         val csv = trafficHistoryStore?.exportHistoryCsv() ?: return
-        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-        clipboard?.setPrimaryClip(ClipData.newPlainText("LevikVPN Traffic History", csv))
+        shareText(shareTitle, csv)
         mutableState.update { it.copy(message = UiMessage.TRAFFIC_HISTORY_EXPORTED) }
     }
 
@@ -1787,11 +1784,13 @@ class AppViewModel(
         }
     }
 
-    fun shareReferralLink(link: String) {
+    fun shareText(title: String, text: String) {
         viewModelScope.launch {
-            effectChannel.send(AppEffect.ShareText(title = "Levik VPN", text = link))
+            effectChannel.send(AppEffect.ShareText(title = title, text = text))
         }
     }
+
+    fun shareReferralLink(link: String) = shareText("Levik VPN", link)
 
     fun requestIgnoreBatteryOptimization() {
         viewModelScope.launch {
@@ -2073,7 +2072,6 @@ enum class UiMessage {
     ATTESTATION_UNAVAILABLE,
     SUBSCRIPTION_UPDATED,
     SERVER_PING_UNAVAILABLE,
-    DIAGNOSTICS_COPIED,
     DEVICE_REVOKED_SUCCESS,
     DEVICE_REVOKE_FAILED,
     TRAFFIC_HISTORY_CLEARED,
