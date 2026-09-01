@@ -9,5 +9,6 @@ class DistributionPolicyTest {
         assertEquals(!BuildConfig.IS_PLAY_DISTRIBUTION, BuildConfig.SELF_UPDATE_ENABLED)
         assertEquals(!BuildConfig.IS_PLAY_DISTRIBUTION, BuildConfig.EXTERNAL_PURCHASES_ENABLED)
         assertEquals(BuildConfig.IS_PLAY_DISTRIBUTION, BuildConfig.PLAY_INTEGRITY_ENABLED)
+        assertEquals(!BuildConfig.IS_PLAY_DISTRIBUTION, BuildConfig.LEVIK_RELAY_ENABLED)
     }
 }

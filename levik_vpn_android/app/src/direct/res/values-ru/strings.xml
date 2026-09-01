@@ -14,6 +14,12 @@
     <string name="update_ready_desc">Обновление скачано и проверено. Нажмите «Установить» для применения.</string>
     <string name="update_uptodate_desc">У вас установлена самая свежая версия Levik VPN.</string>
     <string name="renew_plan_btn">Продлить</string>
+    <string name="subscription_management_button">Подписка и оплата</string>
+    <string name="relay_vk_auth_channel">Подключение через VK</string>
+    <string name="relay_vk_auth_title">Требуется вход в VK</string>
+    <string name="relay_vk_auth_notification">Откройте окно авторизации для подключения VPN</string>
+    <string name="relay_vk_login_prompt">Войдите в VK. Данные аккаунта остаются внутри VK WebView.</string>
+    <string name="relay_vk_joining">Получаем защищённый канал VK…</string>
     <string name="subscription_buy_slots_btn">Докупить слоты</string>
     <string name="subscription_buy_traffic_btn">Докупить трафик</string>
 </resources>

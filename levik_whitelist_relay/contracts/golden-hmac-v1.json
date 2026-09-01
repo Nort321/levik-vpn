@@ -1,0 +1,14 @@
+{
+  "description": "All bytes are UTF-8. The raw body has no trailing newline. The HMAC key is exactly 32 ASCII r bytes.",
+  "keyId": "bridge-golden-v1",
+  "keyUtf8": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr",
+  "method": "POST",
+  "requestUri": "/internal/v1/leases/apply",
+  "timestamp": "1790000000",
+  "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+  "body": "{\"deviceIdHash\":\"beae0469261d83fc1ad6b28d5f5a8990b79384c2ce7c3db0e4d87296d3f47f4c\",\"expiresAt\":1790086400,\"idempotencyKey\":\"423e4567-e89b-42d3-a456-426614174000\",\"revision\":7,\"subscriptionIdHash\":\"229c6cc56ae91bb2e8c21b7abdd63bb48f01b4da129660ef5a7be9d0df11476c\"}",
+  "bodySha256Hex": "6f513ae8177a0fc5f080091912103b5648b270c93145ee0bc15dae68f56e8937",
+  "canonical": "levik-hmac-v1\n1790000000\nAAAAAAAAAAAAAAAAAAAAAA\nPOST\n/internal/v1/leases/apply\n6f513ae8177a0fc5f080091912103b5648b270c93145ee0bc15dae68f56e8937",
+  "signatureHex": "35962d9f3a232cd11918e86013d34b865b0d3939b28b87e602d9dff32261fa56",
+  "leaseRef": "bymQUNzxPB1u8KJZEf7AOrj7t--6SL_2kcSdUXjnonA"
+}

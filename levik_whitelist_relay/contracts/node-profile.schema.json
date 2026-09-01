@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://levik.net/schemas/whitelist-relay-node-profile-v1.json",
+  "title": "Levik WhiteList Relay node metadata",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "displayName", "countryCode", "host", "port", "turnFrontSni", "transport", "serverPublicKey", "turnHashes"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,128}$" },
+    "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "countryCode": { "type": "string", "pattern": "^[A-Z]{2}$" },
+    "host": { "type": "string", "minLength": 1, "maxLength": 253 },
+    "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "turnFrontSni": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253,
+      "pattern": "^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?:\\.(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*$",
+      "description": "DNS SNI sent only to the external TURN TLS front; it is not the relay endpoint hostname."
+    },
+    "transport": { "const": "turn-dtls" },
+    "serverPublicKey": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$", "description": "Pinned 32-byte WireGuard server public key in unpadded base64url." },
+    "turnHashes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[A-Za-z0-9_-]{16,256}$" }
+    }
+  }
+}

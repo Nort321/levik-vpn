@@ -1,0 +1,19 @@
+Levik WhiteList Relay
+======================
+
+`fork/wdtt-plus-v15` is a modified fork of WDTT Plus v15, exact commit
+3038b8ddc0306feb21d3c3624e2bc1c3c14639ad, licensed GPL-3.0-only. The
+upstream copyright and full GPL text are retained in that directory.
+
+The TUN file-descriptor transfer in `go_client/levik_tun_linux.go` is derived
+in part from the GPL-3.0-only qWDTT Android client at commit
+fae121efc3ef57b633516601d3c0d6b1be1fde7c. It was rewritten to add a
+versioned state machine, SO_PEERCRED, exact SCM_RIGHTS validation, deadlines,
+cellular socket protection and a pinned WireGuard server identity.
+
+`node-agent` is original Levik code licensed AGPL-3.0-only. Its complete
+license is included as `node-agent/LICENSE`.
+
+No CSQTT code, asset, protocol implementation, dependency, or PolyForm-
+licensed material is included.
+

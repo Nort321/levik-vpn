@@ -14,6 +14,12 @@
     <string name="update_ready_desc">Update downloaded and verified. Tap Install to apply.</string>
     <string name="update_uptodate_desc">You have the latest version of Levik VPN.</string>
     <string name="renew_plan_btn">Renew</string>
+    <string name="subscription_management_button">Subscription and billing</string>
     <string name="subscription_buy_slots_btn">Add Device Slots</string>
     <string name="subscription_buy_traffic_btn">Add Traffic Quota</string>
+    <string name="relay_vk_auth_channel">VK connection</string>
+    <string name="relay_vk_auth_title">VK sign-in required</string>
+    <string name="relay_vk_auth_notification">Open the authorization window to connect the VPN</string>
+    <string name="relay_vk_login_prompt">Sign in to VK. Your account data stays inside the VK WebView.</string>
+    <string name="relay_vk_joining">Establishing the protected VK channel…</string>
 </resources>

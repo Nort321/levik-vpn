@@ -112,13 +112,32 @@ class MobileApiClient(
         return response
     }
 
+    suspend fun openOrderPayment(
+        accessToken: String,
+        orderId: Long,
+    ): OpenOrderPaymentResponse {
+        require(orderId > 0) { "Invalid order id" }
+        val response = post<OpenOrderPaymentRequest, OpenOrderPaymentResponse>(
+            path = ORDER_PAYMENT_PATH,
+            request = OpenOrderPaymentRequest(orderId),
+            accessToken = accessToken,
+            requiresIntegrity = true,
+        )
+        checkSuccess(response.ok)
+        return response
+    }
+
     suspend fun tunnelProfile(
         accessToken: String,
         subscriptionId: String,
+        engine: String? = null,
     ): TunnelProfileEnvelope {
+        require(engine == null || engine in SUPPORTED_TUNNEL_ENGINES) {
+            "Invalid tunnel engine request"
+        }
         val response = post<TunnelProfileRequest, TunnelProfileResponse>(
             path = TUNNEL_PROFILE_PATH,
-            request = TunnelProfileRequest(subscriptionId),
+            request = TunnelProfileRequest(subscriptionId, engine),
             accessToken = accessToken,
             requiresIntegrity = true,
         )
@@ -379,7 +398,9 @@ class MobileApiClient(
         private const val ACCOUNT_PATH = "/api/mobile/v1/account"
         private const val CATALOG_PATH = "/api/mobile/v1/catalog"
         private const val ORDER_CREATE_PATH = "/api/mobile/v1/orders/create"
+        private const val ORDER_PAYMENT_PATH = "/api/mobile/v1/orders/payment"
         private const val TUNNEL_PROFILE_PATH = "/api/mobile/v1/tunnel-profile"
+        private val SUPPORTED_TUNNEL_ENGINES = setOf("xray", "levik-relay")
         private const val CHECK_IP_PATH = "/api/check"
         private const val STATUS_PATH = "/api/status"
         private const val FREE_PROXY_PATH = "/api/free-proxy"

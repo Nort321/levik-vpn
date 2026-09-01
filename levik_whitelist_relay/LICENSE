@@ -1,0 +1,16 @@
+Levik WhiteList Relay licensing
+================================
+
+This source tree contains separately licensed components; no relicensing of
+upstream work is intended.
+
+* `fork/wdtt-plus-v15/` is licensed under GPL-3.0-only. Its complete license
+  text is in `fork/wdtt-plus-v15/LICENSE`.
+* `node-agent/` is original Levik work licensed under AGPL-3.0-only. Its
+  complete license text is in `node-agent/LICENSE`.
+* Original Levik contracts, build/provenance scripts, and documentation
+  outside the fork are licensed under AGPL-3.0-only.
+* The qWDTT-derived portion identified in `NOTICE` remains GPL-3.0-only.
+
+Exact source provenance and excluded material are recorded in `NOTICE` and
+`source/upstream.lock.json`.

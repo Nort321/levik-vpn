@@ -6,6 +6,44 @@
 
 ## Нативный runtime Android VPN
 
+### Levik WhiteList Relay / WDTT Plus v15 (только Direct)
+
+- Upstream-репозиторий: <https://github.com/Ivan4537/WDTT-Plus>
+- Зафиксированная ревизия: `3038b8ddc0306feb21d3c3624e2bc1c3c14639ad`
+- Лицензия компонента: GPL-3.0-only
+- SHA-256 зафиксированного upstream-архива:
+  `07c6a4c200c87c636a6d0855385e96284e73ddcc5b80c912a463b068ef964223`
+
+В Direct-сборке используется изменённый fork клиента и сервера. Полный
+исходный код fork, патчи, lock-файлы toolchain и скрипты воспроизводимой
+сборки находятся в `levik_whitelist_relay/`. Нативный клиент не входит в
+Google Play flavor.
+
+Передача TUN file descriptor частично основана на GPL-3.0-коде qWDTT:
+
+- Upstream-репозиторий: <https://github.com/SpaceNeuroX/proxy-turn-vk-android>
+- Зафиксированная ревизия: `fae121efc3ef57b633516601d3c0d6b1be1fde7c`
+- SHA-256 зафиксированного upstream-архива:
+  `1a2b4f559890e0688ea608c6890a7794131acd583acc612d23e30f59e8c53e9c`
+
+Код, ресурсы и зависимости CSQTT не используются и не включаются: лицензия
+этого проекта PolyForm Noncommercial несовместима с коммерческим
+распространением клиентского приложения.
+
+### anet (транзитивная зависимость Pion в Direct relay)
+
+- Upstream-репозиторий: <https://github.com/wlynxg/anet>
+- Версия: `v0.0.5`
+- Зафиксированная ревизия: `839bc3a920f1b87dd3ce1386e425aa5ef2e69d24`
+- Лицензия: BSD-3-Clause
+
+Direct relay использует локальный fork `third_party/anet`: из Android-кода
+удалены только неподдерживаемые записи в приватные `net.zoneCache` через
+`//go:linkname`; публичная Android 11+ логика перечисления интерфейсов
+сохранена. Полный исходный код, BSD-лицензия и описание патча включены в
+`levik_whitelist_relay/fork/wdtt-plus-v15/go_client/third_party/anet/` и в
+Corresponding Source. Глобальное отключение linker-проверки не используется.
+
 ### libXray
 
 - Upstream-репозиторий: <https://github.com/XTLS/libXray>

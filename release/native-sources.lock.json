@@ -45,6 +45,24 @@
       "license": "GPL-3.0-or-later"
     },
     {
+      "name": "WDTT-Plus",
+      "version": "v15",
+      "commit": "3038b8ddc0306feb21d3c3624e2bc1c3c14639ad",
+      "url": "https://codeload.github.com/Ivan4537/WDTT-Plus/tar.gz/3038b8ddc0306feb21d3c3624e2bc1c3c14639ad",
+      "size": 4350016,
+      "sha256": "07c6a4c200c87c636a6d0855385e96284e73ddcc5b80c912a463b068ef964223",
+      "license": "GPL-3.0-only"
+    },
+    {
+      "name": "qWDTT Android",
+      "version": "fae121e",
+      "commit": "fae121efc3ef57b633516601d3c0d6b1be1fde7c",
+      "url": "https://codeload.github.com/SpaceNeuroX/proxy-turn-vk-android/tar.gz/fae121efc3ef57b633516601d3c0d6b1be1fde7c",
+      "size": 1868700,
+      "sha256": "1a2b4f559890e0688ea608c6890a7794131acd583acc612d23e30f59e8c53e9c",
+      "license": "GPL-3.0-only"
+    },
+    {
       "name": "Go toolchain source",
       "version": "go1.26.5",
       "url": "https://go.dev/dl/go1.26.5.src.tar.gz",

@@ -50,7 +50,9 @@ import com.leviknet.vpn.vpn.VpnConnectionState
 import com.leviknet.vpn.vpn.VpnController
 import com.leviknet.vpn.vpn.VpnSnapshot
 import com.leviknet.vpn.vpn.isEligibleForAutomaticSelection
+import com.leviknet.vpn.vpn.isAllowlistMobileServer
 import com.leviknet.vpn.vpn.isMobileServer
+import com.leviknet.vpn.vpn.isStandardMobileServer
 import java.time.Instant
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -86,6 +88,7 @@ class AppViewModel(
     private val updateManager: AppUpdateManager,
     private val trafficHistoryStore: TrafficHistoryStore? = null,
     private val appContext: Context? = null,
+    whitelistDetector: WhitelistDetector? = null,
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(AppUiState())
     private val effectChannel = Channel<AppEffect>(Channel.BUFFERED)
@@ -100,11 +103,12 @@ class AppViewModel(
     private var lteTrafficSyncJob: Job? = null
     private var whitelistDetectionJob: Job? = null
     private var pendingLteAction: PendingLteAction? = null
+    private var pendingAllowlistAction: PendingAllowlistAction? = null
     private var pendingWifiAutoConnect = false
     private val serverPingMutex = Mutex()
     private val perAppBaselineMutex = Mutex()
     private val lteTrafficAccumulator = LteTrafficAccumulator()
-    private val whitelistDetector = appContext?.let(::WhitelistDetector)
+    private val whitelistDetector = whitelistDetector ?: appContext?.let(::WhitelistDetector)
 
     /** uid -> (rx, tx) captured at VPN connect; per-app stats show deltas from it. */
     @Volatile
@@ -346,7 +350,12 @@ class AppViewModel(
     }
 
     fun selectTab(tab: AppTab) {
-        mutableState.update { it.copy(tab = tab) }
+        mutableState.update {
+            it.copy(
+                tab = tab,
+                subscriptionManagementOpen = it.subscriptionManagementOpen && tab == AppTab.PROFILE,
+            )
+        }
         if (tab == AppTab.SERVERS &&
             mutableState.value.profile == null &&
             mutableState.value.vpn.state in setOf(
@@ -361,7 +370,11 @@ class AppViewModel(
     private fun loadServers() {
         if (mutableState.value.refreshing) return
         viewModelScope.launch {
-            val account = mutableState.value.account ?: return@launch
+            val account = mutableState.value.account
+            if (account == null) {
+                syncCachedProfile()
+                return@launch
+            }
             val activeSubs = account.subscriptions.filter { it.isActiveAt(Instant.now()) }
             if (activeSubs.isEmpty()) {
                 mutableState.update { it.copy(message = UiMessage.SUBSCRIPTION_REQUIRED) }
@@ -590,6 +603,7 @@ class AppViewModel(
     fun refreshAccount() {
         refreshSubscription(showErrors = true)
         viewModelScope.launch { refreshLevikStatus() }
+        refreshWhitelistStatus(forceRefresh = true)
     }
 
     private fun calculateLteTraffic(
@@ -600,7 +614,7 @@ class AppViewModel(
         val server = state.profile?.servers?.firstOrNull {
             it.id == state.selectedServerId
         } ?: return null
-        if (!server.isMobileServer()) return null
+        if (!server.isStandardMobileServer()) return null
         val account = state.account ?: return null
         val subscriptionId = state.profile?.subscriptionId
             ?: state.selectedSubscriptionId
@@ -628,7 +642,7 @@ class AppViewModel(
         val state = mutableState.value
         val shouldSync = vpn.state == VpnConnectionState.CONNECTED &&
             state.profile?.servers?.firstOrNull { it.id == state.selectedServerId }
-                ?.isMobileServer() == true
+                ?.isStandardMobileServer() == true
         if (!shouldSync) {
             lteTrafficSyncJob?.cancel()
             lteTrafficSyncJob = null
@@ -669,8 +683,20 @@ class AppViewModel(
         }
     }
 
-    fun openPurchaseFlow() {
+    fun openSubscriptionManagement() {
         if (!BuildConfig.EXTERNAL_PURCHASES_ENABLED || mutableState.value.purchaseLoading) return
+        mutableState.update { it.copy(subscriptionManagementOpen = true) }
+        loadSubscriptionCatalog()
+    }
+
+    fun refreshSubscriptionManagement() {
+        if (!BuildConfig.EXTERNAL_PURCHASES_ENABLED || mutableState.value.purchaseLoading) return
+        refreshSubscription(showErrors = false)
+        loadSubscriptionCatalog()
+    }
+
+    private fun loadSubscriptionCatalog() {
+        if (mutableState.value.purchaseLoading) return
         viewModelScope.launch {
             mutableState.update { it.copy(purchaseLoading = true, message = null) }
             try {
@@ -685,9 +711,9 @@ class AppViewModel(
         }
     }
 
-    fun closePurchaseFlow() {
+    fun closeSubscriptionManagement() {
         if (!mutableState.value.purchaseLoading) {
-            mutableState.update { it.copy(purchaseCatalog = null) }
+            mutableState.update { it.copy(subscriptionManagementOpen = false) }
         }
     }
 
@@ -710,8 +736,8 @@ class AppViewModel(
                     paymentMethodId,
                 )
                 val paymentUrl = requireNotNull(order.paymentUrl) { "Payment URL is unavailable" }
-                mutableState.update { it.copy(purchaseCatalog = null) }
-                effectChannel.send(AppEffect.OpenExternal(paymentUrl))
+                runCatching { repository.refreshAccount() }
+                effectChannel.send(AppEffect.OpenPayment(paymentUrl))
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
                 mutableState.update { it.copy(message = error.toUiMessage()) }
@@ -719,6 +745,26 @@ class AppViewModel(
                 mutableState.update { it.copy(purchaseLoading = false) }
             }
         }
+    }
+
+    fun continueOrderPayment(orderId: Long) {
+        if (!BuildConfig.EXTERNAL_PURCHASES_ENABLED || mutableState.value.purchaseLoading) return
+        viewModelScope.launch {
+            mutableState.update { it.copy(purchaseLoading = true, message = null) }
+            try {
+                val paymentUrl = repository.openOrderPayment(orderId)
+                effectChannel.send(AppEffect.OpenPayment(paymentUrl))
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                mutableState.update { it.copy(message = error.toUiMessage()) }
+            } finally {
+                mutableState.update { it.copy(purchaseLoading = false) }
+            }
+        }
+    }
+
+    fun onPaymentOpenFailed() {
+        mutableState.update { it.copy(message = UiMessage.PAYMENT_OPEN_FAILED) }
     }
 
     private fun refreshSubscription(showErrors: Boolean) {
@@ -777,7 +823,10 @@ class AppViewModel(
         }
     }
 
-    private fun prepareConnection(allowLteWithoutWhitelist: Boolean = false) {
+    private fun prepareConnection(
+        allowLteWithoutWhitelist: Boolean = false,
+        attemptAllowlistConnection: Boolean = false,
+    ) {
         if (mutableState.value.refreshing) return
         viewModelScope.launch {
             val account = mutableState.value.account
@@ -813,7 +862,11 @@ class AppViewModel(
                     val refreshRequested = reusableCached != null &&
                         (
                             profileRefreshPending ||
-                                profileRefreshDue(reusableCached.issuedAt, Instant.now())
+                                profileRefreshDue(reusableCached.issuedAt, Instant.now()) ||
+                                relayCredentialRefreshDue(
+                                    reusableCached.relayCredentialExpiresAt,
+                                    Instant.now(),
+                                )
                             )
                     if (reusableCached != null && !refreshRequested) {
                         reusableCached
@@ -826,9 +879,6 @@ class AppViewModel(
                             if (error is CancellationException) throw error
                             if (reusableCached == null) throw error
                             profileRefreshPending = true
-                            mutableState.update {
-                                it.copy(message = error.toUiMessage())
-                            }
                             reusableCached
                         }
                     }
@@ -838,8 +888,22 @@ class AppViewModel(
                     it.copy(profile = profile, selectedServerId = selected)
                 }
                 val selectedServer = profile.servers.firstOrNull { it.id == selected }
+                if (!attemptAllowlistConnection &&
+                    selectedServer?.isAllowlistMobileServer() == true
+                ) {
+                    var currentMode = mutableState.value.whitelistMode
+                    if (currentMode != WhitelistMode.ACTIVE && whitelistDetector != null) {
+                        currentMode = runCatching { whitelistDetector.detect(forceRefresh = false) }.getOrNull() ?: currentMode
+                        mutableState.update { it.copy(whitelistMode = currentMode) }
+                    }
+                    if (currentMode != WhitelistMode.ACTIVE) {
+                        pendingAllowlistAction = PendingAllowlistAction.Connect
+                        mutableState.update { it.copy(showAllowlistRequiredWarning = true) }
+                        return@launch
+                    }
+                }
                 if (!allowLteWithoutWhitelist &&
-                    selectedServer?.isMobileServer() == true &&
+                    selectedServer?.isStandardMobileServer() == true &&
                     mutableState.value.whitelistMode == WhitelistMode.INACTIVE
                 ) {
                     pendingLteAction = PendingLteAction.Connect
@@ -913,7 +977,15 @@ class AppViewModel(
     fun selectServer(serverId: String) {
         val profile = mutableState.value.profile ?: return
         val server = profile.servers.firstOrNull { it.id == serverId } ?: return
-        if (server.isMobileServer() &&
+        if (server.isAllowlistMobileServer() &&
+            mutableState.value.whitelistMode != WhitelistMode.ACTIVE &&
+            mutableState.value.vpn.state in ACTIVE_TUNNEL_STATES
+        ) {
+            pendingAllowlistAction = PendingAllowlistAction.SelectServer(serverId)
+            mutableState.update { it.copy(showAllowlistRequiredWarning = true) }
+            return
+        }
+        if (server.isStandardMobileServer() &&
             mutableState.value.whitelistMode == WhitelistMode.INACTIVE &&
             mutableState.value.vpn.state in ACTIVE_TUNNEL_STATES
         ) {
@@ -961,6 +1033,22 @@ class AppViewModel(
     fun dismissLteWhitelistWarning() {
         pendingLteAction = null
         mutableState.update { it.copy(showLteWhitelistWarning = false) }
+    }
+
+    fun dismissAllowlistRequiredWarning() {
+        pendingAllowlistAction = null
+        mutableState.update { it.copy(showAllowlistRequiredWarning = false) }
+    }
+
+    fun confirmAllowlistConnectionAttempt() {
+        val action = pendingAllowlistAction
+        pendingAllowlistAction = null
+        mutableState.update { it.copy(showAllowlistRequiredWarning = false) }
+        when (action) {
+            null -> Unit
+            PendingAllowlistAction.Connect -> prepareConnection(attemptAllowlistConnection = true)
+            is PendingAllowlistAction.SelectServer -> selectServerNow(action.serverId)
+        }
     }
 
     fun selectAutomaticServer() {
@@ -1263,6 +1351,7 @@ class AppViewModel(
                 cached.subscriptionId != matchingSubscription.uuid ||
                 forceProfileRefresh ||
                 profileRefreshDue(cached.issuedAt, Instant.now()) ||
+                relayCredentialRefreshDue(cached.relayCredentialExpiresAt, Instant.now()) ||
                 !equivalentSubscriptionExpiry(
                     cached.subscriptionExpiresAt,
                     matchingSubscription.expireAt,
@@ -1388,7 +1477,7 @@ class AppViewModel(
             supervisorScope {
                 servers.map { server ->
                     async(Dispatchers.IO) {
-                        server.id to ServerPinger.measure(server.outbound)
+                        server.id to ServerPinger.measure(server)
                     }
                 }.awaitAll().toMap()
             }
@@ -1722,18 +1811,22 @@ class AppViewModel(
 
     fun onAppForegrounded() {
         refreshWhitelistStatus()
+        if (mutableState.value.subscriptionManagementOpen) {
+            refreshSubscription(showErrors = false)
+        }
         if (!BuildConfig.SELF_UPDATE_ENABLED || updateCheckJob?.isActive == true) return
         updateCheckJob = viewModelScope.launch {
             updateManager.checkForUpdates(silent = true)
         }
     }
 
-    private fun refreshWhitelistStatus() {
+    private fun refreshWhitelistStatus(forceRefresh: Boolean = false) {
         val detector = whitelistDetector ?: return
-        if (whitelistDetectionJob?.isActive == true) return
+        if (whitelistDetectionJob?.isActive == true && !forceRefresh) return
+        whitelistDetectionJob?.cancel()
         whitelistDetectionJob = viewModelScope.launch {
             val mode = try {
-                detector.detect()
+                detector.detect(forceRefresh = forceRefresh)
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
                 AppLogger.w("AppViewModel", "Allow-list detection failed")
@@ -1833,6 +1926,9 @@ class AppViewModel(
             "profile_rate_limited", "rate_limited" -> UiMessage.RATE_LIMITED
             "profile_upstream_unavailable", "profile_unavailable" -> UiMessage.PROFILE_UNAVAILABLE
             "login_denied" -> UiMessage.LOGIN_DENIED
+            "payment_not_available", "order_payment_unavailable", "payment_url_unavailable" ->
+                UiMessage.PAYMENT_NOT_AVAILABLE
+            "order_already_in_progress" -> UiMessage.PAYMENT_ALREADY_PENDING
             else -> UiMessage.GENERIC_ERROR
         }
         is IllegalArgumentException -> UiMessage.PROFILE_UNAVAILABLE
@@ -1876,6 +1972,7 @@ class AppViewModel(
                         updateManager = container.updateManager,
                         trafficHistoryStore = container.trafficHistoryStore,
                         appContext = container.appContext,
+                        whitelistDetector = container.whitelistDetector,
                     ) as T
                 }
             }
@@ -1912,6 +2009,17 @@ internal fun profileRefreshDue(
     return !issued.isAfter(now.minusSeconds(refreshIntervalSeconds))
 }
 
+internal fun relayCredentialRefreshDue(
+    expiresAt: String?,
+    now: Instant,
+    refreshLeadSeconds: Long = RELAY_CREDENTIAL_REFRESH_LEAD_SECONDS,
+): Boolean {
+    require(refreshLeadSeconds >= 0)
+    if (expiresAt == null) return false
+    val expiry = runCatching { Instant.parse(expiresAt) }.getOrNull() ?: return true
+    return !expiry.isAfter(now.plusSeconds(refreshLeadSeconds))
+}
+
 internal fun shouldDisconnectAfterProfileRemoval(
     hadCachedProfile: Boolean,
     hasCachedProfile: Boolean,
@@ -1938,6 +2046,7 @@ internal fun equivalentSubscriptionExpiry(
 }
 
 private const val PROFILE_REFRESH_INTERVAL_SECONDS = 60 * 60L
+private const val RELAY_CREDENTIAL_REFRESH_LEAD_SECONDS = 5 * 60L
 
 data class InstalledAppItem(
     val packageName: String,
@@ -1963,6 +2072,7 @@ enum class ServerFilterType {
     ALL,
     REGULAR,
     MOBILE,
+    MOBILE_ALLOWLIST,
     FAVORITES,
     FASTEST,
 }
@@ -1985,6 +2095,7 @@ data class AppUiState(
     val showVpnDisclosure: Boolean = false,
     val showLogoutConfirmation: Boolean = false,
     val showLteWhitelistWarning: Boolean = false,
+    val showAllowlistRequiredWarning: Boolean = false,
     val whitelistMode: WhitelistMode = WhitelistMode.UNKNOWN,
     val routingPreset: RoutingPreset = RoutingPreset.BYPASS_RU,
     val bypassRussianTraffic: Boolean = true,
@@ -2025,6 +2136,7 @@ data class AppUiState(
     val levikStatus: LevikStatusSnapshot? = null,
     val purchaseCatalog: CatalogResponse? = null,
     val purchaseLoading: Boolean = false,
+    val subscriptionManagementOpen: Boolean = false,
     val isSharingNote: Boolean = false,
     val message: UiMessage? = null,
 )
@@ -2046,6 +2158,11 @@ private enum class OnboardingAction {
 private sealed interface PendingLteAction {
     data object Connect : PendingLteAction
     data class SelectServer(val serverId: String) : PendingLteAction
+}
+
+private sealed interface PendingAllowlistAction {
+    data object Connect : PendingAllowlistAction
+    data class SelectServer(val serverId: String) : PendingAllowlistAction
 }
 
 sealed interface LoginUiState {
@@ -2076,11 +2193,15 @@ enum class UiMessage {
     DEVICE_REVOKE_FAILED,
     TRAFFIC_HISTORY_CLEARED,
     TRAFFIC_HISTORY_EXPORTED,
+    PAYMENT_OPEN_FAILED,
+    PAYMENT_NOT_AVAILABLE,
+    PAYMENT_ALREADY_PENDING,
 }
 
 sealed interface AppEffect {
     data class OpenAuthorization(val uri: String) : AppEffect
     data class OpenExternal(val uri: String) : AppEffect
+    data class OpenPayment(val uri: String) : AppEffect
     data class ShareText(val title: String, val text: String) : AppEffect
     data object RequestBatteryOptimization : AppEffect
     data object RequestVpnPermission : AppEffect

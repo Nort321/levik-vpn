@@ -36,6 +36,15 @@ class SubscriptionSyncWorker(
         }
 
         try {
+            // Snapshot before refreshAccount(): reconciliation intentionally removes revoked relay
+            // nodes and can switch the selected id to Xray, but a running native relay must still
+            // be torn down immediately.
+            val vpnBeforeRefresh = container.vpnController.state.value
+            val cachedBeforeRefresh = container.repository.cachedTunnel()
+            val selectedServerBeforeRefresh = container.repository.selectedServerId()
+            val selectedEngineBeforeRefresh = cachedBeforeRefresh?.servers
+                ?.firstOrNull { it.id == selectedServerBeforeRefresh }
+                ?.engine
             val account = container.repository.refreshAccount()
             val now = Instant.now()
             val active = account.subscriptions.filter { it.isActiveAt(now) }
@@ -43,11 +52,29 @@ class SubscriptionSyncWorker(
                 it.uuid == container.settings.selectedSubscriptionId.value
             } ?: active.firstOrNull()
 
-            val cachedProfile = container.repository.cachedTunnel()
+            val relaySubscriptionId = vpnBeforeRefresh.subscriptionId
+                ?: cachedBeforeRefresh?.subscriptionId
+            val relayCapabilityEnabled = relaySubscriptionId?.let { subscriptionId ->
+                account.subscriptions
+                    .firstOrNull { it.uuid == subscriptionId }
+                    ?.takeIf { it.isActiveAt(now) }
+                    ?.capabilities
+                    ?.whitelistRelay == true
+            } == true
+            if (relayCapabilityRevocationRequiresDisconnect(
+                    currentEngine = vpnBeforeRefresh.engine,
+                    selectedEngine = selectedEngineBeforeRefresh,
+                    relayCapabilityEnabled = relayCapabilityEnabled,
+                    connectionState = vpnBeforeRefresh.state,
+                )
+            ) {
+                AppLogger.w(TAG, "Relay capability was revoked; disconnecting fail-closed")
+                container.vpnController.disconnect()
+            }
 
-            if (cachedProfile != null) {
+            if (cachedBeforeRefresh != null) {
                 val stillValid = account.subscriptions.containsActiveSubscription(
-                    subscriptionId = cachedProfile.subscriptionId,
+                    subscriptionId = cachedBeforeRefresh.subscriptionId,
                     now = now,
                 )
                 if (!stillValid) {
@@ -73,7 +100,7 @@ class SubscriptionSyncWorker(
                     subscription = selected,
                     settings = container.settings,
                 )
-            } else if (cachedProfile != null) {
+            } else if (cachedBeforeRefresh != null) {
                 if (container.vpnController.state.value.state !in setOf(
                         VpnConnectionState.DISCONNECTED,
                         VpnConnectionState.ERROR,
@@ -164,3 +191,16 @@ internal fun subscriptionSyncFailureAction(
     runAttemptCount < 3 -> SubscriptionSyncFailureAction.RETRY
     else -> SubscriptionSyncFailureAction.FAIL
 }
+
+internal fun relayCapabilityRevocationRequiresDisconnect(
+    currentEngine: TunnelEngineKind?,
+    selectedEngine: TunnelEngineKind?,
+    relayCapabilityEnabled: Boolean,
+    connectionState: VpnConnectionState,
+): Boolean = !relayCapabilityEnabled &&
+    (currentEngine == TunnelEngineKind.LEVIK_RELAY ||
+        selectedEngine == TunnelEngineKind.LEVIK_RELAY) &&
+    connectionState !in setOf(
+        VpnConnectionState.DISCONNECTED,
+        VpnConnectionState.ERROR,
+    )

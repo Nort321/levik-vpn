@@ -13,15 +13,21 @@ import com.leviknet.vpn.core.network.OrderSummary
 import com.leviknet.vpn.core.network.LoginState
 import com.leviknet.vpn.core.network.MobileAccountResponse
 import com.leviknet.vpn.core.network.MobileApiClient
+import com.leviknet.vpn.core.logger.AppLogger
 import com.leviknet.vpn.core.security.DeviceIdentity
 import com.leviknet.vpn.core.security.HybridProfileDecryptor
 import com.leviknet.vpn.core.security.SecureFileStore
 import com.leviknet.vpn.core.security.TrialDeviceBinding
 import com.leviknet.vpn.vpn.PreparedTunnelProfile
+import com.leviknet.vpn.vpn.TunnelEngineKind
 import com.leviknet.vpn.vpn.TunnelProfileParser
-import com.leviknet.vpn.vpn.XrayRuntime
+import com.leviknet.vpn.vpn.TunnelProfilePreparer
+import com.leviknet.vpn.vpn.TunnelServer
+import com.leviknet.vpn.vpn.isEligibleForAutomaticSelection
+import java.security.MessageDigest
 import java.time.Instant
 import java.util.Locale
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -37,10 +43,14 @@ class AppRepository(
     private val trialDeviceBinding: TrialDeviceBinding,
     private val secureStore: SecureFileStore,
     private val profileDecryptor: HybridProfileDecryptor,
-    private val xrayRuntime: XrayRuntime,
+    private val tunnelProfilePreparer: TunnelProfilePreparer,
+    private val supportedTunnelEngines: Set<TunnelEngineKind>,
     private val json: Json,
 ) {
-    private val profileParser = TunnelProfileParser(json)
+    private val profileParser = TunnelProfileParser(
+        json = json,
+        supportedEngines = supportedTunnelEngines,
+    )
     private val authMutex = Mutex()
     private val profileMutex = Mutex()
     private val _session = MutableStateFlow<SessionStatus>(SessionStatus.Loading)
@@ -181,43 +191,101 @@ class AppRepository(
         profileMutex.withLock {
             require(subscriptionId.matches(UUID_OR_SAFE_ID)) { "Invalid subscription id" }
             val token = requireToken()
-            val envelope = try {
-                apiClient.tunnelProfile(token, subscriptionId)
+            val expectedDeviceId = withContext(Dispatchers.IO) {
+                deviceIdentity.deviceId()
+            }
+            val xrayPrepared = try {
+                fetchPreparedTunnelProfile(
+                    token = token,
+                    subscriptionId = subscriptionId,
+                    expectedDeviceId = expectedDeviceId,
+                    engine = null,
+                )
             } catch (error: ApiException.Unauthorized) {
                 clearAuthentication()
                 throw error
             }
-            val plaintext = withContext(Dispatchers.IO) {
-                profileDecryptor.decrypt(envelope)
-            }
-            try {
-                val profile = withContext(Dispatchers.Default) {
-                    profileParser.parse(plaintext, subscriptionId)
-                }
-                val prepared = withContext(Dispatchers.Default) {
-                    xrayRuntime.convertProfile(profile)
-                }
-                val encoded = withContext(Dispatchers.Default) {
-                    json.encodeToString(PreparedTunnelProfile.serializer(), prepared)
-                        .encodeToByteArray()
-                }
+            val relayCapabilityEnabled =
+                TunnelEngineKind.LEVIK_RELAY in supportedTunnelEngines &&
+                    _account.value?.subscriptions
+                        ?.firstOrNull { it.uuid == subscriptionId }
+                        ?.capabilities
+                        ?.whitelistRelay == true
+            val cached = _tunnelProfile.value
+                ?: withContext(Dispatchers.IO) { cachedTunnelBlocking() }
+            val cachedRelay = cached
+                ?.takeIf { relayCapabilityEnabled && it.subscriptionId == subscriptionId }
+            val freshRelay = if (relayCapabilityEnabled) {
                 try {
-                    withContext(Dispatchers.IO) {
-                        secureStore.put(SecureFileStore.TUNNEL_PROFILE, encoded)
-                    }
-                } finally {
-                    encoded.fill(0)
+                    fetchPreparedTunnelProfile(
+                        token = token,
+                        subscriptionId = subscriptionId,
+                        expectedDeviceId = expectedDeviceId,
+                        engine = RELAY_ENGINE_WIRE_NAME,
+                    )
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: ApiException.Unauthorized) {
+                    clearAuthentication()
+                    throw error
+                } catch (_: Throwable) {
+                    AppLogger.w(
+                        "AppRepository",
+                        "Relay profile refresh failed; retaining cached relay configuration",
+                    )
+                    null
                 }
-                val selected = selectedServerId()
-                if (selected == null || prepared.servers.none { it.id == selected }) {
-                    selectServer(prepared.servers.first().id)
-                }
-                _tunnelProfile.value = prepared
-                prepared
-            } finally {
-                plaintext.fill(0)
+            } else {
+                null
             }
+            val prepared = mergePreparedProfiles(xrayPrepared, freshRelay ?: cachedRelay)
+            persistPreparedTunnel(prepared)
+            val selected = selectedServerId()
+            if (selected == null || prepared.servers.none { it.id == selected }) {
+                val defaultServer = prepared.servers
+                    .firstOrNull { it.isEligibleForAutomaticSelection() }
+                    ?: prepared.servers.first()
+                selectServer(defaultServer.id)
+            }
+            _tunnelProfile.value = prepared
+            prepared
         }
+
+    private suspend fun fetchPreparedTunnelProfile(
+        token: String,
+        subscriptionId: String,
+        expectedDeviceId: String,
+        engine: String?,
+    ): PreparedTunnelProfile {
+        val envelope = apiClient.tunnelProfile(token, subscriptionId, engine)
+        val plaintext = withContext(Dispatchers.IO) {
+            profileDecryptor.decrypt(envelope)
+        }
+        return try {
+            val profile = withContext(Dispatchers.Default) {
+                profileParser.parse(plaintext, subscriptionId, expectedDeviceId)
+            }
+            withContext(Dispatchers.Default) {
+                tunnelProfilePreparer.prepare(profile)
+            }
+        } finally {
+            plaintext.fill(0)
+        }
+    }
+
+    private suspend fun persistPreparedTunnel(prepared: PreparedTunnelProfile) {
+        val encoded = withContext(Dispatchers.Default) {
+            json.encodeToString(PreparedTunnelProfile.serializer(), prepared)
+                .encodeToByteArray()
+        }
+        try {
+            withContext(Dispatchers.IO) {
+                secureStore.put(SecureFileStore.TUNNEL_PROFILE, encoded)
+            }
+        } finally {
+            encoded.fill(0)
+        }
+    }
 
     suspend fun cachedTunnel(): PreparedTunnelProfile? {
         val profile = withContext(Dispatchers.IO) { cachedTunnelBlocking() }
@@ -234,12 +302,30 @@ class AppRepository(
         } ?: return null
 
         return try {
-            json.decodeFromString<PreparedTunnelProfile>(bytes.decodeToString())
+            val decoded = json.decodeFromString<PreparedTunnelProfile>(bytes.decodeToString())
+            val containsRelay = decoded.servers.any {
+                it.engine == TunnelEngineKind.LEVIK_RELAY
+            }
+            if (!containsRelay || TunnelEngineKind.LEVIK_RELAY in supportedTunnelEngines) {
+                decoded
+            } else {
+                withoutRelayServers(decoded).also(::persistPreparedTunnelBlocking)
+            }
         } catch (_: Exception) {
             secureStore.remove(SecureFileStore.TUNNEL_PROFILE)
             null
         } finally {
             bytes.fill(0)
+        }
+    }
+
+    private fun persistPreparedTunnelBlocking(prepared: PreparedTunnelProfile) {
+        val encoded = json.encodeToString(PreparedTunnelProfile.serializer(), prepared)
+            .encodeToByteArray()
+        try {
+            secureStore.put(SecureFileStore.TUNNEL_PROFILE, encoded)
+        } finally {
+            encoded.fill(0)
         }
     }
 
@@ -263,7 +349,7 @@ class AppRepository(
         }
 
     suspend fun selectServer(serverId: String) = withContext(Dispatchers.IO) {
-        require(serverId.matches(SHA_256_HEX)) { "Invalid server identifier" }
+        require(serverId.matches(SAFE_SERVER_ID)) { "Invalid server identifier" }
         secureStore.put(SecureFileStore.SELECTED_SERVER, serverId.encodeToByteArray())
     }
 
@@ -297,6 +383,11 @@ class AppRepository(
         requireToken(),
         CreateOrderRequest(kind, subscriptionId, tariffId, months, paymentMethodId),
     ).order
+
+    suspend fun openOrderPayment(orderId: Long): String {
+        require(orderId > 0) { "Invalid order id" }
+        return apiClient.openOrderPayment(requireToken(), orderId).paymentUrl
+    }
 
     suspend fun logout() {
         val token = readToken()
@@ -390,14 +481,26 @@ class AppRepository(
 
     private suspend fun reconcileCachedProfile(account: MobileAccountResponse) {
         val cached = cachedTunnel() ?: return
-        val subscriptionStillOwned = account.subscriptions.containsActiveSubscription(
-            subscriptionId = cached.subscriptionId,
-            now = Instant.now(),
-        )
-        if (!subscriptionStillOwned) {
+        val subscription = account.subscriptions.firstOrNull { it.uuid == cached.subscriptionId }
+        if (subscription?.isActiveAt(Instant.now()) != true) {
             withContext(Dispatchers.IO) {
                 clearTunnelProfile()
             }
+            return
+        }
+        val relayUnavailable = !subscription.capabilities.whitelistRelay ||
+            TunnelEngineKind.LEVIK_RELAY !in supportedTunnelEngines
+        if (relayUnavailable &&
+            cached.servers.any { it.engine == TunnelEngineKind.LEVIK_RELAY }
+        ) {
+            val sanitized = withoutRelayServers(cached)
+            persistPreparedTunnel(sanitized)
+            val selected = selectedServerId()
+            if (sanitized.servers.none { it.id == selected }) {
+                sanitized.servers.firstOrNull(TunnelServer::isEligibleForAutomaticSelection)
+                    ?.let { selectServer(it.id) }
+            }
+            _tunnelProfile.value = sanitized
         }
     }
 
@@ -426,16 +529,73 @@ class AppRepository(
         private const val MAX_DEVICE_FIELD_LENGTH = 96
         private const val MAX_LOGIN_TOKEN_LENGTH = 512
         private const val MAX_ACCESS_TOKEN_LENGTH = 4096
+        private const val RELAY_ENGINE_WIRE_NAME = "levik-relay"
         private val APP_DATA_DISCLOSURE_CONSENT_VALUE =
             "accepted-v1".encodeToByteArray()
         private val CONTROL_CHARACTERS = Regex("\\p{C}")
         private val MULTIPLE_SPACES = Regex("\\s{2,}")
         private val UUID_OR_SAFE_ID = Regex("[A-Za-z0-9._:-]{8,128}")
-        private val SHA_256_HEX = Regex("[a-f0-9]{64}")
+        private val SAFE_SERVER_ID = Regex("[A-Za-z0-9._:-]{1,128}")
         const val DEFAULT_FREE_PROXY_TG_LINK =
             "tg://proxy?server=mt.leviknet.com&port=31443&secret=1cb61164c70fc4d193569b05f34e3f7d"
     }
 }
+
+internal fun mergePreparedProfiles(
+    xray: PreparedTunnelProfile,
+    relay: PreparedTunnelProfile?,
+): PreparedTunnelProfile {
+    val relayServers = relay?.servers
+        .orEmpty()
+        .filter { it.engine == TunnelEngineKind.LEVIK_RELAY }
+    if (relayServers.isEmpty()) {
+        return withoutRelayServers(xray)
+    }
+    require(relay?.subscriptionId == xray.subscriptionId) {
+        "Relay and Xray subscriptions do not match"
+    }
+    val profileIds = "${xray.profileId}\u0000${relay.profileId}".encodeToByteArray()
+    val compositeId = try {
+        MessageDigest.getInstance("SHA-256")
+            .digest(profileIds)
+            .joinToString(separator = "") { byte ->
+                (byte.toInt() and 0xff).toString(16).padStart(2, '0')
+            }
+    } finally {
+        profileIds.fill(0)
+    }
+    return xray.copy(
+        version = maxOf(xray.version, relay.version),
+        profileId = "composite:$compositeId",
+        subscriptionExpiresAt = earliestExpiry(
+            xray.subscriptionExpiresAt,
+            relay.subscriptionExpiresAt,
+        ),
+        relayCredentialExpiresAt = relay.relayCredentialExpiresAt,
+        servers = xray.servers.filter { it.engine == TunnelEngineKind.XRAY } + relayServers,
+    )
+}
+
+private fun earliestExpiry(first: String?, second: String?): String? =
+    listOfNotNull(first, second)
+        .minByOrNull { value -> Instant.parse(value) }
+
+internal fun hasUsableRelayCredential(
+    profile: PreparedTunnelProfile,
+    now: Instant = Instant.now(),
+): Boolean {
+    val expiresAt = profile.relayCredentialExpiresAt
+        ?: profile.servers.firstNotNullOfOrNull { it.relayConfig?.bootstrap?.expiresAt }
+        ?: return false
+    return runCatching { Instant.parse(expiresAt).isAfter(now) }.getOrDefault(false) &&
+        profile.servers.any { it.engine == TunnelEngineKind.LEVIK_RELAY }
+}
+
+internal fun withoutRelayServers(profile: PreparedTunnelProfile): PreparedTunnelProfile =
+    profile.copy(
+        relayCredentialExpiresAt = null,
+        servers = profile.servers.filter { it.engine != TunnelEngineKind.LEVIK_RELAY },
+    )
 
 internal fun com.leviknet.vpn.core.network.SubscriptionSummary.isActiveAt(
     now: Instant,

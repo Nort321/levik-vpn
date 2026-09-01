@@ -23,10 +23,14 @@ enum class VpnFailure {
     INVALID_PROFILE,
     PERMISSION_REVOKED,
     NETWORK,
+    NETWORK_REQUIREMENT,
 }
 
 data class VpnSnapshot(
     val state: VpnConnectionState = VpnConnectionState.DISCONNECTED,
+    val engine: TunnelEngineKind? = null,
+    val subscriptionId: String? = null,
+    val serverId: String? = null,
     val serverName: String? = null,
     val downloadedBytes: Long = 0,
     val uploadedBytes: Long = 0,

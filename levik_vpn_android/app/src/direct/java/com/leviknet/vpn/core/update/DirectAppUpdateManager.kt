@@ -28,13 +28,14 @@ internal class DirectAppUpdateManager(
     context: Context,
     manifestPublicKeyBase64: String,
     signingCertificateSha256: String,
-    private val releaseClient: DirectReleaseClient = DirectReleaseClient(
-        context.applicationContext,
-        manifestPublicKeyBase64,
-    ),
+    releaseClient: DirectReleaseClient? = null,
 ) : AppUpdateManager {
     private val context = context.applicationContext
     private val configuration = runCatching {
+        val configuredReleaseClient = releaseClient ?: DirectReleaseClient(
+            this.context,
+            manifestPublicKeyBase64,
+        )
         val normalizedCertificate = UpdateManifestVerifier.normalizeSha256(
             signingCertificateSha256,
             "configured signing certificate",
@@ -47,6 +48,7 @@ internal class DirectAppUpdateManager(
                 currentVersionCode = BuildConfig.VERSION_CODE,
             ),
             packageValidator = ApkPackageValidator(this.context, normalizedCertificate),
+            releaseClient = configuredReleaseClient,
         )
     }
     private val updatesDirectory = File(this.context.cacheDir, UPDATES_DIRECTORY_NAME)
@@ -74,7 +76,7 @@ internal class DirectAppUpdateManager(
         }
 
         if (!silent) mutableState.value = UpdateState.Checking
-        when (val lookup = releaseClient.lookupLatestStableRelease(silent)) {
+        when (val lookup = configured.releaseClient.lookupLatestStableRelease(silent)) {
             ReleaseLookupResult.Skipped -> null
             ReleaseLookupResult.NoStableRelease -> {
                 lastVerifiedUpdate = null
@@ -88,11 +90,11 @@ internal class DirectAppUpdateManager(
             }
             is ReleaseLookupResult.Found -> {
                 try {
-                    val manifest = releaseClient.fetchReleaseAsset(
+                    val manifest = configured.releaseClient.fetchReleaseAsset(
                         lookup.release.manifestUrl,
                         UpdateManifestVerifier.MAX_MANIFEST_BYTES,
                     )
-                    val signature = releaseClient.fetchReleaseAsset(
+                    val signature = configured.releaseClient.fetchReleaseAsset(
                         lookup.release.signatureUrl,
                         UpdateManifestVerifier.MAX_SIGNATURE_FILE_BYTES,
                     )
@@ -114,7 +116,7 @@ internal class DirectAppUpdateManager(
                             "Update manifest version does not match the signed release feed",
                         )
                     }
-                    releaseClient.recordVerifiedRelease(update.latestVersionCode)
+                    configured.releaseClient.recordVerifiedRelease(update.latestVersionCode)
                     lastVerifiedUpdate = update
                     mutableState.value = UpdateState.Available(update)
                     AppLogger.i(
@@ -127,7 +129,7 @@ internal class DirectAppUpdateManager(
                     if (!silent) mutableState.value = UpdateState.UpToDate
                     null
                 } catch (error: Exception) {
-                    releaseClient.recordAssetFailure(error)
+                    configured.releaseClient.recordAssetFailure(error)
                     AppLogger.e(LOG_TAG, "Direct update metadata validation failed", error)
                     if (!silent) mutableState.value = UpdateState.Error(VERIFICATION_ERROR_MESSAGE)
                     null
@@ -185,7 +187,7 @@ internal class DirectAppUpdateManager(
             FileOutputStream(temporary).use { fileOutput ->
                 val digestOutput = DigestOutputStream(fileOutput, digest)
                 var lastProgressAt = 0L
-                releaseClient.downloadReleaseAsset(
+                configured.releaseClient.downloadReleaseAsset(
                     url = update.downloadUrl,
                     expectedSize = update.apkSize,
                     output = digestOutput,
@@ -214,7 +216,7 @@ internal class DirectAppUpdateManager(
         } catch (error: Exception) {
             temporary.delete()
             finalFile.delete()
-            releaseClient.recordAssetFailure(error)
+            configured.releaseClient.recordAssetFailure(error)
             AppLogger.e(LOG_TAG, "Direct update download or validation failed", error)
             mutableState.value = UpdateState.Error(DOWNLOAD_ERROR_MESSAGE)
         } finally {
@@ -279,6 +281,7 @@ internal class DirectAppUpdateManager(
     private data class UpdateConfiguration(
         val verifier: UpdateManifestVerifier,
         val packageValidator: ApkPackageValidator,
+        val releaseClient: DirectReleaseClient,
     )
 
     companion object {

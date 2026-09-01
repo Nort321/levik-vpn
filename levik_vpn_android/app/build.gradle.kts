@@ -9,6 +9,7 @@ import java.security.spec.ECParameterSpec
 import java.security.spec.X509EncodedKeySpec
 import java.util.Base64
 import java.util.Properties
+import java.util.zip.ZipFile
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -102,6 +103,14 @@ val directUpdateSigningCertificateSha256 =
         ?: ""
 val libXrayAar = layout.projectDirectory.file("libs/libXray.aar").asFile
 val expectedLibXraySha256 = "4708a361a74f7e955635dbe3661cefb459bdc867423c3b1826a2c5a6ea4ac77d"
+val relayNativeProjectDir = rootProject.file("../levik_whitelist_relay")
+val relayNativeJniDir = rootProject.file("../levik_whitelist_relay/build/android/jniLibs")
+val relayNativeBuildScript = relayNativeProjectDir.resolve("scripts/build-android-client.sh")
+val relayNativeAbis = mapOf(
+    "arm64-v8a" to Pair(2, 183),
+    "armeabi-v7a" to Pair(1, 40),
+    "x86_64" to Pair(2, 62),
+)
 val directReleaseSigning = releaseSigningInputs("direct")
 val playReleaseSigning = releaseSigningInputs("play")
 
@@ -138,7 +147,7 @@ android {
         applicationId = "com.leviknet.vpn"
         minSdk = 26
         targetSdk = 36
-        versionCode = 48
+        versionCode = 49
         versionName = rootProject.version.toString()
 
         buildConfigField("String", "CABINET_BASE_URL", "\"${cabinetBaseUrl.trimEnd('/')}\"")
@@ -207,6 +216,7 @@ android {
             buildConfigField("boolean", "SELF_UPDATE_ENABLED", "false")
             buildConfigField("boolean", "EXTERNAL_PURCHASES_ENABLED", "false")
             buildConfigField("boolean", "PLAY_INTEGRITY_ENABLED", "true")
+            buildConfigField("boolean", "LEVIK_RELAY_ENABLED", "false")
         }
         create("direct") {
             dimension = "distribution"
@@ -215,6 +225,7 @@ android {
             buildConfigField("boolean", "SELF_UPDATE_ENABLED", "true")
             buildConfigField("boolean", "EXTERNAL_PURCHASES_ENABLED", "true")
             buildConfigField("boolean", "PLAY_INTEGRITY_ENABLED", "false")
+            buildConfigField("boolean", "LEVIK_RELAY_ENABLED", "true")
             buildConfigField(
                 "String",
                 "DIRECT_UPDATE_MANIFEST_PUBLIC_KEY",
@@ -227,6 +238,8 @@ android {
             )
         }
     }
+
+    sourceSets.getByName("direct").jniLibs.srcDir(relayNativeJniDir)
 
     buildFeatures {
         buildConfig = true
@@ -310,6 +323,120 @@ val validatePlayReleaseConfiguration by tasks.registering {
     doLast {
         check(playIntegrityCloudProjectNumber > 0L) {
             "Play release builds require levik.playIntegrityCloudProjectNumber."
+        }
+    }
+}
+
+val buildDirectRelayNative by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Builds the Direct-only relay runtime with its pinned Go and Android NDK toolchain."
+    workingDir(relayNativeProjectDir)
+    commandLine("bash", relayNativeBuildScript.absolutePath)
+    inputs.files(
+        relayNativeBuildScript,
+        relayNativeProjectDir.resolve("source/tools.lock"),
+        fileTree(relayNativeProjectDir.resolve("fork/wdtt-plus-v15/go_client")) {
+            include("**/*.go", "go.mod", "go.sum")
+        },
+    )
+    outputs.dir(relayNativeJniDir)
+    onlyIf {
+        relayNativeAbis.keys.any { abi ->
+            !relayNativeJniDir.resolve("$abi/liblevikrelay.so").exists()
+        }
+    }
+}
+
+fun validateRelayElf(file: File, abi: String, elfClass: Int, machine: Int) {
+    check(file.isFile && file.length() > 20L) {
+        "Missing Direct relay executable for $abi: ${file.absolutePath}"
+    }
+    val header = file.inputStream().use { input -> ByteArray(20).also { input.readNBytes(it, 0, it.size) } }
+    check(
+        header[0] == 0x7f.toByte() &&
+            header[1] == 'E'.code.toByte() &&
+            header[2] == 'L'.code.toByte() &&
+            header[3] == 'F'.code.toByte() &&
+            header[4].toInt() == elfClass &&
+            header[5].toInt() == 1
+    ) {
+        "Direct relay artifact for $abi is not the expected little-endian ELF class"
+    }
+    val elfType = (header[16].toInt() and 0xff) or ((header[17].toInt() and 0xff) shl 8)
+    val elfMachine = (header[18].toInt() and 0xff) or ((header[19].toInt() and 0xff) shl 8)
+    check(elfType == 3 && elfMachine == machine) {
+        "Direct relay artifact for $abi has an unexpected ELF type or architecture"
+    }
+}
+
+val validateDirectRelayNativeRuntime by tasks.registering {
+    group = "verification"
+    description = "Fails Direct release builds without every audited relay native executable."
+    dependsOn(buildDirectRelayNative)
+    doLast {
+        relayNativeAbis.forEach { (abi, expected) ->
+            validateRelayElf(
+                file = relayNativeJniDir.resolve("$abi/liblevikrelay.so"),
+                abi = abi,
+                elfClass = expected.first,
+                machine = expected.second,
+            )
+        }
+    }
+}
+
+val verifyPlayRelayExclusion by tasks.registering {
+    group = "verification"
+    description = "Fails if a Play source set can package the Direct-only relay executable."
+    doLast {
+        val forbiddenSourceRoots = listOf(
+            project.file("src/main/jniLibs"),
+            project.file("src/play/jniLibs"),
+        )
+        val leaked = forbiddenSourceRoots
+            .filter(File::exists)
+            .flatMap { root -> root.walkTopDown().filter(File::isFile).toList() }
+            .filter { it.name == "liblevikrelay.so" }
+        check(leaked.isEmpty()) {
+            "Play-visible source sets contain Direct-only relay artifacts: " +
+                leaked.joinToString { it.absolutePath }
+        }
+    }
+}
+
+val verifyPlayPackagedRelayExclusion by tasks.registering {
+    group = "verification"
+    description = "Inspects built Play APK/AAB archives for forbidden relay native artifacts."
+    doLast {
+        val playArchives = listOf(
+            layout.buildDirectory.dir("outputs/apk/play").get().asFile,
+            layout.buildDirectory.dir("outputs/bundle").get().asFile,
+        )
+            .filter(File::exists)
+            .flatMap { directory ->
+                directory.walkTopDown()
+                    .filter { file -> file.isFile && file.extension in setOf("apk", "aab") }
+                    .filter { file ->
+                        file.absolutePath.contains("play", ignoreCase = true)
+                    }
+                    .toList()
+            }
+        playArchives.forEach { archive ->
+            ZipFile(archive).use { zip ->
+                val forbidden = zip.entries().asSequence()
+                    .map { entry -> entry.name }
+                    .filter { entry ->
+                        entry.substringAfterLast('/').equals(
+                            "liblevikrelay.so",
+                            ignoreCase = true,
+                        )
+                    }
+                    .toList()
+                check(forbidden.isEmpty()) {
+                    "Play artifact ${archive.absolutePath} contains Direct-only relay native files: " +
+                        forbidden.joinToString()
+                }
+            }
         }
     }
 }
@@ -429,8 +556,20 @@ tasks.configureEach {
         dependsOn(
             validateDirectReleaseSigning,
             validateDirectReleaseOtaConfiguration,
+            validateDirectRelayNativeRuntime,
             verifyDirectReleaseRuntimeClasspath,
         )
+    }
+    if (name.startsWith("mergePlay") && name.endsWith("NativeLibs")) {
+        dependsOn(verifyPlayRelayExclusion)
+    }
+    if (name.startsWith("mergeDirect") &&
+        (name.endsWith("JniLibFolders") || name.endsWith("NativeLibs"))
+    ) {
+        dependsOn(validateDirectRelayNativeRuntime)
+    }
+    if (name.matches(Regex("^(assemble|bundle)Play(Debug|Release)$"))) {
+        finalizedBy(verifyPlayPackagedRelayExclusion)
     }
     if (name.contains("Release", ignoreCase = true)) {
         doFirst {

@@ -1,0 +1,32 @@
+{
+  "formatVersion": 1,
+  "primary": {
+    "name": "WDTT Plus",
+    "repository": "https://github.com/Ivan4537/WDTT-Plus",
+    "tag": "v15",
+    "commit": "3038b8ddc0306feb21d3c3624e2bc1c3c14639ad",
+    "archive": "https://codeload.github.com/Ivan4537/WDTT-Plus/tar.gz/3038b8ddc0306feb21d3c3624e2bc1c3c14639ad",
+    "archiveSha256": "07c6a4c200c87c636a6d0855385e96284e73ddcc5b80c912a463b068ef964223",
+    "license": "GPL-3.0-only",
+    "role": "Exact server and Go client base for the matched Levik fork"
+  },
+  "codeProvenance": [
+    {
+      "name": "qWDTT Android client",
+      "repository": "https://github.com/SpaceNeuroX/proxy-turn-vk-android",
+      "commit": "fae121efc3ef57b633516601d3c0d6b1be1fde7c",
+      "archive": "https://codeload.github.com/SpaceNeuroX/proxy-turn-vk-android/tar.gz/fae121efc3ef57b633516601d3c0d6b1be1fde7c",
+      "archiveSha256": "1a2b4f559890e0688ea608c6890a7794131acd583acc612d23e30f59e8c53e9c",
+      "license": "GPL-3.0-only",
+      "role": "SCM_RIGHTS TUN-FD pattern only; rewritten with Levik control states, peer credentials, deadlines, socket protection and key pinning"
+    }
+  ],
+  "excluded": [
+    {
+      "name": "CSQTT",
+      "repository": "https://github.com/amurcanov/csqtt",
+      "reason": "No code, assets, protocol implementation or dependency was copied or linked"
+    }
+  ]
+}
+

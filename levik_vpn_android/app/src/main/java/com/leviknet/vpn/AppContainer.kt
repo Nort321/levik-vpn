@@ -5,6 +5,7 @@ import com.leviknet.vpn.core.network.AppAttestationPolicy
 import com.leviknet.vpn.core.network.CensorshipRadarWorker
 import com.leviknet.vpn.core.network.MobileApiClient
 import com.leviknet.vpn.core.network.RequestSigner
+import com.leviknet.vpn.core.network.WhitelistDetector
 import com.leviknet.vpn.core.network.createAppAttestationProvider
 import com.leviknet.vpn.core.security.DeviceIdentity
 import com.leviknet.vpn.core.security.HybridProfileDecryptor
@@ -21,6 +22,9 @@ import com.leviknet.vpn.vpn.VpnConnectionState
 import com.leviknet.vpn.vpn.VpnController
 import com.leviknet.vpn.vpn.WifiAutoConnectMonitor
 import com.leviknet.vpn.vpn.XrayRuntime
+import com.leviknet.vpn.vpn.TunnelProfilePreparer
+import com.leviknet.vpn.vpn.createTunnelEngineRegistry
+import com.leviknet.vpn.vpn.relayCapabilityRevocationRequiresDisconnect
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -45,6 +49,12 @@ class AppContainer(application: Application) {
     val settings = AppSettings(application)
     val russianRoutingData = RussianRoutingData(application)
     val xrayRuntime = XrayRuntime(json)
+    val tunnelEngineRegistry = createTunnelEngineRegistry(
+        xrayRuntime = xrayRuntime,
+        nativeLibraryDir = application.applicationInfo.nativeLibraryDir.orEmpty(),
+        appContext = application,
+    )
+    val whitelistDetector = WhitelistDetector(application)
 
     private val requestSigner = RequestSigner(deviceIdentity)
     private val attestationProvider = createAppAttestationProvider(
@@ -71,7 +81,8 @@ class AppContainer(application: Application) {
         trialDeviceBinding = trialDeviceBinding,
         secureStore = secureStore,
         profileDecryptor = profileDecryptor,
-        xrayRuntime = xrayRuntime,
+        tunnelProfilePreparer = TunnelProfilePreparer(xrayRuntime),
+        supportedTunnelEngines = tunnelEngineRegistry.supportedProfileEngines,
         json = json,
     )
 
@@ -96,9 +107,34 @@ class AppContainer(application: Application) {
                 delay(SUBSCRIPTION_REFRESH_INTERVAL_MS)
                 if (repository.session.value != SessionStatus.Authenticated) continue
                 runCatching {
-                    val previousSubscriptionId = repository.cachedTunnel()?.subscriptionId
+                    val vpnBeforeRefresh = vpnController.state.value
+                    val cachedBeforeRefresh = repository.cachedTunnel()
+                    val previousSubscriptionId = cachedBeforeRefresh?.subscriptionId
+                    val selectedBeforeRefresh = repository.selectedServerId()
+                    val selectedEngineBeforeRefresh = cachedBeforeRefresh?.servers
+                        ?.firstOrNull { it.id == selectedBeforeRefresh }
+                        ?.engine
                     val account = repository.refreshAccount()
-                    val active = account.subscriptions.filter { it.isActiveAt(Instant.now()) }
+                    val now = Instant.now()
+                    val relaySubscriptionId = vpnBeforeRefresh.subscriptionId
+                        ?: previousSubscriptionId
+                    val relayCapabilityEnabled = relaySubscriptionId?.let { subscriptionId ->
+                        account.subscriptions
+                            .firstOrNull { it.uuid == subscriptionId }
+                            ?.takeIf { it.isActiveAt(now) }
+                            ?.capabilities
+                            ?.whitelistRelay == true
+                    } == true
+                    if (relayCapabilityRevocationRequiresDisconnect(
+                            currentEngine = vpnBeforeRefresh.engine,
+                            selectedEngine = selectedEngineBeforeRefresh,
+                            relayCapabilityEnabled = relayCapabilityEnabled,
+                            connectionState = vpnBeforeRefresh.state,
+                        )
+                    ) {
+                        vpnController.disconnect()
+                    }
+                    val active = account.subscriptions.filter { it.isActiveAt(now) }
                     val selected = active.firstOrNull {
                         it.uuid == settings.selectedSubscriptionId.value
                     } ?: active.firstOrNull()

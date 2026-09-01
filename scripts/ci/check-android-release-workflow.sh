@@ -7,10 +7,16 @@ readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly REPOSITORY_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 readonly WORKFLOW="${REPOSITORY_ROOT}/.github/workflows/android-release.yml"
 readonly PUBLISH_WORKFLOW="${REPOSITORY_ROOT}/.github/workflows/android-publish.yml"
+readonly CI_WORKFLOW="${REPOSITORY_ROOT}/.github/workflows/android-ci.yml"
+readonly SOURCE_BUNDLE_SCRIPT="${REPOSITORY_ROOT}/scripts/release/build-corresponding-source.sh"
+readonly NATIVE_SBOM_SCRIPT="${REPOSITORY_ROOT}/scripts/release/generate-native-sbom.py"
 
 if [[ ! -f "${WORKFLOW}" || -L "${WORKFLOW}" ||
-      ! -f "${PUBLISH_WORKFLOW}" || -L "${PUBLISH_WORKFLOW}" ]]; then
-  printf 'ERROR: Android release or publish workflow is missing or is not a regular file.\n' >&2
+      ! -f "${PUBLISH_WORKFLOW}" || -L "${PUBLISH_WORKFLOW}" ||
+      ! -f "${CI_WORKFLOW}" || -L "${CI_WORKFLOW}" ||
+      ! -f "${SOURCE_BUNDLE_SCRIPT}" || -L "${SOURCE_BUNDLE_SCRIPT}" ||
+      ! -f "${NATIVE_SBOM_SCRIPT}" || -L "${NATIVE_SBOM_SCRIPT}" ]]; then
+  printf 'ERROR: Android CI/release/publish or source bundle policy is missing or unsafe.\n' >&2
   exit 1
 fi
 
@@ -39,6 +45,9 @@ required_literals=(
   'generate-direct-release-feed.py'
   'validate-play-bundle-metadata.sh'
   'generate-native-sbom.py'
+  '--relay-jni-directory levik_whitelist_relay/build/android/jniLibs'
+  'go-version: "1.26.5"'
+  'ndk_version="29.0.14206865"'
   'build-corresponding-source.sh'
   'release-provenance.json'
   'artifactChecksumsSha256'
@@ -57,6 +66,46 @@ violations=0
 for literal in "${required_literals[@]}"; do
   if ! grep -F -- "${literal}" "${WORKFLOW}" >/dev/null; then
     printf 'ERROR: Android release workflow is missing required gate: %s\n' "${literal}" >&2
+    violations=$((violations + 1))
+  fi
+done
+
+ci_required_literals=(
+  'go-version: "1.26.5"'
+  'ndk_version="29.0.14206865"'
+  'assembleDirectDebug assemblePlayDebug'
+)
+for literal in "${ci_required_literals[@]}"; do
+  if ! grep -F -- "${literal}" "${CI_WORKFLOW}" >/dev/null; then
+    printf 'ERROR: Android CI workflow is missing required native build gate: %s\n' "${literal}" >&2
+    violations=$((violations + 1))
+  fi
+done
+
+source_bundle_required_literals=(
+  'GOFLAGS=-mod=readonly'
+  'go-modules-relay-server.json'
+  'go-modules-relay-android-client.json'
+  'go-modules-relay-node-agent.json'
+  'liblevikrelay-${relay_abi}-build-info.txt'
+  'RELAY_ANET_COMMIT'
+  'github.com/wlynxg/anet'
+)
+for literal in "${source_bundle_required_literals[@]}"; do
+  if ! grep -F -- "${literal}" "${SOURCE_BUNDLE_SCRIPT}" >/dev/null; then
+    printf 'ERROR: corresponding-source bundle is missing relay source evidence: %s\n' "${literal}" >&2
+    violations=$((violations + 1))
+  fi
+done
+
+sbom_required_literals=(
+  'ANET_PATCH_VERSION = "v0.0.5+levik.1"'
+  'levik.go.replacement'
+  'BSD-3-Clause'
+)
+for literal in "${sbom_required_literals[@]}"; do
+  if ! grep -F -- "${literal}" "${NATIVE_SBOM_SCRIPT}" >/dev/null; then
+    printf 'ERROR: native SBOM is missing local anet provenance: %s\n' "${literal}" >&2
     violations=$((violations + 1))
   fi
 done

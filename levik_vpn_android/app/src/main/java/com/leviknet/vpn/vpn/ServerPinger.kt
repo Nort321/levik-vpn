@@ -34,6 +34,9 @@ object ServerPinger {
         socketProtector.updateAndGet { current -> current?.takeUnless { it.owner == owner } }
     }
 
+    fun measure(server: TunnelServer): Long? =
+        if (server.engine == TunnelEngineKind.XRAY) measure(server.outbound) else null
+
     fun measure(outbound: JsonObject): Long? {
         val endpoint = extractEndpoint(outbound) ?: return null
         val protocol = (outbound["protocol"] as? JsonPrimitive)?.contentOrNull?.lowercase()

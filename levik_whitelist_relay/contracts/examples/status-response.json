@@ -1,0 +1,9 @@
+{
+  "requestId": "89abcdef0123456789abcdef",
+  "lease": {
+    "leaseRef": "bymQUNzxPB1u8KJZEf7AOrj7t--6SL_2kcSdUXjnonA",
+    "state": "active",
+    "expiresAt": 1790086400,
+    "revision": 7
+  }
+}

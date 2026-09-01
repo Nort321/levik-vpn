@@ -69,6 +69,24 @@ class SubscriptionExpiryTest {
     }
 
     @Test
+    fun `relay credential refreshes before its hard expiry`() {
+        assertFalse(
+            relayCredentialRefreshDue(
+                expiresAt = "2026-07-29T12:05:01Z",
+                now = now,
+            ),
+        )
+        assertTrue(
+            relayCredentialRefreshDue(
+                expiresAt = "2026-07-29T12:05:00Z",
+                now = now,
+            ),
+        )
+        assertTrue(relayCredentialRefreshDue(expiresAt = "invalid", now = now))
+        assertFalse(relayCredentialRefreshDue(expiresAt = null, now = now))
+    }
+
+    @Test
     fun `authenticated entitlement removal disconnects an active tunnel`() {
         assertTrue(
             shouldDisconnectAfterProfileRemoval(

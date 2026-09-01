@@ -26,7 +26,7 @@ import com.leviknet.vpn.R
 import com.leviknet.vpn.ui.theme.LevikBlue
 
 internal fun openDistributionPlans(viewModel: AppViewModel) {
-    viewModel.openPurchaseFlow()
+    viewModel.openSubscriptionManagement()
 }
 
 @Composable
@@ -51,7 +51,7 @@ internal fun DistributionRenewPlanButton(
         )
         Spacer(Modifier.width(6.dp))
         Text(
-            stringResource(R.string.renew_plan_btn),
+            stringResource(R.string.subscription_management_button),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             fontWeight = FontWeight.SemiBold,

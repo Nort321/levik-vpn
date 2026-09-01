@@ -1,0 +1,234 @@
+openapi: 3.1.0
+info:
+  title: Levik WhiteList Relay node-agent API
+  version: 1.0.0
+  license:
+    name: AGPL-3.0-only
+servers:
+  - url: https://relay-node.invalid
+    description: Remote access is permitted only through an mTLS reverse proxy; the agent itself binds loopback.
+paths:
+  /livez:
+    get:
+      summary: Process liveness (loopback only)
+      responses:
+        "200":
+          description: Alive
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+  /readyz:
+    get:
+      summary: WDTT admin socket readiness (loopback only)
+      responses:
+        "200":
+          description: Ready
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+        "503":
+          description: WDTT unavailable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HealthError" }
+  /internal/v1/leases/apply:
+    post:
+      summary: Create or renew exactly one subscription/device lease
+      description: Credential is returned for create/fresh reissue and exact idempotent retries only. Renewal never returns a credential; if a non-revoked upstream record is missing, the node reconstructs the same credential from durable state. Applying revision+1 to a revoked tombstone issues a fresh credential.
+      operationId: applyLease
+      parameters:
+        - { $ref: "#/components/parameters/KeyId" }
+        - { $ref: "#/components/parameters/Timestamp" }
+        - { $ref: "#/components/parameters/Nonce" }
+        - { $ref: "#/components/parameters/Signature" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody: { $ref: "#/components/requestBodies/LeaseRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/LeaseSuccess" }
+        "201": { $ref: "#/components/responses/LeaseSuccess" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /internal/v1/leases/rotate:
+    post:
+      summary: Rotate a lease credential
+      description: Credential is returned for the rotation and its exact idempotent retry only.
+      operationId: rotateLease
+      parameters:
+        - { $ref: "#/components/parameters/KeyId" }
+        - { $ref: "#/components/parameters/Timestamp" }
+        - { $ref: "#/components/parameters/Nonce" }
+        - { $ref: "#/components/parameters/Signature" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody: { $ref: "#/components/requestBodies/LeaseRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/LeaseSuccess" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /internal/v1/leases/revoke:
+    post:
+      summary: Revoke a lease
+      description: Never returns credential material. Revoking an absent lease advances a known durable tombstone revision and returns state=absent without expiresAt.
+      operationId: revokeLease
+      parameters:
+        - { $ref: "#/components/parameters/KeyId" }
+        - { $ref: "#/components/parameters/Timestamp" }
+        - { $ref: "#/components/parameters/Nonce" }
+        - { $ref: "#/components/parameters/Signature" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody: { $ref: "#/components/requestBodies/LeaseRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/LeaseSuccess" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /internal/v1/leases/status:
+    post:
+      summary: Read current lease state
+      description: Never returns credential material and does not mutate revision. An absent upstream record returns the durable revision when known and omits expiresAt.
+      operationId: statusLease
+      parameters:
+        - { $ref: "#/components/parameters/KeyId" }
+        - { $ref: "#/components/parameters/Timestamp" }
+        - { $ref: "#/components/parameters/Nonce" }
+        - { $ref: "#/components/parameters/Signature" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody: { $ref: "#/components/requestBodies/LeaseRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/LeaseSuccess" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+components:
+  parameters:
+    KeyId:
+      name: X-Levik-Key-Id
+      in: header
+      required: true
+      schema: { type: string, pattern: "^[A-Za-z0-9._-]{1,64}$" }
+    Timestamp:
+      name: X-Levik-Timestamp
+      in: header
+      required: true
+      description: Unix seconds; accepted inside the configured clock-skew window.
+      schema: { type: string, pattern: "^[0-9]{10}$" }
+    Nonce:
+      name: X-Levik-Nonce
+      in: header
+      required: true
+      description: Cryptographically random base64url without padding; minimum 16 raw bytes.
+      schema: { type: string, pattern: "^[A-Za-z0-9_-]{22,128}$" }
+    Signature:
+      name: X-Levik-Signature
+      in: header
+      required: true
+      description: Lowercase hex HMAC-SHA256 of the canonical request.
+      schema: { type: string, pattern: "^[0-9a-f]{64}$" }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Must byte-for-byte equal body.idempotencyKey.
+      schema: { type: string, pattern: "^[A-Za-z0-9._:-]{16,128}$" }
+  requestBodies:
+    LeaseRequest:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/LeaseRequest" }
+  responses:
+    LeaseSuccess:
+      description: Successful lease operation
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/LeaseEnvelope" }
+    Error:
+      description: Stable error response; internal details and credentials are never included.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    LeaseRequest:
+      type: object
+      additionalProperties: false
+      required: [subscriptionIdHash, deviceIdHash, expiresAt, revision, idempotencyKey]
+      properties:
+        subscriptionIdHash: { type: string, pattern: "^[0-9a-f]{64}$" }
+        deviceIdHash: { type: string, pattern: "^[0-9a-f]{64}$" }
+        expiresAt:
+          type: integer
+          format: int64
+          minimum: 0
+          description: For apply and rotate, Unix seconds from server time +60 through server time +86400 inclusive. Ignored by status and revoke, where zero is allowed.
+        revision: { type: integer, format: uint64, minimum: 1 }
+        idempotencyKey: { type: string, pattern: "^[A-Za-z0-9._:-]{16,128}$" }
+    Credential:
+      type: object
+      additionalProperties: false
+      required: [password]
+      properties:
+        password:
+          type: string
+          minLength: 16
+          maxLength: 16
+          writeOnly: true
+    Lease:
+      type: object
+      additionalProperties: false
+      required: [leaseRef, state, revision]
+      properties:
+        leaseRef: { type: string, pattern: "^[A-Za-z0-9_-]{43}$" }
+        state: { type: string, enum: [active, expired, revoked, absent, unknown] }
+        expiresAt:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Present for active, expired, revoked and unknown upstream records; omitted when state is absent.
+        revision: { type: integer, format: uint64, minimum: 1 }
+        created: { type: boolean }
+        rotated: { type: boolean }
+        credential: { $ref: "#/components/schemas/Credential" }
+    LeaseEnvelope:
+      type: object
+      additionalProperties: false
+      required: [requestId, lease]
+      properties:
+        requestId: { type: string, pattern: "^[0-9a-f]{24}$" }
+        lease: { $ref: "#/components/schemas/Lease" }
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: string
+          enum: [invalid_request, unauthorized, body_too_large, rate_limited, not_found, stale_revision, revision_gap, state_conflict, wdtt_rejected, node_unavailable]
+        requestId: { type: string, pattern: "^[0-9a-f]{24}$" }
+    Health:
+      type: object
+      additionalProperties: false
+      required: [ok, protocolVersion]
+      properties:
+        ok: { const: true }
+        protocolVersion: { const: 1 }
+    HealthError:
+      type: object
+      additionalProperties: false
+      required: [ok, code]
+      properties:
+        ok: { const: false }
+        code: { const: wdtt_unavailable }

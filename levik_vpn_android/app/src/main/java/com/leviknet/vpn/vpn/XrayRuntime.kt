@@ -55,26 +55,27 @@ class XrayRuntime(
         }
 
     private fun convertProfileLocked(profile: TunnelProfile): PreparedTunnelProfile {
-        val normalizer = LegacyXhttpNormalizer(json)
-        val preserveSendThrough = normalizer.isFullXrayConfig(profile.source.content)
-        val normalizedSource = normalizer.normalize(profile.source.content)
-        val request = buildJsonObject {
-            put("apiVersion", 1)
-            put("method", "convertShareLinksToXrayJson")
-            put("payload", buildJsonObject {
-                put("text", normalizedSource)
-            })
-        }
-        val convertedData = invokeForData(request)
-        val converted = when (convertedData) {
-            is JsonObject -> convertedData
-            is JsonPrimitive -> json.parseToJsonElement(convertedData.content).jsonObject
-            else -> throw XrayException("Converted profile has an invalid shape")
-        }
-        val rawOutbounds = converted["outbounds"]?.jsonArray
-            ?: throw XrayException("Converted profile has no outbounds")
-
-        val servers = prepareServers(rawOutbounds, preserveSendThrough)
+        val servers = profile.source?.let { source ->
+            val normalizer = LegacyXhttpNormalizer(json)
+            val preserveSendThrough = normalizer.isFullXrayConfig(source.content)
+            val normalizedSource = normalizer.normalize(source.content)
+            val request = buildJsonObject {
+                put("apiVersion", 1)
+                put("method", "convertShareLinksToXrayJson")
+                put("payload", buildJsonObject {
+                    put("text", normalizedSource)
+                })
+            }
+            val convertedData = invokeForData(request)
+            val converted = when (convertedData) {
+                is JsonObject -> convertedData
+                is JsonPrimitive -> json.parseToJsonElement(convertedData.content).jsonObject
+                else -> throw XrayException("Converted profile has an invalid shape")
+            }
+            val rawOutbounds = converted["outbounds"]?.jsonArray
+                ?: throw XrayException("Converted profile has no outbounds")
+            prepareServers(rawOutbounds, preserveSendThrough)
+        }.orEmpty()
 
         return PreparedTunnelProfile(
             version = profile.version,
@@ -141,6 +142,9 @@ class XrayRuntime(
                 name = displayName,
                 countryCode = extractCountryCode(converterDisplayName ?: rawTag, tag),
                 outbound = taggedOutbound,
+                engine = TunnelEngineKind.XRAY,
+                category = legacyServerCategory(displayName, tag),
+                networkRequirement = TunnelNetworkRequirement.ANY,
             )
         }
 

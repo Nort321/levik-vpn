@@ -30,6 +30,23 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Set up Go 1.26.5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.5"
+          cache: false
+
+      - name: Install pinned Android NDK 29
+        shell: bash
+        run: |
+          set -euo pipefail
+          readonly ndk_version="29.0.14206865"
+          "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --install "ndk;${ndk_version}"
+          readonly ndk_directory="${ANDROID_HOME}/ndk/${ndk_version}"
+          grep -Eq '^Pkg.Revision[[:space:]]*=[[:space:]]*29\.0\.14206865$' \
+            "${ndk_directory}/source.properties"
+          printf 'ANDROID_NDK_HOME=%s\n' "${ndk_directory}" >>"${GITHUB_ENV}"
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:

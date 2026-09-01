@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.res.Configuration
 import android.provider.Settings
 import java.util.Locale
+import androidx.activity.compose.BackHandler
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedVisibility
@@ -118,6 +119,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.leviknet.vpn.BuildConfig
 import com.leviknet.vpn.R
 import com.leviknet.vpn.core.auth.ChallengeAuthorization
 import com.leviknet.vpn.core.logger.LogEntry
@@ -138,9 +140,12 @@ import com.leviknet.vpn.data.isActiveAt
 import com.leviknet.vpn.ui.theme.*
 import com.leviknet.vpn.vpn.PreparedTunnelProfile
 import com.leviknet.vpn.vpn.TunnelServer
+import com.leviknet.vpn.vpn.TunnelServerCategory
 import com.leviknet.vpn.vpn.VpnConnectionState
 import com.leviknet.vpn.vpn.VpnFailure
 import com.leviknet.vpn.vpn.VpnSnapshot
+import com.leviknet.vpn.vpn.effectiveCategory
+import com.leviknet.vpn.vpn.isAllowlistMobileServer
 import com.leviknet.vpn.vpn.isMobileServer
 import java.time.Instant
 import java.time.ZoneId
@@ -262,6 +267,10 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     onAnonymousTelemetryChanged = viewModel::setAnonymousTelemetryEnabled,
                     onShareReferralLink = viewModel::shareReferralLink,
                     onOpenPlans = { openDistributionPlans(viewModel) },
+                    onCloseSubscriptionManagement = viewModel::closeSubscriptionManagement,
+                    onRefreshSubscriptionManagement = viewModel::refreshSubscriptionManagement,
+                    onPurchase = viewModel::purchaseAccess,
+                    onContinueOrder = viewModel::continueOrderPayment,
                     onRequestBatteryOptimization = viewModel::requestIgnoreBatteryOptimization,
                     onCheckForUpdates = viewModel::checkForUpdates,
                 )
@@ -341,6 +350,24 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                         modifier = Modifier.size(18.dp),
                     )
                     Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
+
+    if (state.showAllowlistRequiredWarning) {
+        AlertDialog(
+            onDismissRequest = viewModel::dismissAllowlistRequiredWarning,
+            title = { Text(stringResource(R.string.allowlist_required_title)) },
+            text = { Text(stringResource(R.string.allowlist_required_body)) },
+            confirmButton = {
+                Button(onClick = viewModel::confirmAllowlistConnectionAttempt) {
+                    Text(stringResource(R.string.allowlist_continue))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::dismissAllowlistRequiredWarning) {
                     Text(stringResource(R.string.cancel))
                 }
             },
@@ -515,7 +542,11 @@ fun LevikVpnApp(viewModel: AppViewModel) {
         SubscriptionDevicesDialog(
             subscription = selectedSubscriptionForDevices!!,
             onRevokeDevice = viewModel::revokeDevice,
-            onOpenPlans = { openDistributionPlans(viewModel) },
+            onOpenPlans = {
+                showDevicesDialog = false
+                selectedSubscriptionForDevices = null
+                openDistributionPlans(viewModel)
+            },
             onDismiss = {
                 showDevicesDialog = false
                 selectedSubscriptionForDevices = null
@@ -555,16 +586,6 @@ fun LevikVpnApp(viewModel: AppViewModel) {
         )
     }
 
-    state.purchaseCatalog?.let { catalog ->
-        PurchaseDialog(
-            catalog = catalog,
-            account = state.account,
-            loading = state.purchaseLoading,
-            onPurchase = viewModel::purchaseAccess,
-            onDismiss = viewModel::closePurchaseFlow,
-        )
-    }
-
     state.supportNoteUrl?.let { noteUrl ->
         SupportNoteDialog(
             noteUrl = noteUrl,
@@ -590,170 +611,6 @@ fun LevikVpnApp(viewModel: AppViewModel) {
         )
     }
 }
-
-@Composable
-private fun PurchaseDialog(
-    catalog: com.leviknet.vpn.core.network.CatalogResponse,
-    account: MobileAccountResponse?,
-    loading: Boolean,
-    onPurchase: (String, String?, String?, Int?, String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val availableTariffs = catalog.tariffs.filter { it.purchaseEnabled && it.periods.isNotEmpty() }
-    val choices = buildList {
-        add(PurchaseChoice("access_purchase", null, stringResource(R.string.purchase_new_access)))
-        account?.subscriptions.orEmpty().forEach { subscription ->
-            if (subscription.actions.renew) {
-                add(PurchaseChoice("access_renewal", subscription.uuid, stringResource(R.string.purchase_renew, subscription.title)))
-            }
-            if (subscription.actions.slotAddon) {
-                add(PurchaseChoice("slot_addon", subscription.uuid, stringResource(R.string.purchase_slot_addon, subscription.title)))
-            }
-            if (subscription.actions.trafficAddon) {
-                add(PurchaseChoice("traffic_addon", subscription.uuid, stringResource(R.string.purchase_traffic_addon, subscription.title)))
-            }
-        }
-    }
-    var choiceKey by remember(catalog, account) { mutableStateOf("access_purchase:") }
-    val choice = choices.firstOrNull { "${it.kind}:${it.subscriptionId.orEmpty()}" == choiceKey }
-        ?: choices.first()
-    val renewalTariffId = account?.subscriptions
-        ?.firstOrNull { it.uuid == choice.subscriptionId }
-        ?.tariffId
-    var tariffId by remember(catalog) { mutableStateOf(availableTariffs.firstOrNull()?.id.orEmpty()) }
-    val effectiveTariffId = if (choice.kind == "access_renewal") renewalTariffId.orEmpty() else tariffId
-    val selectedTariff = availableTariffs.firstOrNull { it.id == effectiveTariffId }
-    var months by remember(effectiveTariffId) { mutableStateOf(selectedTariff?.periods?.firstOrNull()?.months ?: 0) }
-    var paymentMethodId by remember(catalog) {
-        mutableStateOf(catalog.paymentMethods.firstOrNull()?.id.orEmpty())
-    }
-    val accessOrder = choice.kind in setOf("access_purchase", "access_renewal")
-    val canPurchase = (!accessOrder || (effectiveTariffId.isNotBlank() && months > 0)) &&
-        paymentMethodId.isNotBlank() && !loading
-
-    AlertDialog(
-        onDismissRequest = { if (!loading) onDismiss() },
-        shape = RoundedCornerShape(24.dp),
-        title = { Text(stringResource(R.string.purchase_title), fontWeight = FontWeight.Bold) },
-        text = {
-            Column(
-                modifier = Modifier
-                    .heightIn(max = 520.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                choices.forEach { item ->
-                    val itemKey = "${item.kind}:${item.subscriptionId.orEmpty()}"
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .selectable(
-                                selected = itemKey == choiceKey,
-                                onClick = { choiceKey = itemKey },
-                                role = Role.RadioButton,
-                            ),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        RadioButton(selected = itemKey == choiceKey, onClick = null)
-                        Text(item.label)
-                    }
-                }
-                if (choice.kind == "access_purchase") availableTariffs.forEach { tariff ->
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .selectable(
-                                selected = tariff.id == tariffId,
-                                onClick = { tariffId = tariff.id },
-                                role = Role.RadioButton,
-                            ),
-                        shape = RoundedCornerShape(14.dp),
-                        border = androidx.compose.foundation.BorderStroke(
-                            1.dp,
-                            if (tariff.id == tariffId) LevikBlue else MaterialTheme.colorScheme.outline,
-                        ),
-                    ) {
-                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(selected = tariff.id == tariffId, onClick = null)
-                            Spacer(Modifier.width(8.dp))
-                            Column {
-                                Text(tariff.title, fontWeight = FontWeight.SemiBold)
-                                Text(tariff.description, style = MaterialTheme.typography.bodySmall)
-                            }
-                        }
-                    }
-                }
-                if (accessOrder) {
-                    Text(stringResource(R.string.purchase_period), fontWeight = FontWeight.SemiBold)
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        selectedTariff?.periods.orEmpty().forEach { period ->
-                            FilterChip(
-                                selected = months == period.months,
-                                onClick = { months = period.months },
-                                label = { Text("${period.title} · ${period.amountRub} ₽") },
-                            )
-                        }
-                    }
-                } else {
-                    catalog.addons.firstOrNull { it.id == choice.kind }?.let { addon ->
-                        Text(
-                            text = "${addon.title} · ${addon.amountRub} ₽",
-                            fontWeight = FontWeight.SemiBold,
-                            color = LevikBlue,
-                        )
-                    }
-                }
-                Text(stringResource(R.string.purchase_payment_method), fontWeight = FontWeight.SemiBold)
-                catalog.paymentMethods.forEach { method ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .selectable(
-                                selected = method.id == paymentMethodId,
-                                onClick = { paymentMethodId = method.id },
-                                role = Role.RadioButton,
-                            ),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        RadioButton(selected = method.id == paymentMethodId, onClick = null)
-                        Text(method.title)
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    onPurchase(
-                        choice.kind,
-                        choice.subscriptionId,
-                        effectiveTariffId.takeIf { accessOrder },
-                        months.takeIf { accessOrder },
-                        paymentMethodId,
-                    )
-                },
-                enabled = canPurchase,
-            ) {
-                if (loading) {
-                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                } else {
-                    Text(stringResource(R.string.purchase_continue))
-                }
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !loading) {
-                Text(stringResource(R.string.cancel))
-            }
-        },
-    )
-}
-
-private data class PurchaseChoice(
-    val kind: String,
-    val subscriptionId: String?,
-    val label: String,
-)
 
 @Composable
 private fun LoadingScreen() {
@@ -1110,11 +967,19 @@ private fun MainContent(
     onAnonymousTelemetryChanged: (Boolean) -> Unit,
     onShareReferralLink: (String) -> Unit,
     onOpenPlans: () -> Unit,
+    onCloseSubscriptionManagement: () -> Unit,
+    onRefreshSubscriptionManagement: () -> Unit,
+    onPurchase: (String, String?, String?, Int?, String) -> Unit,
+    onContinueOrder: (Long) -> Unit,
     onRequestBatteryOptimization: () -> Unit,
     onCheckForUpdates: () -> Unit,
 ) {
     val isTelevision = LocalConfiguration.current.uiMode and
         Configuration.UI_MODE_TYPE_MASK == Configuration.UI_MODE_TYPE_TELEVISION
+    BackHandler(
+        enabled = state.tab == AppTab.PROFILE && state.subscriptionManagementOpen,
+        onBack = onCloseSubscriptionManagement,
+    )
     Scaffold(
         containerColor = Color.Transparent,
         contentWindowInsets = if (isTelevision) WindowInsets(0, 0, 0, 0) else WindowInsets.safeDrawing,
@@ -1173,7 +1038,18 @@ private fun MainContent(
                 onClearTrafficHistory = onClearTrafficHistory,
                 onExportTrafficHistory = onExportTrafficHistory,
             )
-            AppTab.PROFILE -> ProfileScreen(
+            AppTab.PROFILE -> if (state.subscriptionManagementOpen) {
+                SubscriptionManagementScreen(
+                    modifier = contentModifier,
+                    account = state.account,
+                    catalog = state.purchaseCatalog,
+                    loading = state.purchaseLoading || state.refreshing,
+                    onBack = onCloseSubscriptionManagement,
+                    onRefresh = onRefreshSubscriptionManagement,
+                    onPurchase = onPurchase,
+                    onContinueOrder = onContinueOrder,
+                )
+            } else ProfileScreen(
                 modifier = contentModifier,
                 account = state.account,
                 profile = state.profile,
@@ -2069,18 +1945,26 @@ private fun ServerSummaryCard(
                 )
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
+                    val isAllowlist = server?.isAllowlistMobileServer() == true && !automaticServer
+                    val isMobile = server?.isMobileServer() == true && !automaticServer
+                    val subtitleColor = when {
+                        isAllowlist -> if (isDark) Color(0xFF60A5FA) else LevikBlue
+                        isMobile -> if (isDark) Color(0xFFFBBF24) else Color(0xFFD97706)
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    }
                     Text(
                         text = when {
                             automaticServer -> stringResource(R.string.selected_server_automatic)
+                            server?.isAllowlistMobileServer() == true -> {
+                                stringResource(R.string.selected_server_mobile_allowlist)
+                            }
                             server?.isMobileServer() == true -> stringResource(R.string.selected_server_mobile)
                             else -> stringResource(R.string.selected_server_regular)
                         },
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (server?.isMobileServer() == true && !automaticServer) {
-                            if (isDark) Color(0xFFFBBF24) else Color(0xFFD97706)
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
+                        color = subtitleColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                     Spacer(Modifier.height(2.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2091,19 +1975,36 @@ private fun ServerSummaryCard(
                             color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
                         )
                         if (!automaticServer && server?.isMobileServer() == true) {
+                            val badgeColor = if (isAllowlist) {
+                                if (isDark) Color(0xFF60A5FA) else LevikBlue
+                            } else {
+                                if (isDark) Color(0xFFFBBF24) else Color(0xFFD97706)
+                            }
+                            val badgeBg = if (isAllowlist) {
+                                (if (isDark) Color(0xFF3B82F6) else LevikBlue).copy(alpha = 0.15f)
+                            } else {
+                                (if (isDark) Color(0xFFF59E0B) else Color(0xFFD97706)).copy(alpha = 0.15f)
+                            }
                             Spacer(Modifier.width(6.dp))
                             Surface(
                                 shape = RoundedCornerShape(6.dp),
-                                color = (if (isDark) Color(0xFFF59E0B) else Color(0xFFD97706)).copy(alpha = 0.15f),
+                                color = badgeBg,
                             ) {
                                 Text(
-                                    text = stringResource(R.string.server_badge_mobile),
+                                    text = stringResource(
+                                        if (isAllowlist) {
+                                            R.string.server_badge_mobile_allowlist
+                                        } else {
+                                            R.string.server_badge_mobile
+                                        },
+                                    ),
                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = if (isDark) Color(0xFFFBBF24) else Color(0xFFD97706),
+                                    color = badgeColor,
                                 )
                             }
                         }
@@ -2171,10 +2072,10 @@ private fun ServerSummaryCard(
                         Spacer(Modifier.width(7.dp))
                         Text(
                             text = stringResource(
-                                if (lteTraffic == null) {
-                                    R.string.total_data_usage
-                                } else {
+                                if (lteTraffic != null) {
                                     R.string.lte_traffic_usage
+                                } else {
+                                    R.string.profile_traffic
                                 },
                             ),
                             style = MaterialTheme.typography.labelSmall,
@@ -2182,11 +2083,12 @@ private fun ServerSummaryCard(
                         )
                     }
                     Spacer(Modifier.height(5.dp))
+                    val sessionBytes = vpn.downloadedBytes + vpn.uploadedBytes
                     Text(
-                        text = if (lteTraffic == null) {
-                            dataUsageValue(vpn.downloadedBytes + vpn.uploadedBytes)
-                        } else {
-                            trafficLimitValue(lteTraffic.usedBytes, lteTraffic.limitBytes)
+                        text = when {
+                            lteTraffic != null -> trafficLimitValue(lteTraffic.usedBytes, lteTraffic.limitBytes)
+                            sessionBytes <= 0L -> unlimitedTrafficValue()
+                            else -> trafficLimitValue(sessionBytes, 0L)
                         },
                     )
                 }
@@ -2222,7 +2124,7 @@ private fun ServerSummaryCard(
                     )
                 }
             }
-            if (lteTraffic != null) {
+            if (lteTraffic != null && lteTraffic.limitBytes > 0L) {
                 Spacer(Modifier.height(14.dp))
                 LinearProgressIndicator(
                     progress = {
@@ -2267,6 +2169,18 @@ private fun dataUsageValue(bytes: Long): AnnotatedString {
 }
 
 @Composable
+private fun unlimitedTrafficValue(): AnnotatedString {
+    val symbolStyle = SpanStyle(
+        fontSize = 24.sp,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onSurface,
+    )
+    return buildAnnotatedString {
+        withStyle(symbolStyle) { append("∞") }
+    }
+}
+
+@Composable
 private fun trafficLimitValue(usedBytes: Long, limitBytes: Long): AnnotatedString {
     val valueStyle = SpanStyle(
         fontSize = 17.sp,
@@ -2278,10 +2192,11 @@ private fun trafficLimitValue(usedBytes: Long, limitBytes: Long): AnnotatedStrin
         fontWeight = FontWeight.SemiBold,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+    val limitText = formatLimitBytes(limitBytes)
     return buildAnnotatedString {
         withStyle(valueStyle) { append(formatBytes(usedBytes)) }
         withStyle(separatorStyle) { append(" / ") }
-        withStyle(valueStyle) { append(formatBytes(limitBytes)) }
+        withStyle(valueStyle) { append(limitText) }
     }
 }
 
@@ -2454,13 +2369,19 @@ private fun ServersScreen(
                     .horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                listOf(
-                    ServerFilterType.ALL to stringResource(R.string.filter_all),
-                    ServerFilterType.REGULAR to stringResource(R.string.filter_regular),
-                    ServerFilterType.MOBILE to stringResource(R.string.filter_mobile),
-                    ServerFilterType.FAVORITES to stringResource(R.string.filter_favorites),
-                    ServerFilterType.FASTEST to stringResource(R.string.filter_fastest),
-                ).forEach { (type, label) ->
+                buildList {
+                    add(ServerFilterType.ALL to stringResource(R.string.filter_all))
+                    add(ServerFilterType.REGULAR to stringResource(R.string.filter_regular))
+                    add(ServerFilterType.MOBILE to stringResource(R.string.filter_mobile))
+                    if (BuildConfig.LEVIK_RELAY_ENABLED) {
+                        add(
+                            ServerFilterType.MOBILE_ALLOWLIST to
+                                stringResource(R.string.filter_mobile_allowlist),
+                        )
+                    }
+                    add(ServerFilterType.FAVORITES to stringResource(R.string.filter_favorites))
+                    add(ServerFilterType.FASTEST to stringResource(R.string.filter_fastest))
+                }.forEach { (type, label) ->
                     val isSelected = filterType == type
                     Surface(
                         onClick = { onFilterChanged(type) },
@@ -2508,8 +2429,12 @@ private fun ServersScreen(
                         server.countryCode.lowercase().contains(query)
                     val matchesFilter = when (filterType) {
                         ServerFilterType.ALL -> true
-                        ServerFilterType.REGULAR -> !server.isMobileServer()
-                        ServerFilterType.MOBILE -> server.isMobileServer()
+                        ServerFilterType.REGULAR ->
+                            server.effectiveCategory() == TunnelServerCategory.REGULAR
+                        ServerFilterType.MOBILE ->
+                            server.effectiveCategory() == TunnelServerCategory.MOBILE
+                        ServerFilterType.MOBILE_ALLOWLIST ->
+                            server.effectiveCategory() == TunnelServerCategory.MOBILE_ALLOWLIST
                         ServerFilterType.FAVORITES -> favoriteServerIds.contains(server.id)
                         ServerFilterType.FASTEST -> true
                     }
@@ -2605,86 +2530,86 @@ private fun ServersScreen(
                             }
                         }
                     } else if (filterType == ServerFilterType.ALL && searchQuery.isEmpty()) {
-                        val regularServers = filtered.filter { !it.isMobileServer() }
-                        val mobileServers = filtered.filter { it.isMobileServer() }
+                        val regularServers = filtered.filter {
+                            it.effectiveCategory() == TunnelServerCategory.REGULAR
+                        }
+                        val mobileServers = filtered.filter {
+                            it.effectiveCategory() == TunnelServerCategory.MOBILE
+                        }
+                        val allowlistServers = filtered.filter {
+                            it.effectiveCategory() == TunnelServerCategory.MOBILE_ALLOWLIST
+                        }
+                        val categoryCount = listOf(
+                            regularServers,
+                            mobileServers,
+                            allowlistServers,
+                        ).count(List<TunnelServer>::isNotEmpty)
 
-                        if (regularServers.isNotEmpty() && mobileServers.isNotEmpty()) {
-                            item(key = "section_regular_header") {
-                                Column(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .padding(top = 8.dp, bottom = 2.dp),
-                                ) {
-                                    Text(
-                                        text = stringResource(R.string.servers_category_regular),
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onSurface,
+                        if (categoryCount > 1) {
+                            if (regularServers.isNotEmpty()) {
+                                item(key = "section_regular_header") {
+                                    ServerCategoryHeader(
+                                        title = R.string.servers_category_regular,
+                                        description = R.string.servers_category_regular_desc,
+                                        topPadding = 8,
                                     )
-                                    Text(
-                                        text = stringResource(R.string.servers_category_regular_desc),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                }
+                                items(regularServers, key = TunnelServer::id) { server ->
+                                    ServerItemCard(
+                                        server = server,
+                                        selected = !automaticServer && server.id == selectedServerId,
+                                        isFav = favoriteServerIds.contains(server.id),
+                                        pingValue = serverPings[server.id],
+                                        pingingServers = pingingServers,
+                                        isDark = isDark,
+                                        onServerSelected = onServerSelected,
+                                        onToggleFavorite = onToggleFavorite,
                                     )
                                 }
                             }
-                            items(regularServers, key = TunnelServer::id) { server ->
-                                ServerItemCard(
-                                    server = server,
-                                    selected = !automaticServer && server.id == selectedServerId,
-                                    isFav = favoriteServerIds.contains(server.id),
-                                    pingValue = serverPings[server.id],
-                                    pingingServers = pingingServers,
-                                    isDark = isDark,
-                                    onServerSelected = onServerSelected,
-                                    onToggleFavorite = onToggleFavorite,
-                                )
-                            }
-                            item(key = "section_mobile_header") {
-                                Column(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .padding(top = 16.dp, bottom = 2.dp),
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(
-                                            text = stringResource(R.string.servers_category_mobile),
-                                            style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.Bold,
-                                            color = if (isDark) Color(0xFFFBBF24) else Color(0xFFD97706),
-                                        )
-                                        Spacer(Modifier.width(8.dp))
-                                        Surface(
-                                            shape = RoundedCornerShape(6.dp),
-                                            color = (if (isDark) Color(0xFFF59E0B) else Color(0xFFD97706)).copy(alpha = 0.15f),
-                                        ) {
-                                            Text(
-                                                text = stringResource(R.string.server_badge_mobile),
-                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                                fontSize = 11.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = if (isDark) Color(0xFFFBBF24) else Color(0xFFD97706),
-                                            )
-                                        }
-                                    }
-                                    Text(
-                                        text = stringResource(R.string.servers_category_mobile_desc),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            if (mobileServers.isNotEmpty()) {
+                                item(key = "section_mobile_header") {
+                                    ServerCategoryHeader(
+                                        title = R.string.servers_category_mobile,
+                                        description = R.string.servers_category_mobile_desc,
+                                        badge = R.string.server_badge_mobile,
+                                        accent = if (isDark) Color(0xFFFBBF24) else Color(0xFFD97706),
+                                    )
+                                }
+                                items(mobileServers, key = TunnelServer::id) { server ->
+                                    ServerItemCard(
+                                        server = server,
+                                        selected = !automaticServer && server.id == selectedServerId,
+                                        isFav = favoriteServerIds.contains(server.id),
+                                        pingValue = serverPings[server.id],
+                                        pingingServers = pingingServers,
+                                        isDark = isDark,
+                                        onServerSelected = onServerSelected,
+                                        onToggleFavorite = onToggleFavorite,
                                     )
                                 }
                             }
-                            items(mobileServers, key = TunnelServer::id) { server ->
-                                ServerItemCard(
-                                    server = server,
-                                    selected = !automaticServer && server.id == selectedServerId,
-                                    isFav = favoriteServerIds.contains(server.id),
-                                    pingValue = serverPings[server.id],
-                                    pingingServers = pingingServers,
-                                    isDark = isDark,
-                                    onServerSelected = onServerSelected,
-                                    onToggleFavorite = onToggleFavorite,
-                                )
+                            if (allowlistServers.isNotEmpty()) {
+                                item(key = "section_mobile_allowlist_header") {
+                                    ServerCategoryHeader(
+                                        title = R.string.servers_category_mobile_allowlist,
+                                        description = R.string.servers_category_mobile_allowlist_desc,
+                                        badge = R.string.server_badge_mobile_allowlist,
+                                        accent = if (isDark) Color(0xFF60A5FA) else LevikBlue,
+                                    )
+                                }
+                                items(allowlistServers, key = TunnelServer::id) { server ->
+                                    ServerItemCard(
+                                        server = server,
+                                        selected = !automaticServer && server.id == selectedServerId,
+                                        isFav = favoriteServerIds.contains(server.id),
+                                        pingValue = serverPings[server.id],
+                                        pingingServers = pingingServers,
+                                        isDark = isDark,
+                                        onServerSelected = onServerSelected,
+                                        onToggleFavorite = onToggleFavorite,
+                                    )
+                                }
                             }
                         } else {
                             items(filtered, key = TunnelServer::id) { server ->
@@ -2717,6 +2642,50 @@ private fun ServersScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ServerCategoryHeader(
+    @StringRes title: Int,
+    @StringRes description: Int,
+    @StringRes badge: Int? = null,
+    accent: Color? = null,
+    topPadding: Int = 16,
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = topPadding.dp, bottom = 2.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = stringResource(title),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = accent ?: MaterialTheme.colorScheme.onSurface,
+            )
+            if (badge != null && accent != null) {
+                Spacer(Modifier.width(8.dp))
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = accent.copy(alpha = 0.15f),
+                ) {
+                    Text(
+                        text = stringResource(badge),
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = accent,
+                    )
+                }
+            }
+        }
+        Text(
+            text = stringResource(description),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -2768,17 +2737,34 @@ private fun ServerItemCard(
                             modifier = Modifier.weight(1f, fill = false),
                         )
                         if (server.isMobileServer()) {
+                            val isAllowlist = server.isAllowlistMobileServer()
+                            val badgeColor = if (isAllowlist) {
+                                if (isDark) Color(0xFF60A5FA) else LevikBlue
+                            } else {
+                                if (isDark) Color(0xFFFBBF24) else Color(0xFFD97706)
+                            }
+                            val badgeBg = if (isAllowlist) {
+                                (if (isDark) Color(0xFF3B82F6) else LevikBlue).copy(alpha = 0.15f)
+                            } else {
+                                (if (isDark) Color(0xFFF59E0B) else Color(0xFFD97706)).copy(alpha = 0.15f)
+                            }
                             Spacer(Modifier.width(6.dp))
                             Surface(
                                 shape = RoundedCornerShape(6.dp),
-                                color = (if (isDark) Color(0xFFF59E0B) else Color(0xFFD97706)).copy(alpha = 0.15f),
+                                color = badgeBg,
                             ) {
                                 Text(
-                                    text = stringResource(R.string.server_badge_mobile),
+                                    text = stringResource(
+                                        if (isAllowlist) {
+                                            R.string.server_badge_mobile_allowlist
+                                        } else {
+                                            R.string.server_badge_mobile
+                                        },
+                                    ),
                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = if (isDark) Color(0xFFFBBF24) else Color(0xFFD97706),
+                                    color = badgeColor,
                                 )
                             }
                         }
@@ -3424,15 +3410,15 @@ private fun ProfileScreen(
                 onShieldChanged = onSubscriptionShieldChanged,
             )
 
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 OutlinedButton(
                     onClick = onRefresh,
                     enabled = !loading && session == SessionStatus.Authenticated,
                     modifier = Modifier
-                        .weight(1f)
+                        .fillMaxWidth()
                         .height(LevikDimensions.ButtonHeight),
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.outlinedButtonColors(
@@ -3463,7 +3449,7 @@ private fun ProfileScreen(
                 DistributionRenewPlanButton(
                     onOpenPlans = onOpenPlans,
                     modifier = Modifier
-                        .weight(1f)
+                        .fillMaxWidth()
                         .height(LevikDimensions.ButtonHeight),
                 )
             }
@@ -5597,7 +5583,7 @@ private fun SubscriptionCard(
             ProfileLine(
                 label = stringResource(R.string.profile_traffic),
                 value = subscription?.let {
-                    "${formatBytes(it.traffic.usedBytes)} / ${formatBytes(it.traffic.limitBytes)}"
+                    "${formatBytes(it.traffic.usedBytes)} / ${formatLimitBytes(it.traffic.limitBytes)}"
                 } ?: stringResource(R.string.not_available),
             )
             ProfileLine(
@@ -5618,7 +5604,7 @@ private fun SubscriptionCard(
                     value = stringResource(
                         R.string.multi_component_usage,
                         formatBytes(components.regular.traffic.usedBytes),
-                        formatBytes(components.regular.traffic.limitBytes),
+                        formatLimitBytes(components.regular.traffic.limitBytes),
                         components.regular.devices.used,
                         components.regular.devices.limit,
                     ),
@@ -5628,7 +5614,7 @@ private fun SubscriptionCard(
                     value = stringResource(
                         R.string.multi_component_usage,
                         formatBytes(components.mobile.traffic.usedBytes),
-                        formatBytes(components.mobile.traffic.limitBytes),
+                        formatLimitBytes(components.mobile.traffic.limitBytes),
                         components.mobile.devices.used,
                         components.mobile.devices.limit,
                     ),
@@ -5926,7 +5912,7 @@ private fun formatDuration(seconds: Long): String {
 
 private val DATE_FORMATTER = DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)
 
-private fun formatDate(iso: String): String = runCatching {
+internal fun formatDate(iso: String): String = runCatching {
     val instant = Instant.parse(iso)
     val local = instant.atZone(ZoneId.systemDefault()).toLocalDate()
     DATE_FORMATTER.format(local)
@@ -5952,6 +5938,9 @@ private fun UiMessage.localized(): String = stringResource(
         UiMessage.DEVICE_REVOKE_FAILED -> R.string.device_revoke_failed
         UiMessage.TRAFFIC_HISTORY_CLEARED -> R.string.traffic_history_cleared
         UiMessage.TRAFFIC_HISTORY_EXPORTED -> R.string.traffic_history_exported
+        UiMessage.PAYMENT_OPEN_FAILED -> R.string.payment_open_failed
+        UiMessage.PAYMENT_NOT_AVAILABLE -> R.string.payment_not_available
+        UiMessage.PAYMENT_ALREADY_PENDING -> R.string.payment_already_pending
     },
 )
 
@@ -5976,6 +5965,7 @@ private fun VpnFailure.localized(): String = stringResource(
         VpnFailure.INVALID_PROFILE -> R.string.core_rejected_config
         VpnFailure.PERMISSION_REVOKED -> R.string.vpn_permission_denied
         VpnFailure.NETWORK -> R.string.generic_error
+        VpnFailure.NETWORK_REQUIREMENT -> R.string.network_requirement_unavailable
     },
 )
 
@@ -5989,7 +5979,7 @@ private fun String?.localizedSubscriptionStatus(): String = stringResource(
 )
 
 @Composable
-private fun formatBytes(bytes: Long): String {
+internal fun formatBytes(bytes: Long): String {
     val value = bytes.coerceAtLeast(0).toDouble()
     return when {
         value >= GIB -> stringResource(R.string.bytes_gb, value / GIB)
@@ -5998,6 +5988,10 @@ private fun formatBytes(bytes: Long): String {
         else -> stringResource(R.string.bytes_b, value)
     }
 }
+
+@Composable
+internal fun formatLimitBytes(bytes: Long): String =
+    if (bytes <= 0L) "∞" else formatBytes(bytes)
 
 enum class NavigationDestination(
     val tab: AppTab,

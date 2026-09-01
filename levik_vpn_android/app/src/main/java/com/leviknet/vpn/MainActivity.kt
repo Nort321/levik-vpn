@@ -89,6 +89,7 @@ class MainActivity : ComponentActivity() {
         when (effect) {
             is AppEffect.OpenAuthorization -> openAuthorization(effect.uri)
             is AppEffect.OpenExternal -> openAllowedUri(effect.uri)
+            is AppEffect.OpenPayment -> openPaymentUri(effect.uri)
             is AppEffect.ShareText -> {
                 val sendIntent = Intent().apply {
                     action = Intent.ACTION_SEND
@@ -213,6 +214,29 @@ class MainActivity : ComponentActivity() {
                     runCatching { startActivity(Intent(Intent.ACTION_VIEW, fallback)) }
                 }
             }
+        }
+    }
+
+    private fun openPaymentUri(rawUri: String) {
+        if (!ExternalUriPolicy.isAllowedPaymentUrl(rawUri)) {
+            viewModel.onPaymentOpenFailed()
+            return
+        }
+        val uri = runCatching { rawUri.toUri() }.getOrNull()
+        if (uri == null) {
+            viewModel.onPaymentOpenFailed()
+            return
+        }
+        val customTabsIntent = CustomTabsIntent.Builder()
+            .setShareState(CustomTabsIntent.SHARE_STATE_OFF)
+            .build()
+        val opened = runCatching {
+            customTabsIntent.launchUrl(this, uri)
+        }.isSuccess || runCatching {
+            startActivity(Intent(Intent.ACTION_VIEW, uri))
+        }.isSuccess
+        if (!opened) {
+            viewModel.onPaymentOpenFailed()
         }
     }
 }

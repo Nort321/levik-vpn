@@ -24,11 +24,11 @@ import com.leviknet.vpn.core.logger.AppLogger
 import com.leviknet.vpn.core.security.SecureFileStore
 import com.leviknet.vpn.data.DnsProvider
 import com.leviknet.vpn.data.SplitTunnelMode
+import com.leviknet.vpn.data.isActiveAt
 import java.net.DatagramSocket
 import java.net.HttpURLConnection
 import java.net.Socket
 import java.net.URL
-import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -46,7 +46,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import libXray.DialerController
 
 class LevikVpnService : VpnService() {
     private val coreOwner = NEXT_CORE_OWNER.incrementAndGet()
@@ -58,23 +57,6 @@ class LevikVpnService : VpnService() {
     private val container by lazy {
         (application as LevikVpnApplication).container
     }
-    private val controller = object : DialerController {
-        override fun protectFd(fd: Long): Boolean {
-            if (fd !in 0..Int.MAX_VALUE.toLong()) return false
-            val socketFd = fd.toInt()
-            val network = underlyingNetwork.get() ?: return false
-            if (!protect(socketFd)) return false
-            return runCatching {
-                val pfd = ParcelFileDescriptor.adoptFd(socketFd)
-                try {
-                    network.bindSocket(pfd.fileDescriptor)
-                } finally {
-                    pfd.detachFd() // Keep the underlying native socket open!
-                }
-                true
-            }.getOrDefault(false)
-        }
-    }
     private val networkMonitor by lazy {
         NetworkMonitor(
             context = this,
@@ -84,7 +66,11 @@ class LevikVpnService : VpnService() {
     }
 
     private var tunInterface: ParcelFileDescriptor? = null
-    private var currentConfig: String? = null
+    private var currentEngineRequest: TunnelEngineRequest? = null
+    private var currentPreparedSession: PreparedTunnelEngineSession? = null
+    private var currentEngine: TunnelEngineAdapter? = null
+    private var currentServer: TunnelServer? = null
+    private var currentSubscriptionId: String? = null
     @Volatile
     private var currentServerName: String? = null
     private var currentNetwork: Network? = null
@@ -98,6 +84,7 @@ class LevikVpnService : VpnService() {
     private var statsJob: Job? = null
     private var profileExpiryJob: Job? = null
     private var autoHealingJob: Job? = null
+    private var relayEntitlementWatchdogJob: Job? = null
     private var connectionJob: Job? = null
     private var pauseJob: Job? = null
 
@@ -124,10 +111,26 @@ class LevikVpnService : VpnService() {
         wakeLock = null
     }
 
+    private fun fileDescriptorProtector(network: Network) =
+        TunnelFileDescriptorProtector protector@{ fd ->
+            if (fd !in 0..Int.MAX_VALUE.toLong()) return@protector false
+            val socketFd = fd.toInt()
+            if (!protect(socketFd)) return@protector false
+            runCatching {
+                // The descriptor received over SCM_RIGHTS already has an Android owner.
+                // fromFd duplicates it; adoptFd would claim the same descriptor again and
+                // Android fdsan aborts the whole process for that ownership violation.
+                ParcelFileDescriptor.fromFd(socketFd).use { pfd ->
+                    network.bindSocket(pfd.fileDescriptor)
+                }
+                true
+            }.getOrDefault(false)
+        }
+
     override fun onCreate() {
         super.onCreate()
         AppLogger.i(LOG_TAG, "LevikVpnService onCreate")
-        container.xrayRuntime.claimOwner(coreOwner)
+        container.tunnelEngineRegistry.claimOwner(coreOwner)
         VpnStateStore.claim(coreOwner)
         ServerPinger.registerSocketProtector(coreOwner, ::protectPingSocket, ::protectPingDatagramSocket)
         createNotificationChannel()
@@ -140,6 +143,8 @@ class LevikVpnService : VpnService() {
             ACTION_DISCONNECT -> {
                 pauseJob?.cancel()
                 pauseJob = null
+                connectionJob?.cancel()
+                connectionJob = null
                 container.settings.setPausedUntilMs(0L)
                 serviceScope.launch {
                     stopConnection(stopService = true)
@@ -179,6 +184,8 @@ class LevikVpnService : VpnService() {
                     VpnStateStore.update(coreOwner) {
                         it.copy(
                             state = VpnConnectionState.CONNECTED,
+                            engine = currentServer?.engine,
+                            serverId = currentServer?.id,
                             serverName = currentServerName,
                             failure = null,
                         )
@@ -223,7 +230,6 @@ class LevikVpnService : VpnService() {
 
     override fun onDestroy() {
         AppLogger.i(LOG_TAG, "LevikVpnService onDestroy")
-        container.xrayRuntime.retireOwner(coreOwner)
         ServerPinger.unregisterSocketProtector(coreOwner)
         runCatching { container.trafficHistoryStore.flushAsync() }
         val cleanup = lifecycleGate.withLock {
@@ -236,24 +242,35 @@ class LevikVpnService : VpnService() {
             statsJob?.cancel()
             profileExpiryJob?.cancel()
             autoHealingJob?.cancel()
-            networkMonitor.stop()
+            relayEntitlementWatchdogJob?.cancel()
+            networkMonitor.stop(releaseCellular = false)
             underlyingNetwork.set(null)
             val capturedLease = coreLease
+            val capturedEngine = currentEngine
+            val capturedPrepared = currentPreparedSession
             val capturedTun = tunInterface
             coreRunning = false
             coreLease = null
             tunInterface = null
-            currentConfig = null
+            currentEngineRequest = null
+            currentPreparedSession = null
+            currentEngine = null
+            currentServer = null
+            currentSubscriptionId = null
             currentServerName = null
             currentNetwork = null
-            NativeCleanup(capturedLease, capturedTun)
+            NativeCleanup(capturedEngine, capturedPrepared, capturedLease, capturedTun)
         }
         serviceScope.cancel()
         container.nativeCleanupScope.launch {
             try {
-                runCatching { container.xrayRuntime.stop(coreOwner, cleanup.lease) }
+                runCatching {
+                    cleanup.engine?.stop(coreOwner, cleanup.prepared, cleanup.lease)
+                }
             } finally {
                 runCatching { cleanup.tunInterface?.close() }
+                networkMonitor.releaseCellularNetwork()
+                container.tunnelEngineRegistry.retireOwner(coreOwner)
             }
         }
         VpnStateStore.release(coreOwner, preserveTerminalError = true)
@@ -286,36 +303,38 @@ class LevikVpnService : VpnService() {
             val selected = profile.servers.firstOrNull { it.id == selectedId }
                 ?: profile.servers.firstOrNull(TunnelServer::isEligibleForAutomaticSelection)
                 ?: error("Tunnel profile has no server eligible for automatic selection")
+            val connectionExpiresAt = selected.relayConfig?.bootstrap?.expiresAt
+                ?.also { value ->
+                    require(Instant.parse(value).isAfter(Instant.now())) {
+                        "Relay credential has expired"
+                    }
+                }
+                ?.let { relayExpiry ->
+                    listOfNotNull(profile.subscriptionExpiresAt, relayExpiry)
+                        .minBy { Instant.parse(it) }
+                }
+                ?: profile.subscriptionExpiresAt
+            val connectionExpiryDeadline = connectionExpiresAt?.let { value ->
+                MonotonicCredentialDeadline.create(
+                    expiresAt = Instant.parse(value),
+                    wallClockNow = Instant.now(),
+                    elapsedRealtimeMs = SystemClock.elapsedRealtime(),
+                )
+            }
 
             AppLogger.i(LOG_TAG, "Establishing VPN connection")
 
-            currentNetwork = networkMonitor.activeNetwork()
-                ?: throw NetworkSetupException("No validated underlying network")
-            val tun = try {
-                establishTun(selected.name)
-            } catch (error: SecurityException) {
-                throw error
-            } catch (error: RuntimeException) {
-                throw NetworkSetupException("Unable to establish the Android VPN", error)
-            }
-            val acceptedTun = lifecycleGate.withLock {
-                if (destroyed.get()) {
-                    false
+            val network = networkMonitor.acquireNetwork(selected.networkRequirement)
+                ?: if (selected.networkRequirement == TunnelNetworkRequirement.CELLULAR_ALLOWLIST) {
+                    throw TunnelNetworkRequirementException(
+                        TunnelNetworkRequirementViolation.CELLULAR_NETWORK_REQUIRED,
+                    )
                 } else {
-                    tunInterface = tun
-                    true
+                    throw NetworkSetupException("No usable underlying network")
                 }
-            }
-            if (!acceptedTun) {
-                runCatching { tun.close() }
-                return@connection
-            }
-            if (!setUnderlyingNetworks(arrayOf(requireNotNull(currentNetwork)))) {
-                throw NetworkSetupException(
-                    "Unable to bind the VPN to its underlying network",
-                )
-            }
-            underlyingNetwork.set(currentNetwork)
+            currentNetwork = network
+            enforceNetworkRequirement(selected, network)
+            underlyingNetwork.set(network)
             val dnsProvider = container.settings.dnsProvider.value
             val primaryDns = if (dnsProvider == DnsProvider.CUSTOM) {
                 container.settings.customDnsIpv4.value.trim().ifBlank { dnsProvider.primaryIpv4 }
@@ -335,44 +354,115 @@ class LevikVpnService : VpnService() {
                 }
             } else null
 
-            val config = XrayConfigBuilder(container.json).build(
-                profile = profile,
-                selectedServerId = selected.id,
-                tunFileDescriptor = tun.fd,
-                routingPreset = routingPreset,
-                bypassRussianTraffic = container.settings.bypassRussianTraffic.value,
-                russianDirectCidrs = container.russianRoutingData.cidrs,
-                primaryDnsIp = primaryDns,
-                secondaryDnsIp = secondaryDns,
-                dohEndpoint = dohUrl,
-                antiDpiEnabled = antiDpi,
-                antiDpiPackets = container.settings.antiDpiPackets.value,
-                antiDpiLength = container.settings.antiDpiLength.value,
-                antiDpiInterval = container.settings.antiDpiInterval.value,
-                customDirectDomains = container.settings.customDirectDomains.value,
-                customProxyDomains = container.settings.customProxyDomains.value,
-            )
-            currentConfig = config
-            currentServerName = selected.name
-
+            val request = when (selected.engine) {
+                TunnelEngineKind.XRAY -> TunnelEngineRequest.Xray(
+                    configFactory = XrayConfigFactory { tunFileDescriptor ->
+                        XrayConfigBuilder(container.json).build(
+                            profile = profile,
+                            selectedServerId = selected.id,
+                            tunFileDescriptor = tunFileDescriptor,
+                            routingPreset = routingPreset,
+                            bypassRussianTraffic = container.settings.bypassRussianTraffic.value,
+                            russianDirectCidrs = container.russianRoutingData.cidrs,
+                            primaryDnsIp = primaryDns,
+                            secondaryDnsIp = secondaryDns,
+                            dohEndpoint = dohUrl,
+                            antiDpiEnabled = antiDpi,
+                            antiDpiPackets = container.settings.antiDpiPackets.value,
+                            antiDpiLength = container.settings.antiDpiLength.value,
+                            antiDpiInterval = container.settings.antiDpiInterval.value,
+                            customDirectDomains = container.settings.customDirectDomains.value,
+                            customProxyDomains = container.settings.customProxyDomains.value,
+                        )
+                    },
+                    tunPlan = xrayTunPlan(
+                        primaryDns = primaryDns,
+                        secondaryDns = secondaryDns,
+                        primaryDnsIpv6 = dnsProvider.primaryIpv6,
+                        secondaryDnsIpv6 = dnsProvider.secondaryIpv6,
+                    ),
+                )
+                TunnelEngineKind.LEVIK_RELAY -> TunnelEngineRequest.Relay(
+                    requireNotNull(selected.relayConfig) {
+                        "Relay server has no bootstrap configuration"
+                    },
+                )
+            }
+            val engine = container.tunnelEngineRegistry.require(selected.engine)
             check(!destroyed.get()) { "VPN service was destroyed during startup" }
-            coreLease = container.xrayRuntime.start(
+            val prepared = engine.prepare(
                 owner = coreOwner,
-                configJson = config,
-                controller = controller,
-                dnsServer = "$primaryDns:53",
+                request = request,
+                environment = TunnelEngineEnvironment(
+                    network = network,
+                    protector = fileDescriptorProtector(network),
+                    dnsServer = "$primaryDns:53",
+                    terminalFailureHandler = ::onTunnelEngineTerminalFailure,
+                ),
             )
+            checkConnectionDeadline(connectionExpiryDeadline)
+            val acceptedPrepared = lifecycleGate.withLock {
+                if (destroyed.get()) {
+                    false
+                } else {
+                    currentEngineRequest = request
+                    currentPreparedSession = prepared
+                    currentEngine = engine
+                    currentServer = selected
+                    currentSubscriptionId = profile.subscriptionId
+                    currentServerName = selected.name
+                    true
+                }
+            }
+            if (!acceptedPrepared) {
+                runCatching { engine.stop(coreOwner, prepared) }
+                return@connection
+            }
+            val tun = try {
+                establishTun(selected.name, prepared.tunPlan)
+            } catch (error: SecurityException) {
+                throw error
+            } catch (error: RuntimeException) {
+                throw NetworkSetupException("Unable to establish the Android VPN", error)
+            }
+            val acceptedTun = lifecycleGate.withLock {
+                if (destroyed.get()) {
+                    false
+                } else {
+                    tunInterface = tun
+                    true
+                }
+            }
+            if (!acceptedTun) {
+                runCatching { tun.close() }
+                return@connection
+            }
+            if (!setUnderlyingNetworks(arrayOf(network))) {
+                throw NetworkSetupException(
+                    "Unable to bind the VPN to its underlying network",
+                )
+            }
+            coreLease = engine.start(
+                owner = coreOwner,
+                prepared = prepared,
+                tun = AndroidTunnelFileDescriptorHandle(tun),
+            )
+            checkConnectionDeadline(connectionExpiryDeadline)
             coreRunning = true
             val published = lifecycleGate.withLock {
                 if (destroyed.get()) return@withLock false
                 networkMonitor.start()
                 startStats()
                 startAutoHealing()
-                profile.subscriptionExpiresAt?.let(::scheduleProfileExpiry)
+                startRelayEntitlementWatchdog(selected, prepared)
+                connectionExpiryDeadline?.let(::scheduleProfileExpiry)
                 VpnStateStore.set(
                     coreOwner,
                     VpnSnapshot(
                         state = VpnConnectionState.CONNECTED,
+                        engine = selected.engine,
+                        subscriptionId = profile.subscriptionId,
+                        serverId = selected.id,
                         serverName = selected.name,
                     ),
                 )
@@ -393,11 +483,20 @@ class LevikVpnService : VpnService() {
             AppLogger.e(LOG_TAG, "VPN startup failed", error)
             val failure = when (error) {
                 is UnsatisfiedLinkError -> VpnFailure.CORE_UNAVAILABLE
+                is TunnelEngineUnavailableException -> VpnFailure.CORE_UNAVAILABLE
+                is TunnelEngineFailureException -> when (error.code) {
+                    "relay_native_missing", "relay_process_start_failed" ->
+                        VpnFailure.CORE_UNAVAILABLE
+                    "relay_credential_expired" -> VpnFailure.INVALID_PROFILE
+                    else -> VpnFailure.NETWORK
+                }
+                is TunnelNetworkRequirementException -> VpnFailure.NETWORK_REQUIREMENT
                 is NetworkSetupException -> VpnFailure.NETWORK
                 is SecurityException -> VpnFailure.PERMISSION_REVOKED
                 else -> VpnFailure.INVALID_PROFILE
             }
             val detail = when {
+                error is TunnelEngineFailureException -> relayFailureDetail(error.code)
                 error is XrayException -> error.message
                 error.cause is XrayException -> error.cause?.message
                 else -> error.message?.takeIf { it.isNotBlank() }
@@ -436,7 +535,9 @@ class LevikVpnService : VpnService() {
         profileExpiryJob = null
         autoHealingJob?.cancel()
         autoHealingJob = null
-        networkMonitor.stop()
+        relayEntitlementWatchdogJob?.cancel()
+        relayEntitlementWatchdogJob = null
+        networkMonitor.stop(releaseCellular = false)
         stopCoreAndTun()
         runCatching { container.trafficHistoryStore.flush() }
         if (!preserveError) {
@@ -448,23 +549,33 @@ class LevikVpnService : VpnService() {
 
     private fun stopCoreAndTun() {
         releaseWakeLock()
-        if (coreRunning) {
-            runCatching { container.xrayRuntime.stop(coreOwner, coreLease) }
+        if (currentEngine != null) {
+            runCatching {
+                currentEngine?.stop(coreOwner, currentPreparedSession, coreLease)
+            }
         }
+        networkMonitor.releaseCellularNetwork()
         coreRunning = false
         coreLease = null
         runCatching { tunInterface?.close() }
         tunInterface = null
-        currentConfig = null
+        currentEngineRequest = null
+        currentPreparedSession = null
+        currentEngine = null
+        currentServer = null
+        currentSubscriptionId = null
         currentServerName = null
         currentNetwork = null
         underlyingNetwork.set(null)
     }
 
-    private fun establishTun(serverName: String): ParcelFileDescriptor {
+    private fun establishTun(
+        serverName: String,
+        tunPlan: TunPlan,
+    ): ParcelFileDescriptor {
         val useNativeExclusions = VpnRoutes.supportsNativeExclusions()
         return try {
-            establishTun(serverName, useNativeExclusions)
+            establishTun(serverName, tunPlan, useNativeExclusions)
         } catch (error: RuntimeException) {
             if (!VpnRoutes.shouldRetryWithCompatibleRoutes(useNativeExclusions, error)) {
                 throw error
@@ -474,12 +585,13 @@ class LevikVpnService : VpnService() {
                 "Android rejected native VPN route exclusions; retrying with compatible routes",
                 error,
             )
-            establishTun(serverName, useNativeExclusions = false)
+            establishTun(serverName, tunPlan, useNativeExclusions = false)
         }
     }
 
     private fun establishTun(
         serverName: String,
+        tunPlan: TunPlan,
         useNativeExclusions: Boolean,
     ): ParcelFileDescriptor {
         val configureIntent = PendingIntent.getActivity(
@@ -488,28 +600,19 @@ class LevikVpnService : VpnService() {
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val dnsProvider = container.settings.dnsProvider.value
-        val primaryDns = if (dnsProvider == DnsProvider.CUSTOM) {
-            container.settings.customDnsIpv4.value.trim().ifBlank { dnsProvider.primaryIpv4 }
-        } else {
-            dnsProvider.primaryIpv4
-        }
-        val secondaryDns = if (dnsProvider == DnsProvider.CUSTOM) "8.8.8.8" else dnsProvider.secondaryIpv4
-        val primaryDnsIpv6 = dnsProvider.primaryIpv6
-        val secondaryDnsIpv6 = dnsProvider.secondaryIpv6
         val splitMode = container.settings.splitTunnelMode.value
         val splitPackages = container.settings.splitTunnelPackages.value
 
         return Builder()
             .setSession(getString(R.string.vpn_session_name, serverName))
             .setConfigureIntent(configureIntent)
-            .setMtu(TUN_MTU)
-            .addAddress(TUN_IPV4_ADDRESS, TUN_IPV4_PREFIX)
-            .addAddress(TUN_IPV6_ADDRESS, TUN_IPV6_PREFIX)
-            .addDnsServer(primaryDns)
-            .addDnsServer(secondaryDns)
-            .addDnsServer(primaryDnsIpv6)
-            .addDnsServer(secondaryDnsIpv6)
+            .setMtu(tunPlan.mtu)
+            .apply {
+                tunPlan.addresses.forEach { address ->
+                    addAddress(address.address, address.prefixLength)
+                }
+                tunPlan.dnsServers.forEach(::addDnsServer)
+            }
             .setBlocking(true)
             .apply {
                 VpnRoutes.apply(this, useNativeExclusions)
@@ -536,6 +639,20 @@ class LevikVpnService : VpnService() {
             ?: throw NetworkSetupException("Android denied the VPN interface")
     }
 
+    private fun xrayTunPlan(
+        primaryDns: String,
+        secondaryDns: String,
+        primaryDnsIpv6: String,
+        secondaryDnsIpv6: String,
+    ) = TunPlan(
+        mtu = TUN_MTU,
+        addresses = listOf(
+            TunAddress(TUN_IPV4_ADDRESS, TUN_IPV4_PREFIX),
+            TunAddress(TUN_IPV6_ADDRESS, TUN_IPV6_PREFIX),
+        ),
+        dnsServers = listOf(primaryDns, secondaryDns, primaryDnsIpv6, secondaryDnsIpv6),
+    )
+
     private fun protectPingSocket(socket: Socket): Boolean {
         if (!coreRunning) return true
         val network = underlyingNetwork.get() ?: return false
@@ -558,12 +675,28 @@ class LevikVpnService : VpnService() {
         }
     }
 
+    private suspend fun enforceNetworkRequirement(
+        server: TunnelServer,
+        network: Network,
+    ) {
+        if (server.networkRequirement == TunnelNetworkRequirement.ANY) return
+        val violation = tunnelNetworkRequirementViolation(
+            requirement = server.networkRequirement,
+            isCellularNetwork = networkMonitor.isCellular(network),
+        )
+        if (violation != null) throw TunnelNetworkRequirementException(violation)
+    }
+
     private fun onNetworkAvailable(network: Network) {
         if (destroyed.get()) return
         serviceScope.launch {
             connectionMutex.withLock {
                 if (destroyed.get()) return@withLock
                 if (!coreRunning || currentNetwork == network) return@withLock
+                val server = currentServer ?: return@withLock
+                if (!networkMonitor.isCompatible(network, server.networkRequirement)) {
+                    return@withLock
+                }
                 val previous = currentNetwork
                 if (previous != null &&
                     networkMonitor.preference(network) <= networkMonitor.preference(previous)
@@ -585,7 +718,8 @@ class LevikVpnService : VpnService() {
             connectionMutex.withLock {
                 if (destroyed.get()) return@withLock
                 if (!coreRunning || currentNetwork != network) return@withLock
-                val replacement = networkMonitor.activeNetwork()?.takeIf { it != network }
+                val requirement = currentServer?.networkRequirement ?: TunnelNetworkRequirement.ANY
+                val replacement = networkMonitor.activeNetwork(requirement)?.takeIf { it != network }
                 if (replacement != null && setUnderlyingNetworks(arrayOf(replacement))) {
                     currentNetwork = replacement
                     underlyingNetwork.set(replacement)
@@ -625,26 +759,87 @@ class LevikVpnService : VpnService() {
             delay(RECONNECT_DEBOUNCE_MS)
             connectionMutex.withLock {
                 if (!coreRunning) return@withLock
-                val config = currentConfig ?: return@withLock
+                val request = currentEngineRequest ?: return@withLock
+                val engine = currentEngine ?: return@withLock
+                val server = currentServer ?: return@withLock
+                val previousPrepared = currentPreparedSession ?: return@withLock
                 VpnStateStore.update(coreOwner) {
                     it.copy(state = VpnConnectionState.RECONNECTING)
                 }
                 showForeground(VpnConnectionState.RECONNECTING, currentServerName)
                 try {
-                    container.xrayRuntime.stop(coreOwner, coreLease)
+                    relayEntitlementWatchdogJob?.cancel()
+                    relayEntitlementWatchdogJob = null
+                    engine.stop(coreOwner, previousPrepared, coreLease)
                     coreRunning = false
+                    coreLease = null
+                    currentPreparedSession = null
                     check(!destroyed.get()) { "VPN service was destroyed during reconnect" }
+                    val network = currentNetwork
+                        ?: throw NetworkSetupException("No usable underlying network")
+                    enforceNetworkRequirement(server, network)
+                    underlyingNetwork.set(network)
                     val dnsProvider = container.settings.dnsProvider.value
                     val primaryDns = if (dnsProvider == DnsProvider.CUSTOM) {
                         container.settings.customDnsIpv4.value.trim().ifBlank { dnsProvider.primaryIpv4 }
                     } else {
                         dnsProvider.primaryIpv4
                     }
-                    coreLease = container.xrayRuntime.start(
+                    val prepared = engine.prepare(
                         owner = coreOwner,
-                        configJson = config,
-                        controller = controller,
-                        dnsServer = "$primaryDns:53",
+                        request = request,
+                        environment = TunnelEngineEnvironment(
+                            network = network,
+                            protector = fileDescriptorProtector(network),
+                            dnsServer = "$primaryDns:53",
+                            terminalFailureHandler = ::onTunnelEngineTerminalFailure,
+                        ),
+                    )
+                    val acceptedPrepared = lifecycleGate.withLock {
+                        if (destroyed.get()) {
+                            false
+                        } else {
+                            currentPreparedSession = prepared
+                            true
+                        }
+                    }
+                    if (!acceptedPrepared) {
+                        runCatching { engine.stop(coreOwner, prepared) }
+                        return@withLock
+                    }
+                    val previousTun = tunInterface
+                        ?: throw NetworkSetupException("VPN interface is unavailable")
+                    val activeTun = if (prepared.tunPlan == previousPrepared.tunPlan) {
+                        previousTun
+                    } else {
+                        val replacement = establishTun(
+                            serverName = server.name,
+                            tunPlan = prepared.tunPlan,
+                        )
+                        val acceptedReplacement = lifecycleGate.withLock {
+                            if (destroyed.get()) {
+                                false
+                            } else {
+                                tunInterface = replacement
+                                true
+                            }
+                        }
+                        if (!acceptedReplacement) {
+                            runCatching { replacement.close() }
+                            return@withLock
+                        }
+                        runCatching { previousTun.close() }
+                        replacement
+                    }
+                    if (!setUnderlyingNetworks(arrayOf(network))) {
+                        throw NetworkSetupException(
+                            "Unable to bind the VPN to its underlying network",
+                        )
+                    }
+                    coreLease = engine.start(
+                        owner = coreOwner,
+                        prepared = prepared,
+                        tun = AndroidTunnelFileDescriptorHandle(activeTun),
                     )
                     coreRunning = true
                     val published = lifecycleGate.withLock {
@@ -652,6 +847,7 @@ class LevikVpnService : VpnService() {
                         VpnStateStore.update(coreOwner) {
                             it.copy(state = VpnConnectionState.CONNECTED, failure = null)
                         }
+                        startRelayEntitlementWatchdog(server, prepared)
                         showForeground(VpnConnectionState.CONNECTED, currentServerName)
                         true
                     }
@@ -662,19 +858,36 @@ class LevikVpnService : VpnService() {
                     AppLogger.i(LOG_TAG, "VPN successfully reconnected")
                 } catch (error: Throwable) {
                     coreRunning = false
-                    networkMonitor.stop()
+                    networkMonitor.stop(releaseCellular = false)
                     statsJob?.cancel()
                     statsJob = null
                     autoHealingJob?.cancel()
                     autoHealingJob = null
+                    relayEntitlementWatchdogJob?.cancel()
+                    relayEntitlementWatchdogJob = null
                     stopCoreAndTun()
                     AppLogger.e(LOG_TAG, "VPN reconnect failed", error)
                     VpnStateStore.update(coreOwner) {
                         it.copy(
                             state = VpnConnectionState.ERROR,
-                            failure = VpnFailure.NETWORK,
-                            failureDetail = error.message?.takeIf { it.isNotBlank() }
-                                ?.take(MAX_FAILURE_DETAIL_LENGTH),
+                            failure = when (error) {
+                                is TunnelNetworkRequirementException ->
+                                    VpnFailure.NETWORK_REQUIREMENT
+                                is TunnelEngineUnavailableException -> VpnFailure.CORE_UNAVAILABLE
+                                is TunnelEngineFailureException -> when (error.code) {
+                                    "relay_native_missing", "relay_process_start_failed" ->
+                                        VpnFailure.CORE_UNAVAILABLE
+                                    "relay_credential_expired" -> VpnFailure.INVALID_PROFILE
+                                    else -> VpnFailure.NETWORK
+                                }
+                                else -> VpnFailure.NETWORK
+                            },
+                            failureDetail = if (error is TunnelEngineFailureException) {
+                                relayFailureDetail(error.code)
+                            } else {
+                                error.message?.takeIf { it.isNotBlank() }
+                                    ?.take(MAX_FAILURE_DETAIL_LENGTH)
+                            },
                         )
                     }
                     val enteredLockdown = enterKillSwitchLockdownLocked(
@@ -689,15 +902,16 @@ class LevikVpnService : VpnService() {
         }
     }
 
-    private fun scheduleProfileExpiry(expiresAt: String) {
+    private fun scheduleProfileExpiry(deadline: MonotonicCredentialDeadline) {
         profileExpiryJob?.cancel()
-        val remainingMs = Duration.between(Instant.now(), Instant.parse(expiresAt))
-            .toMillis()
-            .coerceAtLeast(0)
         profileExpiryJob = serviceScope.launch {
-            delay(remainingMs)
+            while (true) {
+                val remainingMs = deadline.remainingMillis(SystemClock.elapsedRealtime())
+                if (remainingMs <= 0L) break
+                delay(remainingMs)
+            }
             profileExpiryJob = null
-            AppLogger.w(LOG_TAG, "Subscription expired, tearing down tunnel")
+            AppLogger.w(LOG_TAG, "Connection authorization expired, tearing down tunnel")
             VpnStateStore.set(
                 coreOwner,
                 VpnSnapshot(
@@ -715,6 +929,121 @@ class LevikVpnService : VpnService() {
         }
     }
 
+    private fun checkConnectionDeadline(deadline: MonotonicCredentialDeadline?) {
+        if (deadline?.isExpired(SystemClock.elapsedRealtime()) == true) {
+            throw TunnelEngineFailureException("relay_credential_expired")
+        }
+    }
+
+    private fun startRelayEntitlementWatchdog(
+        server: TunnelServer,
+        prepared: PreparedTunnelEngineSession,
+    ) {
+        relayEntitlementWatchdogJob?.cancel()
+        relayEntitlementWatchdogJob = null
+        if (server.engine != TunnelEngineKind.LEVIK_RELAY) {
+            return
+        }
+        relayEntitlementWatchdogJob = serviceScope.launch {
+            val subscriptionId = currentSubscriptionId
+            if (subscriptionId == null) {
+                requestRelayFailClosed(
+                    VpnFailure.INVALID_PROFILE,
+                    getString(R.string.relay_entitlement_revoked),
+                )
+                return@launch
+            }
+            while (true) {
+                delay(RELAY_ENTITLEMENT_WATCHDOG_INTERVAL_MS)
+                val stillCurrent = connectionMutex.withLock {
+                    coreRunning &&
+                        currentEngine?.kind == TunnelEngineKind.LEVIK_RELAY &&
+                        currentPreparedSession === prepared
+                }
+                if (!stillCurrent) return@launch
+                if (refreshRelayEntitlementActive(subscriptionId) == false) {
+                    requestRelayFailClosed(
+                        VpnFailure.INVALID_PROFILE,
+                        getString(R.string.relay_entitlement_revoked),
+                    )
+                    return@launch
+                }
+            }
+        }
+    }
+
+    /** Null means the authoritative account check was temporarily unavailable. */
+    private suspend fun refreshRelayEntitlementActive(subscriptionId: String): Boolean? = try {
+        val now = Instant.now()
+        val subscription = container.repository.refreshAccount().subscriptions
+            .firstOrNull { it.uuid == subscriptionId }
+        subscription?.isActiveAt(now) == true &&
+            subscription.capabilities.whitelistRelay
+    } catch (error: CancellationException) {
+        throw error
+    } catch (_: Throwable) {
+        null
+    }
+
+    private fun onTunnelEngineTerminalFailure(code: String) {
+        if (!code.matches(Regex("^[a-z0-9_]{1,96}$"))) return
+        AppLogger.w(LOG_TAG, "Relay engine terminated with stable code: $code")
+        val failure = if (code == "relay_credential_expired") {
+            VpnFailure.INVALID_PROFILE
+        } else {
+            VpnFailure.NETWORK
+        }
+        requestRelayFailClosed(failure, relayFailureDetail(code))
+    }
+
+    private fun requestRelayFailClosed(
+        failure: VpnFailure,
+        detail: String,
+    ) {
+        serviceScope.launch {
+            connectionMutex.withLock {
+                if (!coreRunning || currentEngine?.kind != TunnelEngineKind.LEVIK_RELAY) {
+                    return@withLock
+                }
+                reconnectJob?.cancel()
+                reconnectJob = null
+                statsJob?.cancel()
+                statsJob = null
+                profileExpiryJob?.cancel()
+                profileExpiryJob = null
+                autoHealingJob?.cancel()
+                autoHealingJob = null
+                relayEntitlementWatchdogJob?.cancel()
+                relayEntitlementWatchdogJob = null
+                networkMonitor.stop(releaseCellular = false)
+                VpnStateStore.set(
+                    coreOwner,
+                    VpnSnapshot(
+                        state = VpnConnectionState.ERROR,
+                        engine = currentServer?.engine,
+                        serverId = currentServer?.id,
+                        serverName = currentServerName,
+                        failure = failure,
+                        failureDetail = detail.take(MAX_FAILURE_DETAIL_LENGTH),
+                    ),
+                )
+                stopCoreAndTun()
+                val enteredLockdown = enterKillSwitchLockdownLocked(detail)
+                if (!enteredLockdown) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                }
+            }
+        }
+    }
+
+    private fun relayFailureDetail(code: String): String = when (code) {
+        "relay_credential_expired" -> getString(R.string.relay_credential_expired)
+        "relay_native_missing", "relay_process_start_failed" ->
+            getString(R.string.relay_native_unavailable)
+        else -> getString(R.string.relay_runtime_stopped)
+    }
+
     /**
      * Engages the app-level Kill Switch: re-establishes the TUN and routes every
      * non-local packet into a blackhole so nothing leaks while the tunnel is down.
@@ -727,21 +1056,67 @@ class LevikVpnService : VpnService() {
             enterKillSwitchLockdownLocked(failureDetail)
         }
 
-    private fun enterKillSwitchLockdownLocked(failureDetail: String?): Boolean {
+    private suspend fun enterKillSwitchLockdownLocked(failureDetail: String?): Boolean {
         if (lockdownActive) return true
         if (!container.settings.killSwitchEnabled.value) return false
         return try {
             stopCoreAndTun()
-            val tun = establishTun(getString(R.string.vpn_kill_switch_session))
-            tunInterface = tun
-            currentConfig = null
-            val config = XrayConfigBuilder(container.json).buildKillSwitchConfig(tun.fd)
-            check(!destroyed.get()) { "VPN service was destroyed during lockdown" }
-            coreLease = container.xrayRuntime.start(
+            val dnsProvider = DnsProvider.CLOUDFLARE
+            val request = TunnelEngineRequest.Xray(
+                configFactory = XrayConfigFactory { tunFileDescriptor ->
+                    XrayConfigBuilder(container.json).buildKillSwitchConfig(tunFileDescriptor)
+                },
+                tunPlan = xrayTunPlan(
+                    primaryDns = dnsProvider.primaryIpv4,
+                    secondaryDns = dnsProvider.secondaryIpv4,
+                    primaryDnsIpv6 = dnsProvider.primaryIpv6,
+                    secondaryDnsIpv6 = dnsProvider.secondaryIpv6,
+                ),
+            )
+            val engine = container.tunnelEngineRegistry.require(TunnelEngineKind.XRAY)
+            val prepared = engine.prepare(
                 owner = coreOwner,
-                configJson = config,
-                controller = controller,
-                dnsServer = "${DnsProvider.CLOUDFLARE.primaryIpv4}:53",
+                request = request,
+                environment = TunnelEngineEnvironment(
+                    network = null,
+                    protector = TunnelFileDescriptorProtector { false },
+                    dnsServer = "${dnsProvider.primaryIpv4}:53",
+                ),
+            )
+            val acceptedPrepared = lifecycleGate.withLock {
+                if (destroyed.get()) {
+                    false
+                } else {
+                    currentEngineRequest = request
+                    currentPreparedSession = prepared
+                    currentEngine = engine
+                    true
+                }
+            }
+            if (!acceptedPrepared) {
+                runCatching { engine.stop(coreOwner, prepared) }
+                return false
+            }
+            val tun = establishTun(
+                getString(R.string.vpn_kill_switch_session),
+                prepared.tunPlan,
+            )
+            val acceptedTun = lifecycleGate.withLock {
+                if (destroyed.get()) {
+                    false
+                } else {
+                    tunInterface = tun
+                    true
+                }
+            }
+            if (!acceptedTun) {
+                runCatching { tun.close() }
+                return false
+            }
+            coreLease = engine.start(
+                owner = coreOwner,
+                prepared = prepared,
+                tun = AndroidTunnelFileDescriptorHandle(tun),
             )
             coreRunning = true
             lockdownActive = true
@@ -809,7 +1184,7 @@ class LevikVpnService : VpnService() {
         AppLogger.i(LOG_TAG, "Current server seems stalled, testing ${candidates.size} fallback servers")
         var targetServer = candidates.first()
         val alive = candidates.mapNotNull { s ->
-            val p = runCatching { ServerPinger.measure(s.outbound) }.getOrNull()
+            val p = runCatching { ServerPinger.measure(s) }.getOrNull()
             if (p != null) s to p else null
         }
         if (alive.isNotEmpty()) {
@@ -834,8 +1209,10 @@ class LevikVpnService : VpnService() {
         statsJob?.cancel()
         profileExpiryJob?.cancel()
         autoHealingJob?.cancel()
+        relayEntitlementWatchdogJob?.cancel()
+        relayEntitlementWatchdogJob = null
         lockdownActive = false
-        networkMonitor.stop()
+        networkMonitor.stop(releaseCellular = false)
         val serverNameBeforePause = currentServerName
         stopCoreAndTun()
 
@@ -1120,6 +1497,7 @@ class LevikVpnService : VpnService() {
         private const val RECONNECT_DEBOUNCE_MS = 750L
         private const val STATS_INTERVAL_MS = 1_000L
         private const val AUTO_HEALING_INTERVAL_MS = 30_000L
+        private const val RELAY_ENTITLEMENT_WATCHDOG_INTERVAL_MS = 120_000L
         private const val WAKELOCK_TIMEOUT_MS = 24 * 60 * 60 * 1000L
         private const val MAX_FAILURE_DETAIL_LENGTH = 300
         private const val TUN_MTU = 1500
@@ -1133,6 +1511,8 @@ class LevikVpnService : VpnService() {
 }
 
 private data class NativeCleanup(
+    val engine: TunnelEngineAdapter?,
+    val prepared: PreparedTunnelEngineSession?,
     val lease: Long?,
     val tunInterface: ParcelFileDescriptor?,
 )

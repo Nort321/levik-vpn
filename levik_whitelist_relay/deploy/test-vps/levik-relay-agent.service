@@ -1,0 +1,56 @@
+[Unit]
+Description=Levik whitelist relay entitlement agent
+Documentation=file:///opt/levik-relay/README.md
+Requires=levik-relay-server.service
+After=levik-relay-server.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+UMask=0077
+StateDirectory=levik-relay-agent
+StateDirectoryMode=0700
+ExecStart=/usr/local/libexec/levik-relay-agent \
+  --listen=127.0.0.1:9088 \
+  --wdtt-admin-socket=/run/levik-relay/admin.sock \
+  --wdtt-main-password-file=/etc/levik-relay/secrets/wdtt-admin \
+  --hmac-key-file=/etc/levik-relay/secrets/control-hmac \
+  --hmac-key-id=levik-relay-control-v1 \
+  --credential-key-file=/etc/levik-relay/secrets/credential-key \
+  --state-file=/var/lib/levik-relay-agent/state.json \
+  --wdtt-ports=56000,56001,9000 \
+  --retention-grace=48h \
+  --request-timeout=10s \
+  --max-clock-skew=2m \
+  --nonce-ttl=5m \
+  --request-rate=20 \
+  --request-burst=40
+Restart=on-failure
+RestartSec=3s
+TimeoutStartSec=20s
+TimeoutStopSec=15s
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectHostname=true
+ProtectClock=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+ReadWritePaths=/var/lib/levik-relay-agent
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

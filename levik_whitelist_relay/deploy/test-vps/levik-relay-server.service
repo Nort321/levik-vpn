@@ -1,0 +1,61 @@
+[Unit]
+Description=Levik whitelist relay data plane
+Documentation=file:///opt/levik-relay/README.md
+Wants=network-online.target
+After=network-online.target nftables.service
+Before=levik-relay-agent.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+UMask=0077
+RuntimeDirectory=levik-relay
+RuntimeDirectoryMode=0700
+StateDirectory=levik-relay-server
+StateDirectoryMode=0700
+ExecStart=/usr/local/libexec/levik-relay-server \
+  --listen=0.0.0.0:56000 \
+  --wg-port=56001 \
+  --config-dir=/var/lib/levik-relay-server \
+  --admin-socket=/run/levik-relay/admin.sock \
+  --password-file=/etc/levik-relay/secrets/wdtt-admin \
+  --dns=1.1.1.1,8.8.8.8 \
+  --max-passwords=249 \
+  --max-workers-per-access=36 \
+  --max-handshakes=128 \
+  --handshake-rate=200 \
+  --max-client-mbps=100 \
+  --wg-backend=kernel \
+  --allow-legacy-wrap=false \
+  --allow-owner-access=false \
+  --manage-host-network=false
+Restart=on-failure
+RestartSec=3s
+TimeoutStartSec=30s
+TimeoutStopSec=20s
+KillSignal=SIGTERM
+LimitNOFILE=131072
+TasksMax=1024
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectHostname=true
+ProtectClock=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths=/run/levik-relay /var/lib/levik-relay-server
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

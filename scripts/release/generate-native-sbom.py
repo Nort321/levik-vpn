@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Generate CycloneDX inventory for the opaque libXray AAR and embedded Go modules."""
+"""Generate CycloneDX inventory for every native binary shipped by Direct Android."""
 
 from __future__ import annotations
 
@@ -22,12 +22,23 @@ CYCLONEDX_SPEC_VERSION = "1.6"
 JSON_FILENAME = "levik-vpn-native.cdx.json"
 XML_FILENAME = "levik-vpn-native.cdx.xml"
 GO_LIBRARY_PATH = "jni/arm64-v8a/libgojni.so"
+RELAY_LIBRARY_NAME = "liblevikrelay.so"
+RELAY_COMPONENT_VERSION = "levik-relay-v1"
+RELAY_ABIS = ("arm64-v8a", "armeabi-v7a", "x86_64")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+ANET_MODULE = "github.com/wlynxg/anet"
+ANET_VERSION = "v0.0.5"
+ANET_PATCH_VERSION = "v0.0.5+levik.1"
+ANET_REPLACEMENT = "./third_party/anet"
+ANET_COMMIT = "839bc3a920f1b87dd3ce1386e425aa5ef2e69d24"
+ANET_SOURCE_URL = f"https://github.com/wlynxg/anet/tree/{ANET_COMMIT}"
+GoModule = tuple[str, str, str | None, str | None]
 
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--aar", required=True, type=pathlib.Path)
+    parser.add_argument("--relay-jni-directory", required=True, type=pathlib.Path)
     parser.add_argument("--source-lock", required=True, type=pathlib.Path)
     parser.add_argument("--output-directory", required=True, type=pathlib.Path)
     parser.add_argument("--go", default="go")
@@ -61,10 +72,55 @@ def load_source_lock(path: pathlib.Path) -> dict[str, Any]:
     return payload
 
 
+def parse_go_build_info(
+    output: str,
+) -> tuple[str, list[GoModule]]:
+    first_line = output.splitlines()[0] if output.splitlines() else ""
+    version_match = re.search(r":\s+(go[0-9]+(?:\.[0-9]+)+)$", first_line)
+    go_version = version_match.group(1) if version_match else ""
+    modules: list[list[str | None]] = []
+    for raw_line in output.splitlines():
+        line = raw_line.lstrip()
+        if line.startswith("build\t-go="):
+            go_version = line.removeprefix("build\t-go=")
+        elif line.startswith("dep\t"):
+            fields = line.split("\t")
+            if len(fields) not in (3, 4) or not fields[1] or not fields[2]:
+                raise SystemExit("malformed embedded Go module metadata")
+            modules.append([fields[1], fields[2], fields[3] if len(fields) == 4 else None, None])
+        elif line.startswith("=>\t"):
+            fields = [field for field in line.split("\t") if field]
+            if not modules or len(fields) < 2 or modules[-1][3] is not None:
+                raise SystemExit("malformed embedded Go replacement metadata")
+            modules[-1][3] = fields[1]
+    if not go_version or not modules:
+        raise SystemExit("embedded Go build metadata is incomplete")
+    normalized = {tuple(module) for module in modules}
+    return go_version, sorted(normalized, key=lambda module: tuple(value or "" for value in module))
+
+
+def inspect_go_binary(
+    library_path: pathlib.Path,
+    go_command: str,
+) -> tuple[str, list[GoModule]]:
+    require_regular_file(library_path, "native Go binary")
+    try:
+        result = subprocess.run(
+            [go_command, "version", "-m", str(library_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise SystemExit("unable to read embedded Go build metadata") from error
+    return parse_go_build_info(result.stdout)
+
+
 def go_build_info(
     aar_path: pathlib.Path,
     go_command: str,
-) -> tuple[str, list[tuple[str, str, str | None]]]:
+) -> tuple[str, list[GoModule]]:
     with tempfile.TemporaryDirectory(prefix="levikvpn-native-sbom-") as temporary:
         library_path = pathlib.Path(temporary) / "libgojni.so"
         try:
@@ -78,33 +134,28 @@ def go_build_info(
         except (KeyError, OSError, zipfile.BadZipFile) as error:
             raise SystemExit(f"unable to inspect libXray AAR: {error}") from error
 
-        try:
-            result = subprocess.run(
-                [go_command, "version", "-m", str(library_path)],
-                check=True,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-            )
-        except (OSError, subprocess.CalledProcessError) as error:
-            raise SystemExit("unable to read embedded Go build metadata") from error
+        return inspect_go_binary(library_path, go_command)
 
-    first_line = result.stdout.splitlines()[0] if result.stdout.splitlines() else ""
-    version_match = re.search(r":\s+(go[0-9]+(?:\.[0-9]+)+)$", first_line)
-    go_version = version_match.group(1) if version_match else ""
-    modules: list[tuple[str, str, str | None]] = []
-    for raw_line in result.stdout.splitlines():
-        line = raw_line.lstrip()
-        if line.startswith("build\t-go="):
-            go_version = line.removeprefix("build\t-go=")
-        elif line.startswith("dep\t"):
-            fields = line.split("\t")
-            if len(fields) not in (3, 4) or not fields[1] or not fields[2]:
-                raise SystemExit("malformed embedded Go module metadata")
-            modules.append((fields[1], fields[2], fields[3] if len(fields) == 4 else None))
-    if not go_version or not modules:
-        raise SystemExit("embedded Go build metadata is incomplete")
-    return go_version, sorted(set(modules))
+
+def relay_build_info(
+    relay_jni_directory: pathlib.Path,
+    go_command: str,
+) -> tuple[list[tuple[str, str, str]], list[GoModule]]:
+    if not relay_jni_directory.is_dir() or relay_jni_directory.is_symlink():
+        raise SystemExit(
+            f"relay JNI directory is missing or unsafe: {relay_jni_directory}",
+        )
+    artifacts: list[tuple[str, str, str]] = []
+    common_modules: list[GoModule] | None = None
+    for abi in RELAY_ABIS:
+        library_path = relay_jni_directory / abi / RELAY_LIBRARY_NAME
+        go_version, modules = inspect_go_binary(library_path, go_command)
+        if common_modules is None:
+            common_modules = modules
+        elif modules != common_modules:
+            raise SystemExit("relay Go module metadata differs between Android ABIs")
+        artifacts.append((abi, sha256_file(library_path), go_version))
+    return artifacts, common_modules or []
 
 
 def component_ref(component_type: str, name: str, version: str) -> str:
@@ -121,13 +172,20 @@ def make_inventory(
     source_lock: dict[str, Any],
     aar_sha256: str,
     embedded_go_version: str,
-    modules: list[tuple[str, str, str | None]],
-) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
+    modules: list[GoModule],
+    relay_artifacts: list[tuple[str, str, str]],
+    relay_modules: list[GoModule],
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, list[str]]]:
     native = source_lock["nativeArtifact"]
     if native.get("sha256") != aar_sha256 or not SHA256_PATTERN.fullmatch(aar_sha256):
         raise SystemExit("libXray AAR SHA-256 does not match the native source lock")
     if native.get("embeddedGoVersion") != embedded_go_version:
         raise SystemExit("embedded Go version does not match the native source lock")
+    expected_go_version = str(native.get("embeddedGoVersion", ""))
+    if len(relay_artifacts) != len(RELAY_ABIS):
+        raise SystemExit("relay native inventory does not cover every required Android ABI")
+    if any(go_version != expected_go_version for _, _, go_version in relay_artifacts):
+        raise SystemExit("relay embedded Go version does not match the native source lock")
 
     source_by_module = {
         "github.com/xtls/xray-core": "Xray-core",
@@ -137,6 +195,12 @@ def make_inventory(
     archive_by_name = {
         archive.get("name"): archive for archive in source_lock["sourceArchives"]
     }
+    relay_source = archive_by_name.get("WDTT-Plus", {})
+    go_source = archive_by_name.get("Go toolchain source", {})
+    if relay_source.get("license") != "GPL-3.0-only":
+        raise SystemExit("native source lock does not identify the relay GPL source")
+    if go_source.get("version") != expected_go_version:
+        raise SystemExit("native source lock does not identify the relay Go toolchain source")
     root_license = archive_by_name.get("libXray", {}).get("license")
     aar_ref = component_ref("aar", native["name"], native["version"])
     aar_component: dict[str, Any] = {
@@ -156,29 +220,104 @@ def make_inventory(
         aar_component["licenses"] = [{"license": {"id": root_license}}]
 
     components = [aar_component]
-    aar_dependencies: list[str] = []
-    for module, version, module_sum in modules:
-        module_ref = component_ref("go", module, version)
-        source = archive_by_name.get(source_by_module.get(module, ""), {})
-        component: dict[str, Any] = {
-            "type": "library",
-            "bom-ref": module_ref,
-            "group": module.rpartition("/")[0],
-            "name": module.rpartition("/")[2],
-            "version": version,
-            "purl": go_purl(module, version),
-            "properties": [{"name": "levik.go.modulePath", "value": module}],
-        }
-        if module_sum:
-            component["properties"].append({"name": "levik.go.moduleSum", "value": module_sum})
-        if source.get("license"):
-            component["licenses"] = [{"license": {"id": source["license"]}}]
-        if source.get("url"):
-            component["externalReferences"] = [
-                {"type": "distribution", "url": source["url"]},
-            ]
-        components.append(component)
-        aar_dependencies.append(module_ref)
+    component_refs = {aar_ref}
+    dependency_graph: dict[str, list[str]] = {}
+
+    def add_go_modules(
+        embedded_modules: list[GoModule],
+    ) -> list[str]:
+        dependency_refs: list[str] = []
+        for module, version, module_sum, replacement in embedded_modules:
+            is_local_anet = module == ANET_MODULE and replacement == ANET_REPLACEMENT
+            component_version = ANET_PATCH_VERSION if is_local_anet else version
+            module_ref = component_ref("go", module, component_version)
+            dependency_refs.append(module_ref)
+            if module_ref in component_refs:
+                continue
+            source = archive_by_name.get(source_by_module.get(module, ""), {})
+            component: dict[str, Any] = {
+                "type": "library",
+                "bom-ref": module_ref,
+                "group": module.rpartition("/")[0],
+                "name": module.rpartition("/")[2],
+                "version": component_version,
+                "purl": go_purl(module, component_version),
+                "properties": [{"name": "levik.go.modulePath", "value": module}],
+            }
+            if module_sum:
+                component["properties"].append(
+                    {"name": "levik.go.moduleSum", "value": module_sum},
+                )
+            if replacement:
+                component["properties"].append(
+                    {"name": "levik.go.replacement", "value": replacement},
+                )
+            if module == ANET_MODULE:
+                component["licenses"] = [{"license": {"id": "BSD-3-Clause"}}]
+                component["externalReferences"] = [
+                    {"type": "distribution", "url": ANET_SOURCE_URL},
+                ]
+            if is_local_anet:
+                component["properties"].extend(
+                    [
+                        {"name": "levik.go.upstreamVersion", "value": ANET_VERSION},
+                        {"name": "levik.source.commit", "value": ANET_COMMIT},
+                        {
+                            "name": "levik.source.localPath",
+                            "value": "levik_whitelist_relay/fork/wdtt-plus-v15/go_client/third_party/anet",
+                        },
+                    ],
+                )
+            if source.get("license"):
+                component["licenses"] = [{"license": {"id": source["license"]}}]
+            if source.get("url"):
+                component["externalReferences"] = [
+                    {"type": "distribution", "url": source["url"]},
+                ]
+            components.append(component)
+            component_refs.add(module_ref)
+        return sorted(set(dependency_refs))
+
+    dependency_graph[aar_ref] = add_go_modules(modules)
+    relay_anet = [module for module in relay_modules if module[0] == ANET_MODULE]
+    if relay_anet != [(ANET_MODULE, ANET_VERSION, None, ANET_REPLACEMENT)]:
+        raise SystemExit("relay anet dependency is not the pinned local fork")
+    relay_dependency_refs = add_go_modules(relay_modules)
+    relay_component_refs: list[str] = []
+    for abi, relay_sha256, relay_go_version in relay_artifacts:
+        if abi not in RELAY_ABIS or not SHA256_PATTERN.fullmatch(relay_sha256):
+            raise SystemExit("relay native inventory contains an invalid artifact")
+        relay_name = f"{RELAY_LIBRARY_NAME}:{abi}"
+        relay_ref = component_ref("native", relay_name, RELAY_COMPONENT_VERSION)
+        relay_component_refs.append(relay_ref)
+        components.append(
+            {
+                "type": "application",
+                "bom-ref": relay_ref,
+                "group": "com.leviknet.relay",
+                "name": relay_name,
+                "version": RELAY_COMPONENT_VERSION,
+                "hashes": [{"alg": "SHA-256", "content": relay_sha256}],
+                "licenses": [{"license": {"id": relay_source["license"]}}],
+                "purl": (
+                    "pkg:generic/liblevikrelay@levik-relay-v1?arch="
+                    + urllib.parse.quote(abi, safe="._-")
+                ),
+                "properties": [
+                    {"name": "levik.native.abi", "value": abi},
+                    {
+                        "name": "levik.native.archivePath",
+                        "value": f"lib/{abi}/{RELAY_LIBRARY_NAME}",
+                    },
+                    {
+                        "name": "levik.native.embeddedGoVersion",
+                        "value": relay_go_version,
+                    },
+                ],
+            },
+        )
+        component_refs.add(relay_ref)
+        dependency_graph[relay_ref] = relay_dependency_refs
 
     for archive in source_lock["sourceArchives"]:
         required = ("name", "version", "url", "sha256", "license")
@@ -202,6 +341,7 @@ def make_inventory(
                 "properties": properties,
             },
         )
+        component_refs.add(archive_ref)
 
     metadata_component = {
         "type": "application",
@@ -210,14 +350,15 @@ def make_inventory(
         "name": "Levik VPN Android native inventory",
         "version": str(native["version"]),
     }
-    return metadata_component, components, aar_dependencies
+    dependency_graph[metadata_component["bom-ref"]] = [aar_ref, *relay_component_refs]
+    return metadata_component, components, dependency_graph
 
 
 def write_json(
     path: pathlib.Path,
     metadata_component: dict[str, Any],
     components: list[dict[str, Any]],
-    aar_dependencies: list[str],
+    dependency_graph: dict[str, list[str]],
 ) -> None:
     document = {
         "bomFormat": "CycloneDX",
@@ -226,8 +367,17 @@ def write_json(
         "metadata": {"component": metadata_component},
         "components": components,
         "dependencies": [
-            {"ref": components[0]["bom-ref"], "dependsOn": aar_dependencies},
-            *({"ref": component["bom-ref"], "dependsOn": []} for component in components[1:]),
+            {
+                "ref": metadata_component["bom-ref"],
+                "dependsOn": dependency_graph.get(metadata_component["bom-ref"], []),
+            },
+            *(
+                {
+                    "ref": component["bom-ref"],
+                    "dependsOn": dependency_graph.get(component["bom-ref"], []),
+                }
+                for component in components
+            ),
         ],
     }
     write_exclusive(path, (json.dumps(document, indent=2, sort_keys=True) + "\n").encode("utf-8"))
@@ -278,7 +428,7 @@ def write_xml(
     path: pathlib.Path,
     metadata_component: dict[str, Any],
     components: list[dict[str, Any]],
-    aar_dependencies: list[str],
+    dependency_graph: dict[str, list[str]],
 ) -> None:
     namespace = f"http://cyclonedx.org/schema/bom/{CYCLONEDX_SPEC_VERSION}"
     ET.register_namespace("", namespace)
@@ -289,19 +439,18 @@ def write_xml(
     for component in components:
         append_xml_component(component_nodes, component, namespace)
     dependencies = ET.SubElement(root, f"{{{namespace}}}dependencies")
-    for component in components:
+    for component in (metadata_component, *components):
         dependency = ET.SubElement(
             dependencies,
             f"{{{namespace}}}dependency",
             {"ref": component["bom-ref"]},
         )
-        if component is components[0]:
-            for dependency_ref in aar_dependencies:
-                ET.SubElement(
-                    dependency,
-                    f"{{{namespace}}}dependency",
-                    {"ref": dependency_ref},
-                )
+        for dependency_ref in dependency_graph.get(component["bom-ref"], []):
+            ET.SubElement(
+                dependency,
+                f"{{{namespace}}}dependency",
+                {"ref": dependency_ref},
+            )
     ET.indent(root, space="  ")
     write_exclusive(path, ET.tostring(root, encoding="utf-8", xml_declaration=True) + b"\n")
 
@@ -321,11 +470,17 @@ def main() -> None:
     source_lock = load_source_lock(arguments.source_lock)
     aar_sha256 = sha256_file(arguments.aar)
     embedded_go_version, modules = go_build_info(arguments.aar, arguments.go)
+    relay_artifacts, relay_modules = relay_build_info(
+        arguments.relay_jni_directory,
+        arguments.go,
+    )
     metadata_component, components, dependencies = make_inventory(
         source_lock,
         aar_sha256,
         embedded_go_version,
         modules,
+        relay_artifacts,
+        relay_modules,
     )
     arguments.output_directory.mkdir(parents=True, exist_ok=True)
     write_json(
@@ -340,7 +495,10 @@ def main() -> None:
         components,
         dependencies,
     )
-    print(f"Generated native CycloneDX inventory for {len(modules)} embedded Go modules.")
+    print(
+        "Generated native CycloneDX inventory for "
+        f"{len(modules)} libXray and {len(relay_modules)} relay Go modules.",
+    )
 
 
 if __name__ == "__main__":

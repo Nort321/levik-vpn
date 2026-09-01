@@ -109,7 +109,13 @@ data class SubscriptionSummary(
     val devices: DeviceSummary,
     val components: SubscriptionComponents? = null,
     val shield: ShieldSummary = ShieldSummary(),
+    val capabilities: SubscriptionCapabilities = SubscriptionCapabilities(),
     val actions: SubscriptionActions,
+)
+
+@Serializable
+data class SubscriptionCapabilities(
+    val whitelistRelay: Boolean = false,
 )
 
 @Serializable
@@ -230,6 +236,17 @@ data class CreateOrderResponse(
 )
 
 @Serializable
+data class OpenOrderPaymentRequest(
+    val orderId: Long,
+)
+
+@Serializable
+data class OpenOrderPaymentResponse(
+    val ok: Boolean,
+    val paymentUrl: String,
+)
+
+@Serializable
 data class FreeProxySummary(
     val available: Boolean,
     val active: Boolean,
@@ -247,6 +264,7 @@ data class FreeProxyResponse(
 @Serializable
 data class TunnelProfileRequest(
     val subscriptionId: String,
+    val engine: String? = null,
 )
 
 @Serializable

@@ -1,0 +1,13 @@
+{
+  "requestId": "0123456789abcdef01234567",
+  "lease": {
+    "leaseRef": "bymQUNzxPB1u8KJZEf7AOrj7t--6SL_2kcSdUXjnonA",
+    "state": "active",
+    "expiresAt": 1790086400,
+    "revision": 7,
+    "created": true,
+    "credential": {
+      "password": "AbcdEFGH2345jkmN"
+    }
+  }
+}
