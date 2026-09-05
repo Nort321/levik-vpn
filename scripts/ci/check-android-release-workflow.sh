@@ -8,12 +8,14 @@ readonly REPOSITORY_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 readonly WORKFLOW="${REPOSITORY_ROOT}/.github/workflows/android-release.yml"
 readonly PUBLISH_WORKFLOW="${REPOSITORY_ROOT}/.github/workflows/android-publish.yml"
 readonly CI_WORKFLOW="${REPOSITORY_ROOT}/.github/workflows/android-ci.yml"
+readonly DIRECT_MANIFEST="${REPOSITORY_ROOT}/levik_vpn_android/app/src/direct/AndroidManifest.xml"
 readonly SOURCE_BUNDLE_SCRIPT="${REPOSITORY_ROOT}/scripts/release/build-corresponding-source.sh"
 readonly NATIVE_SBOM_SCRIPT="${REPOSITORY_ROOT}/scripts/release/generate-native-sbom.py"
 
 if [[ ! -f "${WORKFLOW}" || -L "${WORKFLOW}" ||
       ! -f "${PUBLISH_WORKFLOW}" || -L "${PUBLISH_WORKFLOW}" ||
       ! -f "${CI_WORKFLOW}" || -L "${CI_WORKFLOW}" ||
+      ! -f "${DIRECT_MANIFEST}" || -L "${DIRECT_MANIFEST}" ||
       ! -f "${SOURCE_BUNDLE_SCRIPT}" || -L "${SOURCE_BUNDLE_SCRIPT}" ||
       ! -f "${NATIVE_SBOM_SCRIPT}" || -L "${NATIVE_SBOM_SCRIPT}" ]]; then
   printf 'ERROR: Android CI/release/publish or source bundle policy is missing or unsafe.\n' >&2
@@ -66,6 +68,20 @@ violations=0
 for literal in "${required_literals[@]}"; do
   if ! grep -F -- "${literal}" "${WORKFLOW}" >/dev/null; then
     printf 'ERROR: Android release workflow is missing required gate: %s\n' "${literal}" >&2
+    violations=$((violations + 1))
+  fi
+done
+
+direct_manifest_required_literals=(
+  'android.permission.REQUEST_INSTALL_PACKAGES'
+  'androidx.core.content.FileProvider'
+  'android:authorities="${applicationId}.fileprovider"'
+  'android.support.FILE_PROVIDER_PATHS'
+  'android:resource="@xml/file_paths"'
+)
+for literal in "${direct_manifest_required_literals[@]}"; do
+  if ! grep -F -- "${literal}" "${DIRECT_MANIFEST}" >/dev/null; then
+    printf 'ERROR: Direct manifest is missing required OTA installer declaration: %s\n' "${literal}" >&2
     violations=$((violations + 1))
   fi
 done
