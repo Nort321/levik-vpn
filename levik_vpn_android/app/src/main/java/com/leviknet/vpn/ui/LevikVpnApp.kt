@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -1141,7 +1142,7 @@ private fun MainContent(
                 }
             }
         } else {
-            tabContent(Modifier.padding(padding))
+            tabContent(Modifier.padding(padding).consumeWindowInsets(padding))
         }
     }
 }
@@ -1239,7 +1240,7 @@ private fun AppNavigationBar(
                 containerColor = Color.Transparent,
                 tonalElevation = 0.dp,
                 windowInsets = WindowInsets(0, 0, 0, 0),
-                modifier = Modifier.height(72.dp),
+                modifier = Modifier.heightIn(min = 72.dp),
             ) {
                 NavigationDestination.entries.forEach { destination ->
                     val isSelected = selected == destination.tab

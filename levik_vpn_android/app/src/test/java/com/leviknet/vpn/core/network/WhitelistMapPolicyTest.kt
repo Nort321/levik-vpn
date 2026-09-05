@@ -7,6 +7,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WhitelistMapPolicyTest {
+    @Test fun onlyPhysicalCellularInternetCanContribute() {
+        // Exercise every combination, including VPN capabilities that inherit cellular.
+        for (mask in 0 until 64) {
+            val flags = (0..5).map { mask and (1 shl it) != 0 }
+            assertEquals(
+                "capability mask $mask",
+                mask == 7,
+                whitelistMapNetworkIsEligible(flags[0], flags[1], flags[2], flags[3], flags[4], flags[5]),
+            )
+        }
+    }
+
     @Test fun unknownIsNeverReportedAsOpenInternet() {
         assertNull(whitelistMapSignal(WhitelistMode.UNKNOWN))
         assertEquals("active", whitelistMapSignal(WhitelistMode.ACTIVE))

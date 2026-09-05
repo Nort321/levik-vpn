@@ -1659,17 +1659,22 @@ class AppViewModel(
 
     fun loadInstalledApps(packageManager: PackageManager) {
         viewModelScope.launch(Dispatchers.IO) {
-            val intent = android.content.Intent(android.content.Intent.ACTION_MAIN, null).apply {
-                addCategory(android.content.Intent.CATEGORY_LAUNCHER)
+            // Include installed system packages and services without launcher activities.
+            val applications = try {
+                packageManager.getInstalledApplications(0)
+            } catch (_: RuntimeException) {
+                AppLogger.w("AppViewModel", "Unable to load installed applications")
+                return@launch
             }
-            val resolveInfos = packageManager.queryIntentActivities(intent, 0)
-            val apps = resolveInfos.mapNotNull { info ->
-                val pkg = info.activityInfo.packageName
-                if (pkg == "com.leviknet.vpn") return@mapNotNull null
-                val name = info.loadLabel(packageManager).toString()
-                val icon = info.loadIcon(packageManager)
+            val apps = applications.mapNotNull { info ->
+                val pkg = info.packageName
+                if (pkg == BuildConfig.APPLICATION_ID) return@mapNotNull null
+                // A package can disappear while its label/icon is being loaded.
+                val name = runCatching { info.loadLabel(packageManager).toString() }
+                    .getOrDefault(pkg)
+                val icon = runCatching { info.loadIcon(packageManager) }.getOrNull()
                 InstalledAppItem(packageName = pkg, label = name, icon = icon)
-            }.distinctBy { it.packageName }.sortedBy { it.label.lowercase() }
+            }.distinctBy { it.packageName }.sortedBy { it.label.lowercase(java.util.Locale.ROOT) }
             mutableState.update { it.copy(installedApps = apps) }
         }
     }

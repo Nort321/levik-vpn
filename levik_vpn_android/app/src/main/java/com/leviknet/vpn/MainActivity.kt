@@ -26,6 +26,7 @@ import com.leviknet.vpn.ui.AppEffect
 import com.leviknet.vpn.ui.AppViewModel
 import com.leviknet.vpn.ui.LevikVpnApp
 import com.leviknet.vpn.ui.theme.LevikTheme
+import com.leviknet.vpn.ui.theme.LevikAppScale
 import kotlinx.coroutines.launch
 
 import androidx.compose.runtime.getValue
@@ -60,10 +61,12 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             val state by viewModel.state.collectAsStateWithLifecycle()
-            LevikTheme(
-                themeMode = state.themeMode,
-            ) {
-                LevikVpnApp(viewModel)
+            LevikAppScale {
+                LevikTheme(
+                    themeMode = state.themeMode,
+                ) {
+                    LevikVpnApp(viewModel)
+                }
             }
         }
         lifecycleScope.launch {

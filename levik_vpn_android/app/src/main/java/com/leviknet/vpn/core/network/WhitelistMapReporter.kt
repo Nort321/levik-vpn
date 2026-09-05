@@ -38,7 +38,7 @@ class WhitelistMapReporter(context: Context, private val settings: AppSettings) 
     private data class RegionResponse(val token: String, val expiresAt: Long)
 
     @Serializable
-    private data class Report(val token: String, val signal: String)
+    private data class Report(val token: String, val signal: String, val transport: String)
 
     suspend fun clear() = mutex.withLock { cached = null }
 
@@ -47,7 +47,7 @@ class WhitelistMapReporter(context: Context, private val settings: AppSettings) 
         withContext(Dispatchers.IO) {
             try {
                 val network = detector.directNetwork() ?: run { cached = null; return@withContext }
-                if (!isPhysicalNetwork(network)) { cached = null; return@withContext }
+                if (!isCellularNetwork(network)) { cached = null; return@withContext }
                 val now = SystemClock.elapsedRealtime()
                 cached = cached?.takeIf {
                     whitelistRegionTokenIsUsable(it.network == network, it.receivedElapsedMs, it.expiresElapsedMs, now)
@@ -67,13 +67,13 @@ class WhitelistMapReporter(context: Context, private val settings: AppSettings) 
                 val signal = whitelistMapSignal(mode) ?: return@withContext
                 currentCoroutineContext().ensureActive()
                 if (!settings.whitelistMapEnabled.value || detector.directNetwork() != network ||
-                    !isPhysicalNetwork(network) || !whitelistRegionTokenIsUsable(
+                    !isCellularNetwork(network) || !whitelistRegionTokenIsUsable(
                         region.network == network, region.receivedElapsedMs, region.expiresElapsedMs, SystemClock.elapsedRealtime(),
                     )
                 ) return@withContext
                 // Default route may be VPN. Geography comes from the signed physical-network token.
                 // No replay later: the report is discarded on failure, not queued as a fresh sample.
-                request("report", null, json.encodeToString(Report(region.token, signal)))
+                request("report", null, json.encodeToString(Report(region.token, signal, "cellular")))
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 // Deliberately no request/response, token, IP or exception logging.
@@ -81,11 +81,16 @@ class WhitelistMapReporter(context: Context, private val settings: AppSettings) 
         }
     }
 
-    private fun isPhysicalNetwork(network: Network): Boolean {
+    private fun isCellularNetwork(network: Network): Boolean {
         val caps = connectivity.getNetworkCapabilities(network) ?: return false
-        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) &&
-            !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+        return whitelistMapNetworkIsEligible(
+            internet = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET),
+            notVpn = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN),
+            cellular = caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR),
+            wifi = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI),
+            ethernet = caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET),
+            vpn = caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN),
+        )
     }
 
     private suspend fun request(path: String, network: Network?, body: String?): String? {

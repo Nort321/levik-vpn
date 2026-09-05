@@ -6,7 +6,7 @@ setting is preserved on upgrade and restart. The adjacent link opens https://lev
 without changing the reporting setting. WorkManager performs a fresh check approximately
 every 15 minutes; Android may defer background work to conserve battery.
 
-The reporter reuses WhitelistDetector on a physical non-VPN Network. A dedicated
+The reporter reuses WhitelistDetector on a physical cellular non-VPN Network. A dedicated
 anonymous HTTPS endpoint looks up its original IP locally and returns a signed
 region token that expires at the next UTC hour. The token is held in memory only
 and is discarded on network change, process restart, expiry or opt-out. Fresh
@@ -21,3 +21,10 @@ logs and storage exclude it; only thresholded regional states are persisted.
 See the map methodology for privacy thresholds, retention and IP accuracy limits.
 The protocol provides anonymous community signals, not proof of genuine clients
 or absolute network anonymity from an ISP or compromised endpoint.
+
+From 2.6.5, only the selected physical cellular internet network can contribute.
+Wi-Fi, Ethernet and VPN transports are excluded before and after probing; Android
+VALIDATED is not required because allowlists can block OS validation endpoints.
+Reports include `transport: "cellular"`; the server rejects older reports without
+this declaration. This is a client-side network check, not server attestation.
+Historical closed aggregates cannot be separated by transport and remain historical.
