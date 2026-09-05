@@ -9,7 +9,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.decodeFromJsonElement
 
-internal const val RELAY_CONTROL_VERSION = 1
+internal const val RELAY_CONTROL_VERSION = 2
 internal const val RELAY_MAX_CONTROL_MESSAGE_BYTES = 64 * 1024
 
 internal class RelayProtocolException(
@@ -23,10 +23,11 @@ internal data class RelayNativeInit(
     val deviceId: String,
     val workers: Int,
     val turnFrontSni: String,
-    val tunFdSocket: String,
     val protectFdSocket: String,
     val serverPublicKey: String,
     val vkAuthMode: String,
+    val proxyUsername: String,
+    val proxyPassword: String,
 )
 
 internal data class RelayControlEvent(
@@ -54,7 +55,7 @@ internal data class RelayTurnCredentials(
 internal sealed interface RelayControlAction {
     data object Continue : RelayControlAction
     data object ConnectProtectChannel : RelayControlAction
-    data class Prepared(val tunPlan: TunPlan) : RelayControlAction
+    data class PreparedProxy(val address: String, val port: Int) : RelayControlAction
     data object Running : RelayControlAction
     data class NativeFailure(val code: String) : RelayControlAction
     data class Diagnostic(val code: String) : RelayControlAction
@@ -66,17 +67,15 @@ internal enum class RelayControlState {
     WAIT_CONTROL_READY,
     WAIT_PROTECT_LISTENING,
     WAIT_PROTECT_READY,
-    WAIT_TUN_PLAN,
+    WAIT_PROXY_PLAN,
     PREPARED,
-    TUN_SENT,
-    FD_ATTACHED,
     RUNNING,
     STOPPING,
     STOPPED,
     FAILED,
 }
 
-/** Strict v1 native-control codec. It never forwards native free-form messages to the UI/logs. */
+/** Strict v2 native-control codec. It never forwards native free-form messages to the UI/logs. */
 internal class RelayControlCodec {
     private val json = Json {
         ignoreUnknownKeys = false
@@ -97,10 +96,11 @@ internal class RelayControlCodec {
                 deviceId = init.deviceId,
                 workers = init.workers,
                 turnSni = init.turnFrontSni,
-                tunFdSocket = init.tunFdSocket,
                 protectFdSocket = init.protectFdSocket,
                 serverPublicKey = init.serverPublicKey,
                 vkAuthMode = init.vkAuthMode,
+                proxyUsername = init.proxyUsername,
+                proxyPassword = init.proxyPassword,
             ),
         )
     }
@@ -132,7 +132,7 @@ internal class RelayControlCodec {
         if (wire.type !in EVENT_TYPES) protocolFailure("relay_protocol_event_type")
         when (wire.type) {
             "ready" -> validateReady(wire)
-            "tun_plan" -> validateTunPlanEnvelope(wire)
+            "proxy_plan" -> validateProxyPlanEnvelope(wire)
             "stats" -> validateStats(wire)
             "error" -> validateError(wire)
             "vk_auth_required" -> validateVkAuthRequired(wire)
@@ -146,31 +146,15 @@ internal class RelayControlCodec {
         )
     }
 
-    fun decodeTunPlan(event: RelayControlEvent): TunPlan {
-        if (event.type != "tun_plan" || event.phase != "PREPARED") {
-            protocolFailure("relay_protocol_tun_plan_state")
+    fun decodeProxyPlan(event: RelayControlEvent): Pair<String, Int> {
+        if (event.type != "proxy_plan" || event.phase != "PREPARED") {
+            protocolFailure("relay_protocol_proxy_plan_state")
         }
-        val wire = decodeElement<RelayTunPlanWire>(event.data)
-        if (wire.addresses.isEmpty() || wire.addresses.size > MAX_TUN_ADDRESSES) {
-            protocolFailure("relay_protocol_tun_addresses")
+        val wire = decodeElement<RelayProxyPlanWire>(event.data)
+        if (wire.address != "127.0.0.1" || wire.port !in 1..65_535) {
+            protocolFailure("relay_protocol_proxy_plan")
         }
-        if (wire.dns.isEmpty() || wire.dns.size > MAX_TUN_DNS) {
-            protocolFailure("relay_protocol_tun_dns")
-        }
-        if (wire.routes.isEmpty() || wire.routes.size > MAX_TUN_ROUTES) {
-            protocolFailure("relay_protocol_tun_routes")
-        }
-        val addresses = wire.addresses.map(::parseTunAddress)
-        wire.routes.forEach(::parseTunAddress)
-        return try {
-            TunPlan(
-                mtu = wire.mtu,
-                addresses = addresses,
-                dnsServers = wire.dns,
-            )
-        } catch (_: IllegalArgumentException) {
-            protocolFailure("relay_protocol_tun_plan")
-        }
+        return wire.address to wire.port
     }
 
     fun decodeProtectRequest(payload: String): RelayProtectRequest {
@@ -228,15 +212,18 @@ internal class RelayControlCodec {
             protocolFailure("relay_init_workers")
         }
         if (!init.turnFrontSni.matches(DNS_NAME) ||
-            !init.tunFdSocket.matches(SOCKET_NAME) ||
             !init.protectFdSocket.matches(SOCKET_NAME) ||
-            init.tunFdSocket == init.protectFdSocket ||
             !init.serverPublicKey.matches(SERVER_PUBLIC_KEY)
         ) {
             protocolFailure("relay_init_contract")
         }
         if (init.vkAuthMode !in setOf("anonymous", "account")) {
             protocolFailure("relay_init_vk_auth")
+        }
+        if (!init.proxyUsername.matches(PROXY_USERNAME) ||
+            !init.proxyPassword.matches(PROXY_PASSWORD)
+        ) {
+            protocolFailure("relay_init_proxy_auth")
         }
     }
 
@@ -264,11 +251,11 @@ internal class RelayControlCodec {
         }
     }
 
-    private fun validateTunPlanEnvelope(wire: RelayControlEventWire) {
+    private fun validateProxyPlanEnvelope(wire: RelayControlEventWire) {
         if (wire.phase != "PREPARED" || wire.code != null || wire.message != null || wire.data == null) {
-            protocolFailure("relay_protocol_tun_plan")
+            protocolFailure("relay_protocol_proxy_plan")
         }
-        decodeElement<RelayTunPlanWire>(wire.data)
+        decodeElement<RelayProxyPlanWire>(wire.data)
     }
 
     private fun validateStats(wire: RelayControlEventWire) {
@@ -340,24 +327,6 @@ internal class RelayControlCodec {
         }
     }
 
-    private fun parseTunAddress(value: String): TunAddress {
-        if (value.length > MAX_TUN_VALUE_LENGTH || value.hasControlCharacters()) {
-            protocolFailure("relay_protocol_tun_address")
-        }
-        val separator = value.lastIndexOf('/')
-        if (separator <= 0 || separator == value.lastIndex) {
-            protocolFailure("relay_protocol_tun_address")
-        }
-        val address = value.substring(0, separator)
-        val prefix = value.substring(separator + 1).toIntOrNull()
-            ?: protocolFailure("relay_protocol_tun_address")
-        return try {
-            TunAddress(address, prefix)
-        } catch (_: IllegalArgumentException) {
-            protocolFailure("relay_protocol_tun_address")
-        }
-    }
-
     private fun String.hasControlCharacters(): Boolean = any { it.code < 0x20 || it.code == 0x7f }
 
     private companion object {
@@ -365,13 +334,9 @@ internal class RelayControlCodec {
         const val MAX_WORKERS = 108
         const val MAX_METADATA_LENGTH = 512
         const val MAX_NATIVE_MESSAGE_LENGTH = 128
-        const val MAX_TUN_ADDRESSES = 8
-        const val MAX_TUN_DNS = 8
-        const val MAX_TUN_ROUTES = 32
-        const val MAX_TUN_VALUE_LENGTH = 128
         val EVENT_TYPES = setOf(
             "ready",
-            "tun_plan",
+            "proxy_plan",
             "stats",
             "error",
             "vk_auth_required",
@@ -396,7 +361,6 @@ internal class RelayControlCodec {
             "PROTECT_CHANNEL_LISTENING",
             "PROTECT_CHANNEL_READY",
             "TRANSPORT_LISTENING",
-            "FD_ATTACHED",
             "RUNNING",
         )
         val TURN_HASH = Regex("^[A-Za-z0-9_-]{16,256}$")
@@ -405,6 +369,8 @@ internal class RelayControlCodec {
         val DNS_NAME = Regex("^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$|^(?=.{1,63}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
         val SOCKET_NAME = Regex("^@levik_wlr_[A-Za-z0-9_-]{12,95}$")
         val SERVER_PUBLIC_KEY = Regex("^[A-Za-z0-9_-]{43}$")
+        val PROXY_USERNAME = Regex("^[A-Za-z0-9_-]{16,64}$")
+        val PROXY_PASSWORD = Regex("^[A-Za-z0-9_-]{32,128}$")
         val NATIVE_ERROR_CODE = Regex("^[a-z0-9_]{1,64}$")
         val REQUEST_ID = Regex("^[0-9]{1,10}-[0-9]{1,20}$")
     }
@@ -423,12 +389,6 @@ internal class RelayControlStateMachine(
     }
 
     @Synchronized
-    fun markTunSent() {
-        requireState(RelayControlState.PREPARED)
-        state = RelayControlState.TUN_SENT
-    }
-
-    @Synchronized
     fun accept(event: RelayControlEvent): RelayControlAction {
         if (event.type == "error") {
             if (state in TERMINAL_STATES) protocolFailure("relay_protocol_error_state")
@@ -440,7 +400,7 @@ internal class RelayControlStateMachine(
             return RelayControlAction.Continue
         }
         if (event.type == "vk_auth_required") {
-            if (state !in setOf(RelayControlState.WAIT_TUN_PLAN, RelayControlState.RUNNING)) {
+            if (state !in setOf(RelayControlState.WAIT_PROXY_PLAN, RelayControlState.RUNNING)) {
                 protocolFailure("relay_protocol_vk_auth_state")
             }
             return RelayControlAction.RequestVkAuth(codec.decodeVkAuthRequest(event))
@@ -462,25 +422,20 @@ internal class RelayControlStateMachine(
             }
             RelayControlState.WAIT_PROTECT_READY -> {
                 requireReady(event, "PROTECT_CHANNEL_READY")
-                state = RelayControlState.WAIT_TUN_PLAN
+                state = RelayControlState.WAIT_PROXY_PLAN
                 RelayControlAction.Continue
             }
-            RelayControlState.WAIT_TUN_PLAN -> when {
+            RelayControlState.WAIT_PROXY_PLAN -> when {
                 event.type == "ready" && event.phase == "TRANSPORT_LISTENING" ->
                     RelayControlAction.Continue
-                event.type == "tun_plan" && event.phase == "PREPARED" -> {
-                    val plan = codec.decodeTunPlan(event)
+                event.type == "proxy_plan" && event.phase == "PREPARED" -> {
+                    val (address, port) = codec.decodeProxyPlan(event)
                     state = RelayControlState.PREPARED
-                    RelayControlAction.Prepared(plan)
+                    RelayControlAction.PreparedProxy(address, port)
                 }
                 else -> protocolFailure("relay_protocol_prepare_state")
             }
-            RelayControlState.TUN_SENT -> {
-                requireReady(event, "FD_ATTACHED")
-                state = RelayControlState.FD_ATTACHED
-                RelayControlAction.Continue
-            }
-            RelayControlState.FD_ATTACHED -> {
+            RelayControlState.PREPARED -> {
                 requireReady(event, "RUNNING")
                 state = RelayControlState.RUNNING
                 RelayControlAction.Running
@@ -524,10 +479,8 @@ internal class RelayControlStateMachine(
             RelayControlState.FAILED,
         )
         val STATS_STATES = setOf(
-            RelayControlState.WAIT_TUN_PLAN,
+            RelayControlState.WAIT_PROXY_PLAN,
             RelayControlState.PREPARED,
-            RelayControlState.TUN_SENT,
-            RelayControlState.FD_ATTACHED,
             RelayControlState.RUNNING,
         )
     }
@@ -547,10 +500,11 @@ private data class RelayControlInitWire(
     val turnStreamFirst: Boolean = true,
     val turnSni: String,
     val fingerprint: String = "android",
-    val tunFdSocket: String,
     val protectFdSocket: String,
     val serverPublicKey: String,
     val vkAuthMode: String,
+    val proxyUsername: String,
+    val proxyPassword: String,
 )
 
 @Serializable
@@ -581,11 +535,9 @@ private data class RelayControlEventWire(
 )
 
 @Serializable
-private data class RelayTunPlanWire(
-    val addresses: List<String>,
-    val dns: List<String>,
-    val mtu: Int,
-    val routes: List<String>,
+private data class RelayProxyPlanWire(
+    val address: String,
+    val port: Int,
 )
 
 @Serializable

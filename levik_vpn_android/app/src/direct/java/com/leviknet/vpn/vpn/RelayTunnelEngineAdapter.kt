@@ -2,7 +2,6 @@ package com.leviknet.vpn.vpn
 
 import android.net.LocalSocket
 import android.net.LocalSocketAddress
-import android.os.ParcelFileDescriptor
 import android.os.Process
 import android.os.SystemClock
 import android.system.ErrnoException
@@ -26,7 +25,6 @@ import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -46,23 +44,24 @@ internal fun interface RelayVkTurnProvider {
 }
 
 internal interface RelayNativeSession {
-    suspend fun prepare(): TunPlan
+    suspend fun prepare(): LocalProxyEndpoint
 
-    suspend fun start(tun: TunnelFileDescriptorHandle)
+    suspend fun start()
 
     fun stop()
 }
 
 internal class RelayTunnelEngineAdapter(
     private val sessionFactory: RelayNativeSessionFactory,
+    private val xrayRuntime: XrayRuntime,
 ) : TunnelEngineAdapter {
     override val kind: TunnelEngineKind = TunnelEngineKind.LEVIK_RELAY
     private val lock = Any()
     private val owners = mutableSetOf<Long>()
     private val sessions = mutableMapOf<Long, ActiveRelaySession>()
-    private val nextLease = AtomicLong(0)
 
     override fun claimOwner(owner: Long) {
+        xrayRuntime.claimOwner(owner)
         synchronized(lock) {
             owners += owner
         }
@@ -73,7 +72,11 @@ internal class RelayTunnelEngineAdapter(
             owners -= owner
             sessions.remove(owner)
         }
-        active?.nativeSession?.stop()
+        active?.let { session ->
+            xrayRuntime.stop(owner, session.lease)
+            session.nativeSession.stop()
+        }
+        xrayRuntime.retireOwner(owner)
     }
 
     override suspend fun prepare(
@@ -93,8 +96,14 @@ internal class RelayTunnelEngineAdapter(
             }
         }
         return try {
-            val plan = nativeSession.prepare()
-            val prepared = PreparedRelayEngineSession(owner, plan, nativeSession)
+            val proxy = nativeSession.prepare()
+            val prepared = PreparedRelayEngineSession(
+                owner = owner,
+                request = relay,
+                environment = environment,
+                proxy = proxy,
+                nativeSession = nativeSession,
+            )
             val accepted = synchronized(lock) {
                 if (sessions[owner] === active && owner in owners) {
                     active.prepared = prepared
@@ -134,9 +143,20 @@ internal class RelayTunnelEngineAdapter(
                     it.nativeSession === relay.nativeSession
             }
         } ?: engineFailure("relay_prepared_session_inactive")
+        var startedXrayLease: Long? = null
         return try {
-            active.nativeSession.start(tun)
-            val lease = nextLease.incrementAndGet()
+            active.nativeSession.start()
+            val controller = object : libXray.DialerController {
+                override fun protectFd(fd: Long): Boolean =
+                    relay.environment.protector.protectAndBind(fd)
+            }
+            val lease = xrayRuntime.start(
+                owner = owner,
+                configJson = relay.request.configFactory.build(tun.borrowedFd, relay.proxy),
+                controller = controller,
+                dnsServer = relay.environment.dnsServer,
+            )
+            startedXrayLease = lease
             synchronized(lock) {
                 if (sessions[owner] !== active || owner !in owners) {
                     engineFailure("relay_owner_retired")
@@ -145,10 +165,16 @@ internal class RelayTunnelEngineAdapter(
             }
             lease
         } catch (error: CancellationException) {
+            startedXrayLease?.let { xrayRuntime.stop(owner, it) }
+            active.nativeSession.stop()
             throw error
         } catch (error: TunnelEngineFailureException) {
+            startedXrayLease?.let { xrayRuntime.stop(owner, it) }
+            active.nativeSession.stop()
             throw error
         } catch (_: Throwable) {
+            startedXrayLease?.let { xrayRuntime.stop(owner, it) }
+            active.nativeSession.stop()
             engineFailure("relay_start_failed")
         }
     }
@@ -167,7 +193,10 @@ internal class RelayTunnelEngineAdapter(
             }
             sessions.remove(owner)
         }
-        active?.nativeSession?.stop()
+        active?.let { session ->
+            xrayRuntime.stop(owner, session.lease ?: lease)
+            session.nativeSession.stop()
+        }
     }
 
     private fun removeAndStop(owner: Long, expected: ActiveRelaySession) {
@@ -186,10 +215,13 @@ internal class RelayTunnelEngineAdapter(
 
 private data class PreparedRelayEngineSession(
     val owner: Long,
-    override val tunPlan: TunPlan,
+    val request: TunnelEngineRequest.Relay,
+    val environment: TunnelEngineEnvironment,
+    val proxy: LocalProxyEndpoint,
     val nativeSession: RelayNativeSession,
 ) : PreparedTunnelEngineSession {
     override val engine: TunnelEngineKind = TunnelEngineKind.LEVIK_RELAY
+    override val tunPlan: TunPlan = request.tunPlan
 }
 
 internal class AndroidRelayNativeSessionFactory(
@@ -222,7 +254,6 @@ private class AndroidRelayNativeSession(
     private val secureRandom = SecureRandom()
     private val observedNativeDiagnostics = ConcurrentHashMap.newKeySet<String>()
     private val controlSocketName = randomSocketName("control")
-    private val tunSocketName = randomSocketName("tun")
     private val protectSocketName = randomSocketName("protect")
     private val credentialDeadline = runCatching {
         MonotonicCredentialDeadline.create(
@@ -231,6 +262,8 @@ private class AndroidRelayNativeSession(
             elapsedRealtimeMs = SystemClock.elapsedRealtime(),
         )
     }.getOrElse { engineFailure("relay_credential_expired") }
+    private val proxyUsername = randomCredential(PROXY_USERNAME_BYTES)
+    private val proxyPassword = randomCredential(PROXY_PASSWORD_BYTES)
     private var process: java.lang.Process? = null
     private var executor: ExecutorService? = null
     private val workers = mutableListOf<Future<*>>()
@@ -239,7 +272,7 @@ private class AndroidRelayNativeSession(
     private var protectSocket: LocalSocket? = null
     private var protectReader: LocalSocketFrameReader? = null
 
-    override suspend fun prepare(): TunPlan = withContext(Dispatchers.IO) {
+    override suspend fun prepare(): LocalProxyEndpoint = withContext(Dispatchers.IO) {
         try {
             startProcess()
             val prepareDeadline = minOf(
@@ -263,21 +296,27 @@ private class AndroidRelayNativeSession(
                 deviceId = config.bootstrap.deviceId,
                 workers = RELAY_WORKERS,
                 turnFrontSni = config.node.turnFrontSni,
-                tunFdSocket = tunSocketName,
                 protectFdSocket = protectSocketName,
                 serverPublicKey = config.node.serverPublicKey,
                 vkAuthMode = "account",
+                proxyUsername = proxyUsername,
+                proxyPassword = proxyPassword,
             )
             writeControl(codec.encodeInit(init))
             stateMachine.markInitSent()
 
-            var preparedPlan: TunPlan? = null
-            while (preparedPlan == null) {
+            var preparedProxy: LocalProxyEndpoint? = null
+            while (preparedProxy == null) {
                 currentCoroutineContext().ensureActive()
                 when (val action = nextControlAction(prepareDeadline)) {
                     RelayControlAction.ConnectProtectChannel -> startProtectChannel(prepareDeadline)
                     is RelayControlAction.RequestVkAuth -> provideVkCredentials(action.request)
-                    is RelayControlAction.Prepared -> preparedPlan = action.tunPlan
+                    is RelayControlAction.PreparedProxy -> preparedProxy = LocalProxyEndpoint(
+                        address = action.address,
+                        port = action.port,
+                        username = proxyUsername,
+                        password = proxyPassword,
+                    )
                     RelayControlAction.Continue -> Unit
                     is RelayControlAction.Diagnostic -> logNativeDiagnostic(action.code)
                     is RelayControlAction.NativeFailure ->
@@ -286,7 +325,7 @@ private class AndroidRelayNativeSession(
                         engineFailure("relay_protocol_running_during_prepare")
                 }
             }
-            preparedPlan
+            preparedProxy
         } catch (error: CancellationException) {
             stop()
             throw error
@@ -302,39 +341,14 @@ private class AndroidRelayNativeSession(
         }
     }
 
-    override suspend fun start(tun: TunnelFileDescriptorHandle): Unit = withContext(Dispatchers.IO) {
+    override suspend fun start(): Unit = withContext(Dispatchers.IO) {
         try {
             checkBackgroundFailure()
-            val startDeadline = minOf(
-                deadlineAfter(START_TIMEOUT_MS),
-                credentialDeadline.deadlineElapsedMs,
-            )
             if (credentialDeadline.isExpired(SystemClock.elapsedRealtime())) {
                 engineFailure("relay_credential_expired")
             }
-            sendTunFileDescriptor(tun, startDeadline)
-            stateMachine.markTunSent()
-            while (true) {
-                currentCoroutineContext().ensureActive()
-                when (val action = nextControlAction(startDeadline)) {
-                    RelayControlAction.Continue -> Unit
-                    is RelayControlAction.Diagnostic -> logNativeDiagnostic(action.code)
-                    RelayControlAction.Running -> {
-                        if (credentialDeadline.isExpired(SystemClock.elapsedRealtime())) {
-                            engineFailure("relay_credential_expired")
-                        }
-                        startControlMonitor()
-                        startCredentialExpiryMonitor()
-                        return@withContext
-                    }
-                    is RelayControlAction.NativeFailure ->
-                        engineFailure(nativeErrorCode(action.code))
-                    RelayControlAction.ConnectProtectChannel,
-                    is RelayControlAction.Prepared,
-                    is RelayControlAction.RequestVkAuth,
-                    -> engineFailure("relay_protocol_start_state")
-                }
-            }
+            startControlMonitor()
+            startCredentialExpiryMonitor()
         } catch (error: CancellationException) {
             throw error
         } catch (error: RelayProtocolException) {
@@ -444,37 +458,6 @@ private class AndroidRelayNativeSession(
         }
     }
 
-    private fun sendTunFileDescriptor(
-        tun: TunnelFileDescriptorHandle,
-        deadlineElapsedMs: Long,
-    ) {
-        val socket = connectAbstract(
-            socketName = tunSocketName,
-            deadlineElapsedMs = minOf(deadlineElapsedMs, deadlineAfter(CHANNEL_CONNECT_TIMEOUT_MS)),
-            timeoutCode = "relay_tun_connect_timeout",
-        )
-        var adopted: ParcelFileDescriptor? = null
-        val owned = try {
-            tun.duplicateForEngine()
-        } catch (_: Throwable) {
-            socket.closeQuietly()
-            engineFailure("relay_tun_duplicate_failed")
-        }
-        try {
-            adopted = ParcelFileDescriptor.adoptFd(owned.detach())
-            socket.setFileDescriptorsForSend(arrayOf(adopted.fileDescriptor))
-            socket.outputStream.write(TUN_FD_PAYLOAD)
-            socket.outputStream.flush()
-        } catch (_: Throwable) {
-            engineFailure("relay_tun_send_failed")
-        } finally {
-            runCatching { socket.setFileDescriptorsForSend(null) }
-            runCatching { adopted?.close() }
-            runCatching { owned.close() }
-            socket.closeQuietly()
-        }
-    }
-
     private fun nextControlAction(deadlineElapsedMs: Long): RelayControlAction {
         checkBackgroundFailure()
         val reader = controlReader ?: engineFailure("relay_control_unavailable")
@@ -484,13 +467,7 @@ private class AndroidRelayNativeSession(
             if (credentialDeadline.isExpired(SystemClock.elapsedRealtime())) {
                 engineFailure("relay_credential_expired")
             }
-            val code = when (stateMachine.state) {
-                RelayControlState.TUN_SENT,
-                RelayControlState.FD_ATTACHED,
-                -> "relay_start_timeout"
-                else -> "relay_prepare_timeout"
-            }
-            engineFailure(code)
+            engineFailure("relay_prepare_timeout")
         } catch (_: EOFException) {
             checkBackgroundFailure()
             engineFailure("relay_process_exited")
@@ -732,6 +709,11 @@ private class AndroidRelayNativeSession(
         return "@levik_wlr_${role}_$token"
     }
 
+    private fun randomCredential(size: Int): String {
+        val random = ByteArray(size).also(secureRandom::nextBytes)
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(random)
+    }
+
     private fun peerAddress(host: String, port: Int): String =
         if (host.contains(':') && !host.startsWith('[')) "[$host]:$port" else "$host:$port"
 
@@ -749,14 +731,14 @@ private class AndroidRelayNativeSession(
         const val CONNECT_RETRY_DELAY_MS = 25L
         const val CHANNEL_CONNECT_TIMEOUT_MS = 10_000L
         const val PREPARE_TIMEOUT_MS = 120_000L
-        const val START_TIMEOUT_MS = 30_000L
         const val STOP_GRACEFUL_TIMEOUT_MS = 3_000L
         const val STOP_DESTROY_TIMEOUT_MS = 1_000L
         const val STOP_FORCIBLE_TIMEOUT_MS = 1_000L
         const val WORKER_SHUTDOWN_TIMEOUT_MS = 1_000L
         const val MAX_PROTECT_MESSAGE_BYTES = 8 * 1024
         const val EXPIRY_POLL_MAX_MS = 1_000L
-        val TUN_FD_PAYLOAD = "TUN_FD_V1\n".encodeToByteArray()
+        const val PROXY_USERNAME_BYTES = 18
+        const val PROXY_PASSWORD_BYTES = 32
     }
 }
 

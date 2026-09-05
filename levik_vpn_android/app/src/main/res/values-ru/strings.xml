@@ -182,7 +182,7 @@
     <string name="vpn_notification_channel">VPN-подключение</string>
     <string name="vpn_notification_channel_description">Состояние активного подключения Levik VPN</string>
     <string name="vpn_notification_connecting">Создаём защищённое подключение…</string>
-    <string name="vpn_notification_connected">Защищено через %1$s</string>
+    <string name="vpn_notification_connected">Защищено через %1$s · %2$s</string>
     <string name="vpn_notification_reconnecting">Восстанавливаем защищённое подключение…</string>
     <string name="vpn_notification_disconnect">Отключить</string>
     <string name="vpn_notification_switch_server">Сменить сервер</string>

@@ -21,6 +21,7 @@ import com.leviknet.vpn.LevikVpnApplication
 import com.leviknet.vpn.MainActivity
 import com.leviknet.vpn.R
 import com.leviknet.vpn.core.logger.AppLogger
+import com.leviknet.vpn.core.network.WhitelistMode
 import com.leviknet.vpn.core.security.SecureFileStore
 import com.leviknet.vpn.data.DnsProvider
 import com.leviknet.vpn.data.SplitTunnelMode
@@ -51,6 +52,8 @@ class LevikVpnService : VpnService() {
     private val coreOwner = NEXT_CORE_OWNER.incrementAndGet()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val connectionMutex = Mutex()
+    private val mobileEvaluationMutex = Mutex()
+    private val mobileSwitchPolicy = MobileServerSwitchPolicy()
     private val lifecycleGate = ReentrantLock()
     private val destroyed = AtomicBoolean(false)
     private val underlyingNetwork = AtomicReference<Network?>(null)
@@ -87,6 +90,10 @@ class LevikVpnService : VpnService() {
     private var relayEntitlementWatchdogJob: Job? = null
     private var connectionJob: Job? = null
     private var pauseJob: Job? = null
+    private var mobileAutomationJob: Job? = null
+    private var mobileNetworkEvaluationJob: Job? = null
+    private var automaticRollbackServerId: String? = null
+    private var automaticTargetServerId: String? = null
 
     private fun acquireWakeLock() {
         if (wakeLock?.isHeld == true) return
@@ -141,6 +148,8 @@ class LevikVpnService : VpnService() {
         AppLogger.d(LOG_TAG, "onStartCommand action: $action")
         when (action) {
             ACTION_DISCONNECT -> {
+                automaticRollbackServerId = null
+                automaticTargetServerId = null
                 pauseJob?.cancel()
                 pauseJob = null
                 connectionJob?.cancel()
@@ -168,6 +177,8 @@ class LevikVpnService : VpnService() {
                 container.settings.setPausedUntilMs(0L)
                 val newServerId = intent?.getStringExtra(EXTRA_SERVER_ID)
                 if (newServerId != null) {
+                    automaticRollbackServerId = null
+                    automaticTargetServerId = null
                     container.secureStore.put(SecureFileStore.SELECTED_SERVER, newServerId.encodeToByteArray())
                 }
                 connectionJob?.cancel()
@@ -187,6 +198,9 @@ class LevikVpnService : VpnService() {
                             engine = currentServer?.engine,
                             serverId = currentServer?.id,
                             serverName = currentServerName,
+                            serverCountryCode = currentServer?.countryCode,
+                            effectiveRoutingProfile = currentServer?.effectiveRoutingProfile()
+                                ?: EffectiveRoutingProfile.USER_SELECTED,
                             failure = null,
                         )
                     }
@@ -243,6 +257,8 @@ class LevikVpnService : VpnService() {
             profileExpiryJob?.cancel()
             autoHealingJob?.cancel()
             relayEntitlementWatchdogJob?.cancel()
+            mobileAutomationJob?.cancel()
+            mobileNetworkEvaluationJob?.cancel()
             networkMonitor.stop(releaseCellular = false)
             underlyingNetwork.set(null)
             val capturedLease = coreLease
@@ -277,7 +293,7 @@ class LevikVpnService : VpnService() {
         super.onDestroy()
     }
 
-    private suspend fun connect() = connectionMutex.withLock connection@{
+    private suspend fun connect(): Unit = connectionMutex.withLock connection@{
         if (destroyed.get()) return@connection
         if (lockdownActive) {
             // A fresh connect attempt always replaces the Kill Switch lockdown TUN.
@@ -373,6 +389,17 @@ class LevikVpnService : VpnService() {
                             antiDpiInterval = container.settings.antiDpiInterval.value,
                             customDirectDomains = container.settings.customDirectDomains.value,
                             customProxyDomains = container.settings.customProxyDomains.value,
+                            effectiveRoutingProfile = selected.effectiveRoutingProfile(),
+                            lteDirectCidrs = if (selected.isMobileServer()) {
+                                container.lteRoutingData.cidrs
+                            } else {
+                                emptyList()
+                            },
+                            lteDirectDomains = if (selected.isMobileServer()) {
+                                container.lteRoutingData.domains
+                            } else {
+                                emptyList()
+                            },
                         )
                     },
                     tunPlan = xrayTunPlan(
@@ -383,9 +410,26 @@ class LevikVpnService : VpnService() {
                     ),
                 )
                 TunnelEngineKind.LEVIK_RELAY -> TunnelEngineRequest.Relay(
-                    requireNotNull(selected.relayConfig) {
+                    config = requireNotNull(selected.relayConfig) {
                         "Relay server has no bootstrap configuration"
                     },
+                    configFactory = RelayXrayConfigFactory { tunFileDescriptor, proxy ->
+                        XrayConfigBuilder(container.json).buildRelayProxy(
+                            profile = profile,
+                            tunFileDescriptor = tunFileDescriptor,
+                            proxy = proxy,
+                            primaryDnsIp = primaryDns,
+                            secondaryDnsIp = secondaryDns,
+                            lteDirectCidrs = container.lteRoutingData.cidrs,
+                            lteDirectDomains = container.lteRoutingData.domains,
+                        )
+                    },
+                    tunPlan = xrayTunPlan(
+                        primaryDns = primaryDns,
+                        secondaryDns = secondaryDns,
+                        primaryDnsIpv6 = dnsProvider.primaryIpv6,
+                        secondaryDnsIpv6 = dnsProvider.secondaryIpv6,
+                    ),
                 )
             }
             val engine = container.tunnelEngineRegistry.require(selected.engine)
@@ -449,11 +493,16 @@ class LevikVpnService : VpnService() {
             )
             checkConnectionDeadline(connectionExpiryDeadline)
             coreRunning = true
+            if (automaticTargetServerId == selected.id) {
+                automaticRollbackServerId = null
+                automaticTargetServerId = null
+            }
             val published = lifecycleGate.withLock {
                 if (destroyed.get()) return@withLock false
                 networkMonitor.start()
                 startStats()
                 startAutoHealing()
+                startMobileServerAutomation()
                 startRelayEntitlementWatchdog(selected, prepared)
                 connectionExpiryDeadline?.let(::scheduleProfileExpiry)
                 VpnStateStore.set(
@@ -464,6 +513,8 @@ class LevikVpnService : VpnService() {
                         subscriptionId = profile.subscriptionId,
                         serverId = selected.id,
                         serverName = selected.name,
+                        serverCountryCode = selected.countryCode,
+                        effectiveRoutingProfile = selected.effectiveRoutingProfile(),
                     ),
                 )
                 showForeground(VpnConnectionState.CONNECTED, selected.name)
@@ -481,6 +532,25 @@ class LevikVpnService : VpnService() {
         } catch (error: Throwable) {
             stopCoreAndTun()
             AppLogger.e(LOG_TAG, "VPN startup failed", error)
+            val rollbackServerId = automaticRollbackServerId
+                ?.takeIf { automaticTargetServerId == readSelectedServerId() }
+            if (rollbackServerId != null) {
+                automaticRollbackServerId = null
+                automaticTargetServerId = null
+                container.secureStore.put(
+                    SecureFileStore.SELECTED_SERVER,
+                    rollbackServerId.encodeToByteArray(),
+                )
+                VpnStateStore.update(coreOwner) {
+                    it.copy(state = VpnConnectionState.RECONNECTING, failure = null)
+                }
+                showForeground(VpnConnectionState.RECONNECTING, null)
+                connectionJob = serviceScope.launch {
+                    delay(AUTOMATIC_SWITCH_ROLLBACK_DELAY_MS)
+                    connect()
+                }
+                return@connection
+            }
             val failure = when (error) {
                 is UnsatisfiedLinkError -> VpnFailure.CORE_UNAVAILABLE
                 is TunnelEngineUnavailableException -> VpnFailure.CORE_UNAVAILABLE
@@ -537,6 +607,10 @@ class LevikVpnService : VpnService() {
         autoHealingJob = null
         relayEntitlementWatchdogJob?.cancel()
         relayEntitlementWatchdogJob = null
+        mobileAutomationJob?.cancel()
+        mobileAutomationJob = null
+        mobileNetworkEvaluationJob?.cancel()
+        mobileNetworkEvaluationJob = null
         networkMonitor.stop(releaseCellular = false)
         stopCoreAndTun()
         runCatching { container.trafficHistoryStore.flush() }
@@ -602,6 +676,8 @@ class LevikVpnService : VpnService() {
         )
         val splitMode = container.settings.splitTunnelMode.value
         val splitPackages = container.settings.splitTunnelPackages.value
+        val allowPerAppBypass = currentServer?.effectiveRoutingProfile() !=
+            EffectiveRoutingProfile.LTE
 
         return Builder()
             .setSession(getString(R.string.vpn_session_name, serverName))
@@ -619,7 +695,7 @@ class LevikVpnService : VpnService() {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     setMetered(false)
                 }
-                when (splitMode) {
+                when (splitMode.takeIf { allowPerAppBypass } ?: SplitTunnelMode.OFF) {
                     SplitTunnelMode.DISALLOWED -> {
                         splitPackages.forEach { pkg ->
                             runCatching { addDisallowedApplication(pkg) }
@@ -687,8 +763,129 @@ class LevikVpnService : VpnService() {
         if (violation != null) throw TunnelNetworkRequirementException(violation)
     }
 
+    private fun startMobileServerAutomation() {
+        mobileAutomationJob?.cancel()
+        if (!container.settings.automaticServer.value) return
+        mobileAutomationJob = serviceScope.launch {
+            delay(MOBILE_AUTOMATION_INITIAL_DELAY_MS)
+            while (coreRunning && container.settings.automaticServer.value) {
+                evaluateMobileServerPolicy(networkMonitor.activeNetwork())
+                delay(MOBILE_AUTOMATION_INTERVAL_MS)
+            }
+        }
+    }
+
+    private fun scheduleMobilePolicyEvaluation(network: Network?) {
+        if (!coreRunning || !container.settings.automaticServer.value) return
+        mobileNetworkEvaluationJob?.cancel()
+        mobileNetworkEvaluationJob = serviceScope.launch {
+            delay(MOBILE_NETWORK_DEBOUNCE_MS)
+            evaluateMobileServerPolicy(network ?: networkMonitor.activeNetwork())
+        }
+    }
+
+    private suspend fun evaluateMobileServerPolicy(candidateNetwork: Network?) =
+        mobileEvaluationMutex.withLock {
+            val network = candidateNetwork ?: return@withLock
+            val server = connectionMutex.withLock {
+                currentServer?.takeIf { coreRunning && !lockdownActive }
+            } ?: return@withLock
+            if (!container.settings.automaticServer.value) return@withLock
+
+            val mode = try {
+                container.whitelistDetector.detect(network, forceRefresh = true)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Throwable) {
+                WhitelistMode.UNKNOWN
+            }
+            VpnStateStore.update(coreOwner) { snapshot ->
+                snapshot.copy(whitelistMode = mode)
+            }
+            if (mode == WhitelistMode.UNKNOWN) return@withLock
+
+            val decision = mobileSwitchPolicy.evaluate(
+                automaticServer = container.settings.automaticServer.value,
+                currentServerIsMobile = server.isMobileServer(),
+                physicalNetworkIsCellular = networkMonitor.isCellular(network),
+                whitelistMode = mode,
+                networkIdentity = network.toString(),
+                nowMs = SystemClock.elapsedRealtime(),
+            )
+            if (decision == MobileServerSwitchDecision.NONE) return@withLock
+            if (networkMonitor.activeNetwork() != network) return@withLock
+
+            val profile = runCatching { readPreparedProfile() }.getOrNull() ?: return@withLock
+            val target = automaticSwitchTarget(profile, server, decision) ?: return@withLock
+            val accepted = connectionMutex.withLock {
+                coreRunning &&
+                    currentServer?.id == server.id &&
+                    container.settings.automaticServer.value
+            }
+            if (!accepted) return@withLock
+
+            if (!server.isMobileServer()) {
+                container.secureStore.put(
+                    SecureFileStore.LAST_REGULAR_SERVER,
+                    server.id.encodeToByteArray(),
+                )
+            }
+            container.secureStore.put(
+                SecureFileStore.SELECTED_SERVER,
+                target.id.encodeToByteArray(),
+            )
+            automaticRollbackServerId = server.id
+            automaticTargetServerId = target.id
+            AppLogger.i(
+                LOG_TAG,
+                "Carrier policy changed; automatically switching server class",
+            )
+            connectionJob?.cancel()
+            connectionJob = serviceScope.launch {
+                stopConnection(stopService = false)
+                connect()
+            }
+        }
+
+    private fun automaticSwitchTarget(
+        profile: PreparedTunnelProfile,
+        current: TunnelServer,
+        decision: MobileServerSwitchDecision,
+    ): TunnelServer? = when (decision) {
+        MobileServerSwitchDecision.NONE -> null
+        MobileServerSwitchDecision.TO_MOBILE -> profile.servers
+            .asSequence()
+            .filter(TunnelServer::isMobileServer)
+            .sortedBy { server ->
+                when (server.effectiveCategory()) {
+                    TunnelServerCategory.MOBILE -> 0
+                    TunnelServerCategory.MOBILE_ALLOWLIST -> 1
+                    TunnelServerCategory.REGULAR -> 2
+                }
+            }
+            .firstOrNull { it.id != current.id }
+        MobileServerSwitchDecision.TO_REGULAR -> {
+            val regular = profile.servers.filter { server ->
+                server.isEligibleForAutomaticSelection() && !server.isMobileServer()
+            }
+            readSecureString(SecureFileStore.LAST_REGULAR_SERVER)
+                ?.let { saved -> regular.firstOrNull { it.id == saved } }
+                ?: regular.firstOrNull()
+        }
+    }
+
+    private fun readSecureString(key: String): String? {
+        val bytes = runCatching { container.secureStore.get(key) }.getOrNull() ?: return null
+        return try {
+            bytes.decodeToString()
+        } finally {
+            bytes.fill(0)
+        }
+    }
+
     private fun onNetworkAvailable(network: Network) {
         if (destroyed.get()) return
+        scheduleMobilePolicyEvaluation(network)
         serviceScope.launch {
             connectionMutex.withLock {
                 if (destroyed.get()) return@withLock
@@ -714,6 +911,7 @@ class LevikVpnService : VpnService() {
 
     private fun onNetworkLost(network: Network) {
         if (destroyed.get()) return
+        scheduleMobilePolicyEvaluation(networkMonitor.activeNetwork())
         serviceScope.launch {
             connectionMutex.withLock {
                 if (destroyed.get()) return@withLock
@@ -1023,6 +1221,9 @@ class LevikVpnService : VpnService() {
                         engine = currentServer?.engine,
                         serverId = currentServer?.id,
                         serverName = currentServerName,
+                        serverCountryCode = currentServer?.countryCode,
+                        effectiveRoutingProfile = currentServer?.effectiveRoutingProfile()
+                            ?: EffectiveRoutingProfile.USER_SELECTED,
                         failure = failure,
                         failureDetail = detail.take(MAX_FAILURE_DETAIL_LENGTH),
                     ),
@@ -1170,6 +1371,7 @@ class LevikVpnService : VpnService() {
 
     private suspend fun tryAutoFallback(): Boolean {
         if (!container.settings.autoFallbackServer.value) return false
+        if (currentServer?.isMobileServer() == true) return false
         val profile = runCatching { readPreparedProfile() }.getOrNull() ?: return false
         if (profile.servers.size <= 1) return false
 
@@ -1214,6 +1416,7 @@ class LevikVpnService : VpnService() {
         lockdownActive = false
         networkMonitor.stop(releaseCellular = false)
         val serverNameBeforePause = currentServerName
+        val serverBeforePause = currentServer
         stopCoreAndTun()
 
         val pauseDurationMs = minutes * 60_000L
@@ -1225,11 +1428,21 @@ class LevikVpnService : VpnService() {
             coreOwner,
             VpnSnapshot(
                 state = VpnConnectionState.PAUSED,
+                engine = serverBeforePause?.engine,
+                serverId = serverBeforePause?.id,
                 serverName = serverNameBeforePause,
+                serverCountryCode = serverBeforePause?.countryCode,
+                effectiveRoutingProfile = serverBeforePause?.effectiveRoutingProfile()
+                    ?: EffectiveRoutingProfile.USER_SELECTED,
                 pausedRemainingSeconds = initialRemaining,
             ),
         )
-        showForeground(VpnConnectionState.PAUSED, serverNameBeforePause, initialRemaining)
+        showForeground(
+            VpnConnectionState.PAUSED,
+            serverNameBeforePause,
+            initialRemaining,
+            serverBeforePause?.countryCode,
+        )
 
         pauseJob = serviceScope.launch {
             while (true) {
@@ -1252,7 +1465,12 @@ class LevikVpnService : VpnService() {
                         pausedRemainingSeconds = remaining,
                     )
                 }
-                showForeground(VpnConnectionState.PAUSED, serverNameBeforePause, remaining)
+                showForeground(
+                    VpnConnectionState.PAUSED,
+                    serverNameBeforePause,
+                    remaining,
+                    serverBeforePause?.countryCode,
+                )
             }
         }
     }
@@ -1372,8 +1590,14 @@ class LevikVpnService : VpnService() {
         state: VpnConnectionState,
         serverName: String?,
         remainingSeconds: Long = 0,
+        serverCountryCode: String? = currentServer?.countryCode,
     ) {
-        val notification = buildNotification(state, serverName, remainingSeconds)
+        val notification = buildNotification(
+            state,
+            serverName,
+            remainingSeconds,
+            serverCountryCode,
+        )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
                 NOTIFICATION_ID,
@@ -1389,6 +1613,7 @@ class LevikVpnService : VpnService() {
         state: VpnConnectionState,
         serverName: String?,
         remainingSeconds: Long = 0,
+        serverCountryCode: String? = currentServer?.countryCode,
     ): Notification {
         val contentIntent = PendingIntent.getActivity(
             this,
@@ -1428,6 +1653,7 @@ class LevikVpnService : VpnService() {
             VpnConnectionState.CONNECTED -> getString(
                 R.string.vpn_notification_connected,
                 serverName.orEmpty(),
+                countryDisplay(serverCountryCode),
             )
             VpnConnectionState.PAUSED -> getString(
                 R.string.vpn_notification_paused,
@@ -1495,6 +1721,10 @@ class LevikVpnService : VpnService() {
         private const val REQUEST_PAUSE = 4105
         private const val DEFAULT_PAUSE_MINUTES = 15
         private const val RECONNECT_DEBOUNCE_MS = 750L
+        private const val MOBILE_NETWORK_DEBOUNCE_MS = 1_500L
+        private const val MOBILE_AUTOMATION_INITIAL_DELAY_MS = 8_000L
+        private const val MOBILE_AUTOMATION_INTERVAL_MS = 30_000L
+        private const val AUTOMATIC_SWITCH_ROLLBACK_DELAY_MS = 1_000L
         private const val STATS_INTERVAL_MS = 1_000L
         private const val AUTO_HEALING_INTERVAL_MS = 30_000L
         private const val RELAY_ENTITLEMENT_WATCHDOG_INTERVAL_MS = 120_000L

@@ -372,10 +372,11 @@ func main() {
 
 	flag.Parse()
 	var levikControlClient *levikControl
-	var levikTunSocket string
 	var levikCustomClientID string
 	var levikCustomClientSecret string
 	var levikServerPublicKey string
+	var levikProxyUsername string
+	var levikProxyPassword string
 	var levikProtector *levikSocketProtector
 	if strings.TrimSpace(*levikControlSocket) != "" {
 		if *connPassword != "" || *vkHash != "" || *rtMasque || os.Getenv("WDTT_CUSTOM_VK_CLIENT_ID") != "" || os.Getenv("WDTT_CUSTOM_VK_CLIENT_SECRET") != "" {
@@ -414,10 +415,11 @@ func main() {
 		*clientIdsFlag = init.ClientIDs
 		*configFirstStart = true
 		*hashFallback = false
-		levikTunSocket = init.TunFDSocket
 		levikCustomClientID = init.VKClientID
 		levikCustomClientSecret = init.VKClientSecret
 		levikServerPublicKey = init.ServerPublicKey
+		levikProxyUsername = init.ProxyUsername
+		levikProxyPassword = init.ProxyPassword
 		*vkAuthMode = init.VKAuthMode
 		setAccountControl(levikControlClient)
 		levikProtector, err = acceptLevikProtector(ctx, init.ProtectFDSocket, levikControlClient)
@@ -694,7 +696,14 @@ func main() {
 				finalConf = strings.Join(newLines, "\n")
 			}
 			if levikControlClient != nil {
-				if err := startLevikWireGuard(ctx, finalConf, levikTunSocket, levikServerPublicKey, levikControlClient); err != nil {
+				if err := startLevikWireGuard(
+					ctx,
+					finalConf,
+					levikServerPublicKey,
+					levikProxyUsername,
+					levikProxyPassword,
+					levikControlClient,
+				); err != nil {
 					code := "wireguard_start_failed"
 					if errors.Is(err, errLevikServerKeyMismatch) {
 						code = "server_key_mismatch"

@@ -16,6 +16,55 @@ class XrayConfigBuilder(
     private val json: Json,
     private val clock: Clock = Clock.systemUTC(),
 ) {
+    fun buildRelayProxy(
+        profile: PreparedTunnelProfile,
+        tunFileDescriptor: Int,
+        proxy: LocalProxyEndpoint,
+        primaryDnsIp: String,
+        secondaryDnsIp: String,
+        lteDirectCidrs: List<String>,
+        lteDirectDomains: List<String>,
+    ): String {
+        val proxyOutbound = buildJsonObject {
+            put("tag", RELAY_PROXY_TAG)
+            put("protocol", "socks")
+            put("settings", buildJsonObject {
+                put("address", proxy.address)
+                put("port", proxy.port)
+                put("user", proxy.username)
+                put("pass", proxy.password)
+            })
+        }
+        val syntheticProfile = profile.copy(
+            servers = listOf(
+                TunnelServer(
+                    id = RELAY_PROXY_TAG,
+                    tag = RELAY_PROXY_TAG,
+                    name = RELAY_PROXY_TAG,
+                    countryCode = "XX",
+                    outbound = proxyOutbound,
+                    engine = TunnelEngineKind.XRAY,
+                    category = TunnelServerCategory.MOBILE_ALLOWLIST,
+                ),
+            ),
+            directCidrs = emptyList(),
+            directDomains = emptyList(),
+            proxyDomains = emptyList(),
+        )
+        return build(
+            profile = syntheticProfile,
+            selectedServerId = RELAY_PROXY_TAG,
+            tunFileDescriptor = tunFileDescriptor,
+            routingPreset = RoutingPreset.GLOBAL,
+            bypassRussianTraffic = false,
+            primaryDnsIp = primaryDnsIp,
+            secondaryDnsIp = secondaryDnsIp,
+            effectiveRoutingProfile = EffectiveRoutingProfile.LTE,
+            lteDirectCidrs = lteDirectCidrs,
+            lteDirectDomains = lteDirectDomains,
+        )
+    }
+
     fun build(
         profile: PreparedTunnelProfile,
         selectedServerId: String,
@@ -32,6 +81,9 @@ class XrayConfigBuilder(
         antiDpiInterval: String = DEFAULT_ANTI_DPI_INTERVAL,
         customDirectDomains: Set<String> = emptySet(),
         customProxyDomains: Set<String> = emptySet(),
+        effectiveRoutingProfile: EffectiveRoutingProfile = EffectiveRoutingProfile.USER_SELECTED,
+        lteDirectCidrs: List<String> = emptyList(),
+        lteDirectDomains: List<String> = emptyList(),
     ): String {
         require(tunFileDescriptor >= 0) { "Invalid TUN file descriptor" }
         profile.subscriptionExpiresAt?.let { value ->
@@ -57,37 +109,53 @@ class XrayConfigBuilder(
             }
         orderedServers.forEach(::requireRealityServerNames)
 
-        val isBypassRu = routingPreset == RoutingPreset.BYPASS_RU || bypassRussianTraffic
-        val isBlockedOnly = routingPreset == RoutingPreset.BLOCKED_ONLY
+        val isLte = effectiveRoutingProfile == EffectiveRoutingProfile.LTE
+        if (isLte) {
+            require(lteDirectCidrs.isNotEmpty()) { "LTE CIDR routing data is unavailable" }
+            require(lteDirectDomains.isNotEmpty()) { "LTE domain routing data is unavailable" }
+        }
+        val isBypassRu = !isLte &&
+            (routingPreset == RoutingPreset.BYPASS_RU || bypassRussianTraffic)
+        val isBlockedOnly = !isLte && routingPreset == RoutingPreset.BLOCKED_ONLY
 
-        val directCidrs = (
-            BUILT_IN_DIRECT_CIDRS +
-                profile.directCidrs +
-                if (isBypassRu) russianDirectCidrs else emptyList()
-            ).distinct()
+        val directCidrs = if (isLte) {
+            lteDirectCidrs.distinct()
+        } else {
+            (
+                BUILT_IN_DIRECT_CIDRS +
+                    profile.directCidrs +
+                    if (isBypassRu) russianDirectCidrs else emptyList()
+                ).distinct()
+        }
 
         val directDomains = buildList {
-            addAll(profile.directDomains)
-            if (isBypassRu) {
-                addAll(RUSSIAN_DOMAINS)
-            }
-            customDirectDomains.forEach { domain ->
-                val clean = domain.trim().lowercase()
-                if (clean.isNotBlank()) {
-                    add(if (clean.startsWith("domain:") || clean.startsWith("full:") || clean.startsWith("geosite:")) clean else "domain:$clean")
+            if (isLte) {
+                addAll(lteDirectDomains)
+            } else {
+                addAll(profile.directDomains)
+                if (isBypassRu) {
+                    addAll(RUSSIAN_DOMAINS)
+                }
+                customDirectDomains.forEach { domain ->
+                    val clean = domain.trim().lowercase()
+                    if (clean.isNotBlank()) {
+                        add(if (clean.startsWith("domain:") || clean.startsWith("full:") || clean.startsWith("geosite:")) clean else "domain:$clean")
+                    }
                 }
             }
         }
 
         val proxyDomains = buildList {
-            addAll(profile.proxyDomains)
-            if (isBlockedOnly) {
-                addAll(POPULAR_BLOCKED_DOMAINS)
-            }
-            customProxyDomains.forEach { domain ->
-                val clean = domain.trim().lowercase()
-                if (clean.isNotBlank()) {
-                    add(if (clean.startsWith("domain:") || clean.startsWith("full:") || clean.startsWith("geosite:")) clean else "domain:$clean")
+            if (!isLte) {
+                addAll(profile.proxyDomains)
+                if (isBlockedOnly) {
+                    addAll(POPULAR_BLOCKED_DOMAINS)
+                }
+                customProxyDomains.forEach { domain ->
+                    val clean = domain.trim().lowercase()
+                    if (clean.isNotBlank()) {
+                        add(if (clean.startsWith("domain:") || clean.startsWith("full:") || clean.startsWith("geosite:")) clean else "domain:$clean")
+                    }
                 }
             }
         }
@@ -170,7 +238,7 @@ class XrayConfigBuilder(
                 orderedServers.map(TunnelServer::outbound) + additionalOutbounds
             ))
             put("routing", buildJsonObject {
-                put("domainStrategy", if (isBypassRu || isBlockedOnly || directDomains.isNotEmpty()) "IPIfNonMatch" else "AsIs")
+                put("domainStrategy", if (isLte || isBypassRu || isBlockedOnly || directDomains.isNotEmpty()) "IPIfNonMatch" else "AsIs")
                 put("rules", buildJsonArray {
                     add(buildJsonObject {
                         put("type", "field")
@@ -339,6 +407,7 @@ class XrayConfigBuilder(
         private const val DIRECT_TAG = "levik-direct"
         private const val BLOCK_TAG = "levik-block"
         private const val FRAGMENT_TAG = "levik-fragment"
+        private const val RELAY_PROXY_TAG = "levik-relay-proxy"
         private const val IPV6_DEFAULT_ROUTE = "::/0"
         private const val TUN_MTU = 1500
         private const val MAX_SERVERS = 200
@@ -351,6 +420,7 @@ class XrayConfigBuilder(
             "shadowsocks",
             "hysteria",
             "hysteria2",
+            "socks",
         )
         private val BUILT_IN_DIRECT_CIDRS = listOf(
             "0.0.0.0/8",

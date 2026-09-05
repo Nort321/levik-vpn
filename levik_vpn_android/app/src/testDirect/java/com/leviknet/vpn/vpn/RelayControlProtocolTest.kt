@@ -15,48 +15,43 @@ class RelayControlProtocolTest {
 
         assertEquals(
             RelayControlAction.Continue,
-            machine.accept(event("""{"version":1,"type":"ready","phase":"control"}""")),
+            machine.accept(event("""{"version":2,"type":"ready","phase":"control"}""")),
         )
         assertEquals(
             RelayControlAction.ConnectProtectChannel,
             machine.accept(
                 event(
-                    """{"version":1,"type":"ready","phase":"PROTECT_CHANNEL_LISTENING"}""",
+                    """{"version":2,"type":"ready","phase":"PROTECT_CHANNEL_LISTENING"}""",
                 ),
             ),
         )
         assertEquals(
             RelayControlAction.Continue,
             machine.accept(
-                event("""{"version":1,"type":"ready","phase":"PROTECT_CHANNEL_READY"}"""),
+                event("""{"version":2,"type":"ready","phase":"PROTECT_CHANNEL_READY"}"""),
             ),
         )
         assertEquals(
             RelayControlAction.Continue,
             machine.accept(
                 event(
-                    """{"version":1,"type":"ready","phase":"TRANSPORT_LISTENING","data":{"localPort":"32001"}}""",
+                    """{"version":2,"type":"ready","phase":"TRANSPORT_LISTENING","data":{"localPort":"32001"}}""",
                 ),
             ),
         )
         val prepared = machine.accept(
             event(
-                """{"version":1,"type":"tun_plan","phase":"PREPARED","data":{"addresses":["10.99.0.2/32"],"dns":["1.1.1.1"],"mtu":1280,"routes":["0.0.0.0/0"]}}""",
+                """{"version":2,"type":"proxy_plan","phase":"PREPARED","data":{"address":"127.0.0.1","port":32123}}""",
             ),
-        ) as RelayControlAction.Prepared
-        assertEquals(1280, prepared.tunPlan.mtu)
-        assertEquals(listOf(TunAddress("10.99.0.2", 32)), prepared.tunPlan.addresses)
+        ) as RelayControlAction.PreparedProxy
+        assertEquals("127.0.0.1", prepared.address)
+        assertEquals(32123, prepared.port)
 
-        machine.markTunSent()
-        assertEquals(
-            RelayControlAction.Continue,
-            machine.accept(event("""{"version":1,"type":"ready","phase":"FD_ATTACHED"}""")),
-        )
         assertEquals(
             RelayControlAction.Running,
             machine.accept(
                 event(
-                    """{"version":1,"type":"ready","phase":"RUNNING","data":{"protocolVersion":1}}""",
+                    """{"version":2,"type":"ready","phase":"RUNNING","data":{"protocolVersion":2}}""",
                 ),
             ),
         )
@@ -65,7 +60,7 @@ class RelayControlProtocolTest {
             RelayControlAction.Continue,
             machine.accept(
                 event(
-                    """{"version":1,"type":"stats","data":{"at":"2026-08-31T00:00:00Z","activeConnections":1,"bytesUp":2,"bytesDown":3,"protectedExternalSockets":4,"rejectedUnprotectedSockets":0}}""",
+                    """{"version":2,"type":"stats","data":{"at":"2026-08-31T00:00:00Z","activeConnections":1,"bytesUp":2,"bytesDown":3,"protectedExternalSockets":4,"rejectedUnprotectedSockets":0}}""",
                 ),
             ),
         )
@@ -74,17 +69,17 @@ class RelayControlProtocolTest {
     @Test
     fun `unknown JSON fields versions and out of order phases fail closed`() {
         assertThrows(RelayProtocolException::class.java) {
-            event("""{"version":1,"type":"ready","phase":"control","extra":true}""")
+            event("""{"version":2,"type":"ready","phase":"control","extra":true}""")
         }
         assertThrows(RelayProtocolException::class.java) {
-            event("""{"version":2,"type":"ready","phase":"control"}""")
+            event("""{"version":3,"type":"ready","phase":"control"}""")
         }
 
         val machine = RelayControlStateMachine(codec)
         machine.markInitSent()
         assertThrows(RelayProtocolException::class.java) {
             machine.accept(
-                event("""{"version":1,"type":"ready","phase":"PROTECT_CHANNEL_READY"}"""),
+                event("""{"version":2,"type":"ready","phase":"PROTECT_CHANNEL_READY"}"""),
             )
         }
     }
@@ -92,7 +87,7 @@ class RelayControlProtocolTest {
     @Test
     fun `protect channel requires exact request shape and produces stable ack`() {
         val request = codec.decodeProtectRequest(
-            """{"version":1,"type":"PROTECT_SOCKET","requestId":42,"network":"tcp4","address":"203.0.113.1:443"}""",
+            """{"version":2,"type":"PROTECT_SOCKET","requestId":42,"network":"tcp4","address":"203.0.113.1:443"}""",
         )
         assertEquals(42L, request.requestId)
 
@@ -104,7 +99,7 @@ class RelayControlProtocolTest {
 
         assertThrows(RelayProtocolException::class.java) {
             codec.decodeProtectRequest(
-                """{"version":1,"type":"PROTECT_SOCKET","requestId":42,"network":"tcp4","address":"203.0.113.1:443","extra":"rejected"}""",
+                """{"version":2,"type":"PROTECT_SOCKET","requestId":42,"network":"tcp4","address":"203.0.113.1:443","extra":"rejected"}""",
             )
         }
     }
@@ -115,7 +110,7 @@ class RelayControlProtocolTest {
         machine.markInitSent()
         val action = machine.accept(
             event(
-                """{"version":1,"type":"error","code":"server_key_mismatch","message":"native transport operation failed"}""",
+                """{"version":2,"type":"error","code":"server_key_mismatch","message":"native transport operation failed"}""",
             ),
         )
 
@@ -131,12 +126,12 @@ class RelayControlProtocolTest {
         val machine = RelayControlStateMachine(codec)
         machine.markInitSent()
         val action = machine.accept(
-            event("""{"version":1,"type":"diagnostic","code":"turn_tls_failed"}"""),
+            event("""{"version":2,"type":"diagnostic","code":"turn_tls_failed"}"""),
         )
 
         assertEquals(RelayControlAction.Diagnostic("turn_tls_failed"), action)
         assertThrows(RelayProtocolException::class.java) {
-            event("""{"version":1,"type":"diagnostic","code":"turn_url_secret"}""")
+            event("""{"version":2,"type":"diagnostic","code":"turn_url_secret"}""")
         }
     }
 
@@ -150,10 +145,11 @@ class RelayControlProtocolTest {
                 deviceId = "a".repeat(64),
                 workers = 18,
                 turnFrontSni = "front.example.com",
-                tunFdSocket = "@levik_wlr_tun_abcdefghijklmnop",
                 protectFdSocket = "@levik_wlr_protect_abcdefghijklmnop",
                 serverPublicKey = "A".repeat(43),
                 vkAuthMode = "account",
+                proxyUsername = "u".repeat(24),
+                proxyPassword = "p".repeat(48),
             ),
         )
 
@@ -168,13 +164,13 @@ class RelayControlProtocolTest {
     fun `VK account request is accepted only while preparing and credentials stay typed`() {
         val machine = RelayControlStateMachine(codec)
         machine.markInitSent()
-        machine.accept(event("""{"version":1,"type":"ready","phase":"control"}"""))
-        machine.accept(event("""{"version":1,"type":"ready","phase":"PROTECT_CHANNEL_LISTENING"}"""))
-        machine.accept(event("""{"version":1,"type":"ready","phase":"PROTECT_CHANNEL_READY"}"""))
+        machine.accept(event("""{"version":2,"type":"ready","phase":"control"}"""))
+        machine.accept(event("""{"version":2,"type":"ready","phase":"PROTECT_CHANNEL_LISTENING"}"""))
+        machine.accept(event("""{"version":2,"type":"ready","phase":"PROTECT_CHANNEL_READY"}"""))
 
         val action = machine.accept(
             event(
-                """{"version":1,"type":"vk_auth_required","data":{"requestId":"1-2","hash":"abcdefghijklmnop"}}""",
+                """{"version":2,"type":"vk_auth_required","data":{"requestId":"1-2","hash":"abcdefghijklmnop"}}""",
             ),
         ) as RelayControlAction.RequestVkAuth
         assertEquals("1-2", action.request.requestId)

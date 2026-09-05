@@ -161,6 +161,15 @@ fun TunnelServer.isStandardMobileServer(): Boolean =
 fun TunnelServer.isAllowlistMobileServer(): Boolean =
     effectiveCategory() == TunnelServerCategory.MOBILE_ALLOWLIST
 
+/** Runtime-only routing policy. LTE is deliberately absent from user settings and UI. */
+enum class EffectiveRoutingProfile {
+    USER_SELECTED,
+    LTE,
+}
+
+fun TunnelServer.effectiveRoutingProfile(): EffectiveRoutingProfile =
+    if (isMobileServer()) EffectiveRoutingProfile.LTE else EffectiveRoutingProfile.USER_SELECTED
+
 fun TunnelServer.hasUnlimitedTraffic(): Boolean =
     !isStandardMobileServer()
 

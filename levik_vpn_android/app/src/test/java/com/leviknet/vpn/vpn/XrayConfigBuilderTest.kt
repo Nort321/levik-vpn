@@ -444,6 +444,90 @@ class XrayConfigBuilderTest {
         assertEquals("UseIPv4", killSwitchDns.getValue("queryStrategy").jsonPrimitive.content)
     }
 
+    @Test
+    fun `LTE profile bypasses only its pinned domain and CIDR rules`() {
+        val selected = server("b".repeat(64), "server-b")
+        val profile = PreparedTunnelProfile(
+            version = 1,
+            profileId = "profile",
+            subscriptionId = "subscription",
+            issuedAt = "2026-07-29T11:59:00Z",
+            subscriptionExpiresAt = "2026-08-29T13:00:00Z",
+            servers = listOf(selected),
+            directCidrs = listOf("192.0.2.0/24"),
+            directDomains = listOf("domain:user-direct.example"),
+            proxyDomains = listOf("domain:user-proxy.example"),
+        )
+
+        val config = json.parseToJsonElement(
+            builder.build(
+                profile = profile,
+                selectedServerId = selected.id,
+                tunFileDescriptor = 42,
+                routingPreset = RoutingPreset.BYPASS_RU,
+                bypassRussianTraffic = true,
+                russianDirectCidrs = listOf("198.51.100.0/24"),
+                customDirectDomains = setOf("custom-direct.example"),
+                customProxyDomains = setOf("custom-proxy.example"),
+                effectiveRoutingProfile = EffectiveRoutingProfile.LTE,
+                lteDirectCidrs = listOf("203.0.113.0/24"),
+                lteDirectDomains = listOf("domain:allowed.example"),
+            ),
+        ).jsonObject
+        val rules = config.getValue("routing").jsonObject.getValue("rules").jsonArray
+        val serializedRules = rules.toString()
+
+        assertTrue(serializedRules.contains("domain:allowed.example"))
+        assertTrue(serializedRules.contains("203.0.113.0/24"))
+        assertFalse(serializedRules.contains("user-direct.example"))
+        assertFalse(serializedRules.contains("user-proxy.example"))
+        assertFalse(serializedRules.contains("custom-direct.example"))
+        assertFalse(serializedRules.contains("custom-proxy.example"))
+        assertFalse(serializedRules.contains("198.51.100.0/24"))
+        assertFalse(serializedRules.contains("10.0.0.0/8"))
+        assertFalse(serializedRules.contains("192.168.0.0/16"))
+        assertTrue(rules.none { rule ->
+            rule.jsonObject["network"]?.jsonPrimitive?.content == "tcp,udp"
+        })
+    }
+
+    @Test
+    fun `relay profile uses authenticated loopback proxy with LTE routing`() {
+        val source = server("b".repeat(64), "server-b")
+        val profile = PreparedTunnelProfile(
+            version = 1,
+            profileId = "profile",
+            subscriptionId = "subscription",
+            issuedAt = "2026-07-29T11:59:00Z",
+            subscriptionExpiresAt = "2026-08-29T13:00:00Z",
+            servers = listOf(source),
+        )
+
+        val config = json.parseToJsonElement(
+            builder.buildRelayProxy(
+                profile = profile,
+                tunFileDescriptor = 42,
+                proxy = LocalProxyEndpoint(
+                    address = "127.0.0.1",
+                    port = 32123,
+                    username = "u".repeat(24),
+                    password = "p".repeat(48),
+                ),
+                primaryDnsIp = "1.1.1.1",
+                secondaryDnsIp = "1.0.0.1",
+                lteDirectCidrs = listOf("203.0.113.0/24"),
+                lteDirectDomains = listOf("domain:allowed.example"),
+            ),
+        ).jsonObject
+        val proxy = config.getValue("outbounds").jsonArray.first().jsonObject
+        val proxyServer = proxy.getValue("settings").jsonObject
+
+        assertEquals("socks", proxy.getValue("protocol").jsonPrimitive.content)
+        assertEquals("127.0.0.1", proxyServer.getValue("address").jsonPrimitive.content)
+        assertEquals("32123", proxyServer.getValue("port").jsonPrimitive.content)
+        assertTrue(config.getValue("routing").toString().contains("domain:allowed.example"))
+    }
+
     private fun realityServer(id: String, tag: String, address: String = "de1.example.com"):
         TunnelServer = TunnelServer(
         id = id,

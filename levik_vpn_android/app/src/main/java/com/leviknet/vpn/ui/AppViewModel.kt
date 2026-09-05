@@ -157,7 +157,13 @@ class AppViewModel(
                         downloadBps = vpn.downloadBytesPerSecond,
                         uploadBps = vpn.uploadBytesPerSecond,
                     )).takeLast(30)
-                    val withVpn = current.copy(vpn = vpn, liveSpeedHistory = newHistory)
+                    val withVpn = current.copy(
+                        vpn = vpn,
+                        liveSpeedHistory = newHistory,
+                        whitelistMode = vpn.whitelistMode.takeUnless {
+                            it == WhitelistMode.UNKNOWN
+                        } ?: current.whitelistMode,
+                    )
                     withVpn.copy(lteTraffic = calculateLteTraffic(withVpn, vpn))
                 }
                 updateLteTrafficSync(vpn)
@@ -333,7 +339,10 @@ class AppViewModel(
                         hadCachedProfile = hadCachedProfile,
                         forceProfileRefresh = false,
                     )
-                    if (profile != null && settings.automaticServer.value) {
+                    if (profile != null &&
+                        settings.automaticServer.value &&
+                        vpnController.state.value.state in PINGABLE_STATES
+                    ) {
                         selectBestServer(profile)
                     }
                 } catch (error: Throwable) {
@@ -617,13 +626,11 @@ class AppViewModel(
     ): TrafficSummary? {
         if (vpn.state !in LTE_TRAFFIC_STATES) return null
         val server = state.profile?.servers?.firstOrNull {
-            it.id == state.selectedServerId
+            it.id == (vpn.serverId ?: state.selectedServerId)
         } ?: return null
         if (!server.isStandardMobileServer()) return null
         val account = state.account ?: return null
-        val subscriptionId = state.profile?.subscriptionId
-            ?: state.selectedSubscriptionId
-            ?: return null
+        val subscriptionId = state.profile.subscriptionId
         val subscription = account.subscriptions.firstOrNull {
             it.uuid == subscriptionId
         } ?: return null
@@ -646,7 +653,7 @@ class AppViewModel(
     private fun updateLteTrafficSync(vpn: VpnSnapshot) {
         val state = mutableState.value
         val shouldSync = vpn.state == VpnConnectionState.CONNECTED &&
-            state.profile?.servers?.firstOrNull { it.id == state.selectedServerId }
+            state.profile?.servers?.firstOrNull { it.id == (vpn.serverId ?: state.selectedServerId) }
                 ?.isStandardMobileServer() == true
         if (!shouldSync) {
             lteTrafficSyncJob?.cancel()
@@ -2156,6 +2163,11 @@ data class AppUiState(
     val isSharingNote: Boolean = false,
     val message: UiMessage? = null,
 )
+
+internal fun displayedServerId(state: AppUiState): String? =
+    state.vpn.serverId.takeIf {
+        state.vpn.state !in setOf(VpnConnectionState.DISCONNECTED, VpnConnectionState.ERROR)
+    } ?: state.selectedServerId
 
 enum class AppTab {
     HOME,

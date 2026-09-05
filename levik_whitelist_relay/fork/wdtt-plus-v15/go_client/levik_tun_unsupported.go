@@ -8,6 +8,6 @@ import (
 	"errors"
 )
 
-func startLevikWireGuard(_ context.Context, _, _, _ string, _ *levikControl) error {
+func startLevikWireGuard(_ context.Context, _, _, _, _ string, _ *levikControl) error {
 	return errors.New("Levik TUN mode requires Android/Linux")
 }

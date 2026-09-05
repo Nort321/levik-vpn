@@ -1,5 +1,6 @@
 package com.leviknet.vpn.vpn
 
+import com.leviknet.vpn.core.network.WhitelistMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,6 +33,9 @@ data class VpnSnapshot(
     val subscriptionId: String? = null,
     val serverId: String? = null,
     val serverName: String? = null,
+    val serverCountryCode: String? = null,
+    val effectiveRoutingProfile: EffectiveRoutingProfile = EffectiveRoutingProfile.USER_SELECTED,
+    val whitelistMode: WhitelistMode = WhitelistMode.UNKNOWN,
     val downloadedBytes: Long = 0,
     val uploadedBytes: Long = 0,
     val downloadBytesPerSecond: Long = 0,

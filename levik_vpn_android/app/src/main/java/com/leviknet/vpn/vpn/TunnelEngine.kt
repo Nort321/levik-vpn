@@ -62,13 +62,39 @@ fun interface XrayConfigFactory {
     fun build(tunFileDescriptor: Int): String
 }
 
+data class LocalProxyEndpoint(
+    val address: String,
+    val port: Int,
+    val username: String,
+    val password: String,
+) {
+    init {
+        require(address == "127.0.0.1") { "Relay proxy must be loopback-only" }
+        require(port in 1..65_535) { "Invalid relay proxy port" }
+        require(username.matches(Regex("[A-Za-z0-9_-]{16,64}"))) {
+            "Invalid relay proxy username"
+        }
+        require(password.matches(Regex("[A-Za-z0-9_-]{32,128}"))) {
+            "Invalid relay proxy password"
+        }
+    }
+}
+
+fun interface RelayXrayConfigFactory {
+    fun build(tunFileDescriptor: Int, proxy: LocalProxyEndpoint): String
+}
+
 sealed interface TunnelEngineRequest {
     data class Xray(
         val configFactory: XrayConfigFactory,
         val tunPlan: TunPlan,
     ) : TunnelEngineRequest
 
-    data class Relay(val config: RelayServerConfig) : TunnelEngineRequest
+    data class Relay(
+        val config: RelayServerConfig,
+        val configFactory: RelayXrayConfigFactory,
+        val tunPlan: TunPlan,
+    ) : TunnelEngineRequest
 }
 
 /**

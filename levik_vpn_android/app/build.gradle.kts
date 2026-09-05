@@ -131,6 +131,32 @@ fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")
     .digest(bytes)
     .joinToString("") { byte -> "%02x".format(byte) }
 
+val lteRoutingAssets = mapOf(
+    "lte_whitelist_domains.txt" to Pair(
+        "dfa4ffeec6c97a6feb7c594934d0c8b4e170fadff1d781f0de012ee383832eb9",
+        910,
+    ),
+    "lte_whitelist_ipv4.cidr" to Pair(
+        "149d27a8e3502b95b9a378817854c87af6417c2a9bbf0b17eb8f7affef1f3868",
+        30_228,
+    ),
+)
+
+val verifyLteRoutingAssets by tasks.registering {
+    group = "verification"
+    description = "Verifies the release-pinned LTE allow-list assets."
+    inputs.files(lteRoutingAssets.keys.map { name -> file("src/main/assets/$name") })
+    doLast {
+        lteRoutingAssets.forEach { (name, expected) ->
+            val asset = file("src/main/assets/$name")
+            check(asset.isFile) { "Missing LTE routing asset: $name" }
+            check(sha256(asset) == expected.first) { "LTE routing asset hash mismatch: $name" }
+            val lines = asset.useLines { sequence -> sequence.count { it.isNotBlank() } }
+            check(lines == expected.second) { "LTE routing asset line count mismatch: $name" }
+        }
+    }
+}
+
 fun buildConfigString(value: String): String = value
     .replace("\\", "\\\\")
     .replace("\"", "\\\"")
@@ -147,7 +173,7 @@ android {
         applicationId = "com.leviknet.vpn"
         minSdk = 26
         targetSdk = 36
-        versionCode = 51
+        versionCode = 52
         versionName = rootProject.version.toString()
 
         buildConfigField("String", "CABINET_BASE_URL", "\"${cabinetBaseUrl.trimEnd('/')}\"")
@@ -340,11 +366,6 @@ val buildDirectRelayNative by tasks.registering(Exec::class) {
         },
     )
     outputs.dir(relayNativeJniDir)
-    onlyIf {
-        relayNativeAbis.keys.any { abi ->
-            !relayNativeJniDir.resolve("$abi/liblevikrelay.so").exists()
-        }
-    }
 }
 
 fun validateRelayElf(file: File, abi: String, elfClass: Int, machine: Int) {
@@ -581,6 +602,10 @@ tasks.configureEach {
             }
         }
     }
+}
+
+tasks.named("preBuild") {
+    dependsOn(verifyLteRoutingAssets)
 }
 
 dependencies {

@@ -14,6 +14,7 @@ internal fun createTunnelEngineRegistry(
                 java.io.File(nativeLibraryDir, "liblevikrelay.so").absolutePath,
                 AndroidRelayVkTurnProvider(appContext?.applicationContext),
             ),
+            xrayRuntime,
         ),
     ),
 )

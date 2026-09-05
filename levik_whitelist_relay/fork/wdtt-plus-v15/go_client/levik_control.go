@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	levikControlVersion = 1
+	levikControlVersion = 2
 	maxControlMessage   = 64 << 10
 )
 
@@ -46,9 +46,10 @@ type levikControlInit struct {
 	VKClientID       string          `json:"vkClientId,omitempty"`
 	VKClientSecret   string          `json:"vkClientSecret,omitempty"`
 	VKAuthMode       string          `json:"vkAuthMode,omitempty"`
-	TunFDSocket      string          `json:"tunFdSocket"`
 	ProtectFDSocket  string          `json:"protectFdSocket"`
 	ServerPublicKey  string          `json:"serverPublicKey"`
+	ProxyUsername    string          `json:"proxyUsername"`
+	ProxyPassword    string          `json:"proxyPassword"`
 }
 
 type levikControlCommand struct {
@@ -165,16 +166,28 @@ func validateLevikInit(init levikControlInit) error {
 	if init.Workers != 0 && (init.Workers < 1 || init.Workers > 108) {
 		return errors.New("invalid worker count")
 	}
-	if err := validateLevikSocketName(init.TunFDSocket); err != nil {
-		return err
-	}
-	if init.ProtectFDSocket == init.TunFDSocket {
-		return errors.New("control sockets must be distinct")
-	}
 	if !validPinnedServerKey(init.ServerPublicKey) {
 		return errors.New("invalid pinned server key")
 	}
+	if !validProxyCredential(init.ProxyUsername, 16, 64) ||
+		!validProxyCredential(init.ProxyPassword, 32, 128) {
+		return errors.New("invalid proxy credentials")
+	}
 	return validateLevikSocketName(init.ProtectFDSocket)
+}
+
+func validProxyCredential(value string, minimum, maximum int) bool {
+	if len(value) < minimum || len(value) > maximum {
+		return false
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') || char == '_' || char == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func validPinnedServerKey(value string) bool {

@@ -139,11 +139,13 @@ import com.leviknet.vpn.data.ThemeMode
 import com.leviknet.vpn.data.isActiveAt
 import com.leviknet.vpn.ui.theme.*
 import com.leviknet.vpn.vpn.PreparedTunnelProfile
+import com.leviknet.vpn.vpn.EffectiveRoutingProfile
 import com.leviknet.vpn.vpn.TunnelServer
 import com.leviknet.vpn.vpn.TunnelServerCategory
 import com.leviknet.vpn.vpn.VpnConnectionState
 import com.leviknet.vpn.vpn.VpnFailure
 import com.leviknet.vpn.vpn.VpnSnapshot
+import com.leviknet.vpn.vpn.countryFlag
 import com.leviknet.vpn.vpn.effectiveCategory
 import com.leviknet.vpn.vpn.isAllowlistMobileServer
 import com.leviknet.vpn.vpn.isMobileServer
@@ -1014,7 +1016,7 @@ private fun MainContent(
             AppTab.SERVERS -> ServersScreen(
                 modifier = contentModifier,
                 profile = state.profile,
-                selectedServerId = state.selectedServerId,
+                selectedServerId = displayedServerId(state),
                 connectionState = state.vpn.state,
                 loading = state.refreshing,
                 onServerSelected = onServerSelected,
@@ -1068,6 +1070,7 @@ private fun MainContent(
                 onRelinkAccount = onRelinkAccount,
                 onLogout = onLogout,
                 routingPreset = state.routingPreset,
+                lteRoutingActive = state.vpn.effectiveRoutingProfile == EffectiveRoutingProfile.LTE,
                 onOpenRoutingPreset = onOpenRoutingPreset,
                 antiDpiPreset = state.antiDpiPreset,
                 antiDpiEnabled = state.antiDpiEnabled,
@@ -1287,11 +1290,12 @@ private fun HomeScreen(
     onOpenAntiDpi: () -> Unit,
 ) {
     val selectedServer = state.profile?.servers?.firstOrNull {
-        it.id == state.selectedServerId
+        it.id == displayedServerId(state)
     }
     val isConnected = state.vpn.state == VpnConnectionState.CONNECTED
     val account = state.account
     val trialAvailable = account?.trial?.eligible == true
+    val lteRoutingActive = state.vpn.effectiveRoutingProfile == EffectiveRoutingProfile.LTE
 
     Column(
         modifier = modifier
@@ -1366,6 +1370,7 @@ private fun HomeScreen(
         ) {
             Surface(
                 onClick = onOpenRoutingPreset,
+                enabled = !lteRoutingActive,
                 shape = RoundedCornerShape(12.dp),
                 color = MaterialTheme.colorScheme.surface,
                 border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
@@ -1382,10 +1387,14 @@ private fun HomeScreen(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        text = when (state.routingPreset) {
-                            RoutingPreset.GLOBAL -> "Global"
-                            RoutingPreset.BYPASS_RU -> "Обход РФ"
-                            RoutingPreset.BLOCKED_ONLY -> "Anti-Block"
+                        text = if (lteRoutingActive) {
+                            "LTE"
+                        } else {
+                            when (state.routingPreset) {
+                                RoutingPreset.GLOBAL -> "Global"
+                                RoutingPreset.BYPASS_RU -> "Обход РФ"
+                                RoutingPreset.BLOCKED_ONLY -> "Anti-Block"
+                            }
                         },
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Medium,
@@ -1944,7 +1953,7 @@ private fun ServerSummaryCard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = flagEmoji(server?.countryCode),
+                    text = countryFlag(server?.countryCode),
                     fontSize = 32.sp,
                     modifier = Modifier.semantics {
                         contentDescription = flagDescriptionText
@@ -2249,13 +2258,6 @@ private fun formatRateNumber(bitsPerSecond: Double): String = when {
     bitsPerSecond >= 9.95 -> "%.0f".format(Locale.US, bitsPerSecond)
     bitsPerSecond >= 0.05 -> "%.1f".format(Locale.US, bitsPerSecond)
     else -> "0"
-}
-
-private fun flagEmoji(countryCode: String?): String {
-    val code = countryCode?.trim()?.uppercase(Locale.US).orEmpty()
-    if (code.length != 2 || !code.all { it in 'A'..'Z' } || code == "XX") return "🌐"
-    val codePoints = code.map { 0x1F1E6 + (it - 'A') }.toIntArray()
-    return String(codePoints, 0, codePoints.size)
 }
 
 private fun String.displayName(): String = removePrefix("🚀").trimStart().ifBlank { this }
@@ -2726,7 +2728,7 @@ private fun ServerItemCard(
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = flagEmoji(server.countryCode),
+                    text = countryFlag(server.countryCode),
                     fontSize = 28.sp,
                     modifier = Modifier.semantics {
                         contentDescription = flagDescriptionText
@@ -3291,6 +3293,7 @@ private fun ProfileScreen(
     onRelinkAccount: () -> Unit,
     onLogout: () -> Unit,
     routingPreset: RoutingPreset,
+    lteRoutingActive: Boolean,
     onOpenRoutingPreset: () -> Unit,
     antiDpiPreset: AntiDpiPreset,
     antiDpiEnabled: Boolean,
@@ -3749,7 +3752,7 @@ private fun ProfileScreen(
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(onClick = onOpenRoutingPreset),
+                    .clickable(enabled = !lteRoutingActive, onClick = onOpenRoutingPreset),
                 shape = RoundedCornerShape(18.dp),
                 color = MaterialTheme.colorScheme.surface,
                 border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
@@ -3767,7 +3770,7 @@ private fun ProfileScreen(
                         )
                         Spacer(Modifier.height(2.dp))
                         Text(
-                            text = routingPreset.titleRu,
+                            text = if (lteRoutingActive) "LTE" else routingPreset.titleRu,
                             color = LevikBlue,
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,

@@ -20,6 +20,7 @@ import com.leviknet.vpn.data.SessionStatus
 import com.leviknet.vpn.data.TrafficHistoryStore
 import com.leviknet.vpn.data.isActiveAt
 import com.leviknet.vpn.vpn.RussianRoutingData
+import com.leviknet.vpn.vpn.LteRoutingData
 import com.leviknet.vpn.vpn.VpnConnectionState
 import com.leviknet.vpn.vpn.VpnController
 import com.leviknet.vpn.vpn.WifiAutoConnectMonitor
@@ -50,6 +51,7 @@ class AppContainer(application: Application) {
     val secureStore = SecureFileStore(application)
     val settings = AppSettings(application)
     val russianRoutingData = RussianRoutingData(application)
+    val lteRoutingData = LteRoutingData(application)
     val xrayRuntime = XrayRuntime(json)
     val tunnelEngineRegistry = createTunnelEngineRegistry(
         xrayRuntime = xrayRuntime,
