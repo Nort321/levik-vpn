@@ -294,6 +294,11 @@ class AppViewModel(
             }
         }
         viewModelScope.launch {
+            settings.whitelistMapEnabled.collect { enabled ->
+                mutableState.update { it.copy(whitelistMapEnabled = enabled) }
+            }
+        }
+        viewModelScope.launch {
             settings.anonymousTelemetryEnabled.collect { enabled ->
                 mutableState.update { it.copy(anonymousTelemetryEnabled = enabled) }
             }
@@ -1848,6 +1853,16 @@ class AppViewModel(
         updateManager.dismiss()
     }
 
+    fun setWhitelistMapEnabled(enabled: Boolean) {
+        settings.setWhitelistMapEnabled(enabled)
+    }
+
+    fun openWhitelistMap() {
+        viewModelScope.launch {
+            effectChannel.send(AppEffect.OpenExternal("https://leviknet.com/whitelist-map"))
+        }
+    }
+
     fun setAnonymousTelemetryEnabled(enabled: Boolean) {
         settings.setAnonymousTelemetryEnabled(enabled)
         appContext?.let { CensorshipRadarWorker.configure(it, enabled) }
@@ -2126,6 +2141,7 @@ data class AppUiState(
     val customDirectDomains: Set<String> = emptySet(),
     val customProxyDomains: Set<String> = emptySet(),
     val anonymousTelemetryEnabled: Boolean = false,
+    val whitelistMapEnabled: Boolean = false,
     val serverSearchQuery: String = "",
     val serverFilter: ServerFilterType = ServerFilterType.ALL,
     val trafficHistory: List<DailyTraffic> = emptyList(),

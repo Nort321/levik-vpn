@@ -101,7 +101,7 @@ class WhitelistDetector(context: Context) {
     // activeNetwork points at the VPN while connected; enumeration is required to find
     // the underlying physical network and remains the compatible API on Android 8-16.
     @Suppress("DEPRECATION")
-    private fun directNetwork(): Network? {
+    internal fun directNetwork(): Network? {
         val active = connectivityManager.activeNetwork
         if (active != null) {
             val caps = connectivityManager.getNetworkCapabilities(active)
@@ -196,4 +196,3 @@ class WhitelistDetector(context: Context) {
         )
     }
 }
-

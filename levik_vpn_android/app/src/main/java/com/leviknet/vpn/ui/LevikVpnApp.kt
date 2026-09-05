@@ -265,6 +265,8 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     onAutoConnectBootChanged = viewModel::setAutoConnectOnBoot,
                     onAutoFallbackChanged = viewModel::setAutoFallbackServer,
                     onAnonymousTelemetryChanged = viewModel::setAnonymousTelemetryEnabled,
+                    onWhitelistMapChanged = viewModel::setWhitelistMapEnabled,
+                    onOpenWhitelistMap = viewModel::openWhitelistMap,
                     onShareReferralLink = viewModel::shareReferralLink,
                     onOpenPlans = { openDistributionPlans(viewModel) },
                     onCloseSubscriptionManagement = viewModel::closeSubscriptionManagement,
@@ -965,6 +967,8 @@ private fun MainContent(
     onAutoConnectBootChanged: (Boolean) -> Unit,
     onAutoFallbackChanged: (Boolean) -> Unit,
     onAnonymousTelemetryChanged: (Boolean) -> Unit,
+    onWhitelistMapChanged: (Boolean) -> Unit,
+    onOpenWhitelistMap: () -> Unit,
     onShareReferralLink: (String) -> Unit,
     onOpenPlans: () -> Unit,
     onCloseSubscriptionManagement: () -> Unit,
@@ -1097,6 +1101,9 @@ private fun MainContent(
                 autoFallbackServer = state.autoFallbackServer,
                 onAutoFallbackChanged = onAutoFallbackChanged,
                 anonymousTelemetryEnabled = state.anonymousTelemetryEnabled,
+                whitelistMapEnabled = state.whitelistMapEnabled,
+                onWhitelistMapChanged = onWhitelistMapChanged,
+                onOpenWhitelistMap = onOpenWhitelistMap,
                 onAnonymousTelemetryChanged = onAnonymousTelemetryChanged,
                 onShareReferralLink = onShareReferralLink,
                 onOpenPlans = onOpenPlans,
@@ -3314,6 +3321,9 @@ private fun ProfileScreen(
     autoFallbackServer: Boolean,
     onAutoFallbackChanged: (Boolean) -> Unit,
     anonymousTelemetryEnabled: Boolean,
+    whitelistMapEnabled: Boolean,
+    onWhitelistMapChanged: (Boolean) -> Unit,
+    onOpenWhitelistMap: () -> Unit,
     onAnonymousTelemetryChanged: (Boolean) -> Unit,
     onShareReferralLink: (String) -> Unit,
     onOpenPlans: () -> Unit,
@@ -3328,6 +3338,7 @@ private fun ProfileScreen(
         ?: activeSubscriptions.firstOrNull()
         ?: account?.subscriptions?.firstOrNull()
     val context = LocalContext.current
+    val whitelistMapTitle = stringResource(R.string.whitelist_map_title)
 
     Column(
         modifier = modifier
@@ -3590,6 +3601,33 @@ private fun ProfileScreen(
                     Switch(
                         checked = autoHealingEnabled,
                         onCheckedChange = onAutoHealingChanged,
+                        colors = LevikSwitchDefaults.colors(),
+                    )
+                }
+            }
+
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            ) {
+                Row(modifier = Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(stringResource(R.string.whitelist_map_title), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(4.dp))
+                        Text(stringResource(R.string.whitelist_map_description), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        TextButton(onClick = onOpenWhitelistMap) {
+                            Icon(painterResource(R.drawable.ic_region_map), contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(stringResource(R.string.whitelist_map_open))
+                        }
+                    }
+                    Spacer(Modifier.width(14.dp))
+                    Switch(
+                        checked = whitelistMapEnabled,
+                        onCheckedChange = onWhitelistMapChanged,
+                        modifier = Modifier.semantics { contentDescription = whitelistMapTitle },
                         colors = LevikSwitchDefaults.colors(),
                     )
                 }

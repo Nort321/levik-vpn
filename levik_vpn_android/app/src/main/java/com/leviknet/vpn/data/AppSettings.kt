@@ -313,6 +313,9 @@ class AppSettings(context: Context) {
     val favoriteServerIds: StateFlow<Set<String>> = mutableFavoriteServerIds.asStateFlow()
     val customDirectDomains: StateFlow<Set<String>> = mutableCustomDirectDomains.asStateFlow()
     val customProxyDomains: StateFlow<Set<String>> = mutableCustomProxyDomains.asStateFlow()
+    private val mutableWhitelistMapEnabled = MutableStateFlow(preferences.getBoolean(WHITELIST_MAP_ENABLED, false))
+    val whitelistMapEnabled: StateFlow<Boolean> = mutableWhitelistMapEnabled.asStateFlow()
+
     val anonymousTelemetryEnabled: StateFlow<Boolean> = mutableAnonymousTelemetryEnabled.asStateFlow()
     val pausedUntilMs: StateFlow<Long> = mutablePausedUntilMs.asStateFlow()
 
@@ -536,6 +539,11 @@ class AppSettings(context: Context) {
         mutableCustomProxyDomains.value = domains
     }
 
+    fun setWhitelistMapEnabled(enabled: Boolean) {
+        preferences.edit(commit = true) { putBoolean(WHITELIST_MAP_ENABLED, enabled) }
+        mutableWhitelistMapEnabled.value = enabled
+    }
+
     fun setAnonymousTelemetryEnabled(enabled: Boolean) {
         preferences.edit(commit = true) {
             putBoolean(ANONYMOUS_TELEMETRY_ENABLED, enabled)
@@ -598,6 +606,7 @@ class AppSettings(context: Context) {
         private const val FAVORITE_SERVER_IDS = "favorite_server_ids"
         private const val CUSTOM_DIRECT_DOMAINS = "custom_direct_domains"
         private const val CUSTOM_PROXY_DOMAINS = "custom_proxy_domains"
+        private const val WHITELIST_MAP_ENABLED = "whitelist_map_enabled"
         private const val ANONYMOUS_TELEMETRY_ENABLED = "anonymous_telemetry_enabled"
         private const val PAUSED_UNTIL_MS = "paused_until_ms"
     }

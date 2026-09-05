@@ -147,7 +147,7 @@ android {
         applicationId = "com.leviknet.vpn"
         minSdk = 26
         targetSdk = 36
-        versionCode = 49
+        versionCode = 50
         versionName = rootProject.version.toString()
 
         buildConfigField("String", "CABINET_BASE_URL", "\"${cabinetBaseUrl.trimEnd('/')}\"")

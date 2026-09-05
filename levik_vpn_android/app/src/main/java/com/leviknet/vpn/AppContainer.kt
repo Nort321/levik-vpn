@@ -5,6 +5,8 @@ import com.leviknet.vpn.core.network.AppAttestationPolicy
 import com.leviknet.vpn.core.network.CensorshipRadarWorker
 import com.leviknet.vpn.core.network.MobileApiClient
 import com.leviknet.vpn.core.network.RequestSigner
+import com.leviknet.vpn.core.network.WhitelistMapReporter
+import com.leviknet.vpn.core.network.WhitelistMapWorker
 import com.leviknet.vpn.core.network.WhitelistDetector
 import com.leviknet.vpn.core.network.createAppAttestationProvider
 import com.leviknet.vpn.core.security.DeviceIdentity
@@ -55,6 +57,7 @@ class AppContainer(application: Application) {
         appContext = application,
     )
     val whitelistDetector = WhitelistDetector(application)
+    val whitelistMapReporter = WhitelistMapReporter(application, settings)
 
     private val requestSigner = RequestSigner(deviceIdentity)
     private val attestationProvider = createAppAttestationProvider(
@@ -98,6 +101,12 @@ class AppContainer(application: Application) {
 
     init {
         wifiAutoConnectMonitor.start()
+        nativeCleanupScope.launch {
+            settings.whitelistMapEnabled.collect { enabled ->
+                WhitelistMapWorker.configure(application, enabled)
+                if (!enabled) whitelistMapReporter.clear()
+            }
+        }
         CensorshipRadarWorker.configure(
             application,
             settings.anonymousTelemetryEnabled.value,
