@@ -1,8 +1,9 @@
 # Anonymous regional observations
 
-The optional **Internet allowlist map** switch is off by default, separate from
-Censorship Radar. The adjacent link opens https://leviknet.com/whitelist-map
-without opting the user in. WorkManager performs a fresh check approximately
+The optional **Internet allowlist map** switch is on by default from 2.6.1, separate from
+Censorship Radar. Users can disable it at any time; an explicitly saved disabled
+setting is preserved on upgrade and restart. The adjacent link opens https://leviknet.com/whitelist-map
+without changing the reporting setting. WorkManager performs a fresh check approximately
 every 15 minutes; Android may defer background work to conserve battery.
 
 The reporter reuses WhitelistDetector on a physical non-VPN Network. A dedicated

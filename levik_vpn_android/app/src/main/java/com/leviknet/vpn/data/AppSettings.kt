@@ -313,7 +313,7 @@ class AppSettings(context: Context) {
     val favoriteServerIds: StateFlow<Set<String>> = mutableFavoriteServerIds.asStateFlow()
     val customDirectDomains: StateFlow<Set<String>> = mutableCustomDirectDomains.asStateFlow()
     val customProxyDomains: StateFlow<Set<String>> = mutableCustomProxyDomains.asStateFlow()
-    private val mutableWhitelistMapEnabled = MutableStateFlow(preferences.getBoolean(WHITELIST_MAP_ENABLED, false))
+    private val mutableWhitelistMapEnabled = MutableStateFlow(preferences.getBoolean(WHITELIST_MAP_ENABLED, true))
     val whitelistMapEnabled: StateFlow<Boolean> = mutableWhitelistMapEnabled.asStateFlow()
 
     val anonymousTelemetryEnabled: StateFlow<Boolean> = mutableAnonymousTelemetryEnabled.asStateFlow()

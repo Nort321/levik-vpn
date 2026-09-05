@@ -2141,7 +2141,7 @@ data class AppUiState(
     val customDirectDomains: Set<String> = emptySet(),
     val customProxyDomains: Set<String> = emptySet(),
     val anonymousTelemetryEnabled: Boolean = false,
-    val whitelistMapEnabled: Boolean = false,
+    val whitelistMapEnabled: Boolean = true,
     val serverSearchQuery: String = "",
     val serverFilter: ServerFilterType = ServerFilterType.ALL,
     val trafficHistory: List<DailyTraffic> = emptyList(),

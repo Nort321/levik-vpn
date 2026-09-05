@@ -435,6 +435,6 @@
     <string name="support_note_open_support">Open support</string>
     <string name="profile_local_never_expires">No expiration</string>
     <string name="whitelist_map_title">Internet allowlist map</string>
-    <string name="whitelist_map_description">Help build the regional map using fresh network checks about every 15 minutes. Your original IP estimates the region locally on our server; no GPS, account or device ID. IPs and individual reports are not stored in map logs or databases. Short-lived verification tags stay in memory for up to an hour. Only grouped regional results are published. Requests use some data and may bypass VPN to determine the region. Optional; off by default. Map and methodology: leviknet.com/whitelist-map.</string>
+    <string name="whitelist_map_description">Help build the regional map using fresh network checks about every 15 minutes. Your original IP estimates the region locally on our server; no GPS, account or device ID. IPs and individual reports are not stored in map logs or databases. Short-lived verification tags stay in memory for up to an hour. Only grouped regional results are published. Requests use some data and may bypass VPN to determine the region. Enabled by default; you can turn it off with this switch at any time. Map and methodology: leviknet.com/whitelist-map.</string>
     <string name="whitelist_map_open">Open map and methodology</string>
 </resources>
