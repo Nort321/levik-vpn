@@ -36,14 +36,18 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
+import kotlin.random.Random
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -54,6 +58,12 @@ class LevikVpnService : VpnService() {
     private val connectionMutex = Mutex()
     private val mobileEvaluationMutex = Mutex()
     private val mobileSwitchPolicy = MobileServerSwitchPolicy()
+    private val tunnelHealthPolicy = TunnelHealthPolicy(
+        requiredFailureRounds = AUTO_HEALING_FAILURE_ROUNDS,
+        networkGraceMs = AUTO_HEALING_NETWORK_GRACE_MS,
+        recoveryCooldownMs = AUTO_HEALING_RECOVERY_COOLDOWN_MS,
+        candidateBackoffMs = AUTO_HEALING_CANDIDATE_BACKOFF_MS,
+    )
     private val lifecycleGate = ReentrantLock()
     private val destroyed = AtomicBoolean(false)
     private val underlyingNetwork = AtomicReference<Network?>(null)
@@ -94,6 +104,8 @@ class LevikVpnService : VpnService() {
     private var mobileNetworkEvaluationJob: Job? = null
     private var automaticRollbackServerId: String? = null
     private var automaticTargetServerId: String? = null
+    @Volatile
+    private var pendingAutoFallback: PendingAutoFallback? = null
 
     private fun acquireWakeLock() {
         if (wakeLock?.isHeld == true) return
@@ -150,6 +162,8 @@ class LevikVpnService : VpnService() {
             ACTION_DISCONNECT -> {
                 automaticRollbackServerId = null
                 automaticTargetServerId = null
+                pendingAutoFallback = null
+                tunnelHealthPolicy.reset()
                 pauseJob?.cancel()
                 pauseJob = null
                 connectionJob?.cancel()
@@ -179,6 +193,8 @@ class LevikVpnService : VpnService() {
                 if (newServerId != null) {
                     automaticRollbackServerId = null
                     automaticTargetServerId = null
+                    pendingAutoFallback = null
+                    tunnelHealthPolicy.reset()
                     container.secureStore.put(SecureFileStore.SELECTED_SERVER, newServerId.encodeToByteArray())
                 }
                 connectionJob?.cancel()
@@ -249,6 +265,8 @@ class LevikVpnService : VpnService() {
         val cleanup = lifecycleGate.withLock {
             destroyed.set(true)
             lockdownActive = false
+            pendingAutoFallback = null
+            tunnelHealthPolicy.reset()
             pauseJob?.cancel()
             pauseJob = null
             connectionJob?.cancel()
@@ -295,6 +313,8 @@ class LevikVpnService : VpnService() {
 
     private suspend fun connect(): Unit = connectionMutex.withLock connection@{
         if (destroyed.get()) return@connection
+        val fallbackAttempt = pendingAutoFallback
+        var attemptedServerId: String? = null
         if (lockdownActive) {
             // A fresh connect attempt always replaces the Kill Switch lockdown TUN.
             lockdownActive = false
@@ -315,10 +335,16 @@ class LevikVpnService : VpnService() {
                     "Subscription has expired"
                 }
             }
-            val selectedId = readSelectedServerId()
-            val selected = profile.servers.firstOrNull { it.id == selectedId }
-                ?: profile.servers.firstOrNull(TunnelServer::isEligibleForAutomaticSelection)
-                ?: error("Tunnel profile has no server eligible for automatic selection")
+            val selectedId = fallbackAttempt?.targetServerId ?: readSelectedServerId()
+            attemptedServerId = selectedId
+            val selected = if (fallbackAttempt != null) {
+                profile.servers.firstOrNull { it.id == selectedId }
+                    ?: error("Auto-failover server is no longer present in the tunnel profile")
+            } else {
+                profile.servers.firstOrNull { it.id == selectedId }
+                    ?: profile.servers.firstOrNull(TunnelServer::isEligibleForAutomaticSelection)
+                    ?: error("Tunnel profile has no server eligible for automatic selection")
+            }
             val connectionExpiresAt = selected.relayConfig?.bootstrap?.expiresAt
                 ?.also { value ->
                     require(Instant.parse(value).isAfter(Instant.now())) {
@@ -493,6 +519,7 @@ class LevikVpnService : VpnService() {
             )
             checkConnectionDeadline(connectionExpiryDeadline)
             coreRunning = true
+            tunnelHealthPolicy.onTunnelStarted(SystemClock.elapsedRealtime())
             if (automaticTargetServerId == selected.id) {
                 automaticRollbackServerId = null
                 automaticTargetServerId = null
@@ -532,6 +559,38 @@ class LevikVpnService : VpnService() {
         } catch (error: Throwable) {
             stopCoreAndTun()
             AppLogger.e(LOG_TAG, "VPN startup failed", error)
+            val failedFallback = fallbackAttempt?.takeIf { attempt ->
+                attempt.targetServerId == attemptedServerId &&
+                    pendingAutoFallback?.targetServerId == attempt.targetServerId
+            }
+            if (failedFallback != null) {
+                pendingAutoFallback = null
+                tunnelHealthPolicy.markCandidateFailed(
+                    failedFallback.targetServerId,
+                    SystemClock.elapsedRealtime(),
+                )
+                runCatching {
+                    container.secureStore.put(
+                        SecureFileStore.SELECTED_SERVER,
+                        failedFallback.sourceServerId.encodeToByteArray(),
+                    )
+                }.onFailure { restoreError ->
+                    AppLogger.e(LOG_TAG, "Failed to restore server after auto-failover startup failure", restoreError)
+                }
+                AppLogger.w(
+                    LOG_TAG,
+                    "Auto-failover candidate failed during startup; returning to previous server",
+                )
+                VpnStateStore.update(coreOwner) {
+                    it.copy(state = VpnConnectionState.RECONNECTING, failure = null)
+                }
+                showForeground(VpnConnectionState.RECONNECTING, null)
+                connectionJob = serviceScope.launch {
+                    delay(AUTOMATIC_SWITCH_ROLLBACK_DELAY_MS)
+                    connect()
+                }
+                return@connection
+            }
             val rollbackServerId = automaticRollbackServerId
                 ?.takeIf { automaticTargetServerId == readSelectedServerId() }
             if (rollbackServerId != null) {
@@ -678,6 +737,12 @@ class LevikVpnService : VpnService() {
         val splitPackages = container.settings.splitTunnelPackages.value
         val allowPerAppBypass = currentServer?.effectiveRoutingProfile() !=
             EffectiveRoutingProfile.LTE
+        val effectiveSplitMode = splitMode.takeIf { allowPerAppBypass } ?: SplitTunnelMode.OFF
+        val effectiveSplitPackages = splitTunnelPackagesForBuilder(
+            mode = effectiveSplitMode,
+            configuredPackages = splitPackages,
+            vpnPackageName = packageName,
+        )
 
         return Builder()
             .setSession(getString(R.string.vpn_session_name, serverName))
@@ -695,15 +760,15 @@ class LevikVpnService : VpnService() {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     setMetered(false)
                 }
-                when (splitMode.takeIf { allowPerAppBypass } ?: SplitTunnelMode.OFF) {
+                when (effectiveSplitMode) {
                     SplitTunnelMode.DISALLOWED -> {
-                        splitPackages.forEach { pkg ->
+                        effectiveSplitPackages.forEach { pkg ->
                             runCatching { addDisallowedApplication(pkg) }
                         }
                     }
                     SplitTunnelMode.ALLOWED -> {
-                        if (splitPackages.isNotEmpty()) {
-                            splitPackages.forEach { pkg ->
+                        if (effectiveSplitPackages.isNotEmpty()) {
+                            effectiveSplitPackages.forEach { pkg ->
                                 runCatching { addAllowedApplication(pkg) }
                             }
                         }
@@ -903,6 +968,7 @@ class LevikVpnService : VpnService() {
                 if (!setUnderlyingNetworks(arrayOf(network))) return@withLock
                 currentNetwork = network
                 underlyingNetwork.set(network)
+                tunnelHealthPolicy.onUnderlyingNetworkChanged(SystemClock.elapsedRealtime())
                 AppLogger.i(LOG_TAG, "Underlying network changed, triggering seamless reconnect")
                 scheduleReconnectLocked()
             }
@@ -921,12 +987,14 @@ class LevikVpnService : VpnService() {
                 if (replacement != null && setUnderlyingNetworks(arrayOf(replacement))) {
                     currentNetwork = replacement
                     underlyingNetwork.set(replacement)
+                    tunnelHealthPolicy.onUnderlyingNetworkChanged(SystemClock.elapsedRealtime())
                     AppLogger.i(LOG_TAG, "Underlying network lost, switched to fallback network")
                     scheduleReconnectLocked()
                     return@withLock
                 }
                 currentNetwork = null
                 underlyingNetwork.set(null)
+                tunnelHealthPolicy.onUnderlyingNetworkChanged(SystemClock.elapsedRealtime())
                 reconnectJob?.cancel()
                 reconnectJob = null
                 VpnStateStore.update(coreOwner) { state ->
@@ -1346,21 +1414,44 @@ class LevikVpnService : VpnService() {
         autoHealingJob?.cancel()
         if (!container.settings.autoHealingEnabled.value) return
         autoHealingJob = serviceScope.launch {
-            var consecutiveFailures = 0
             while (coreRunning) {
-                delay(AUTO_HEALING_INTERVAL_MS)
+                delay(
+                    Random.nextLong(
+                        AUTO_HEALING_MIN_INTERVAL_MS,
+                        AUTO_HEALING_MAX_INTERVAL_MS + 1,
+                    ),
+                )
                 if (!coreRunning) break
-                val isAlive = checkConnectivity()
-                if (isAlive) {
-                    consecutiveFailures = 0
-                } else {
-                    consecutiveFailures++
-                    AppLogger.w(LOG_TAG, "Auto-healing health check failed ($consecutiveFailures/2)")
-                    if (consecutiveFailures >= 2) {
-                        consecutiveFailures = 0
-                        val fallbackSuccess = tryAutoFallback()
+                val probe = checkConnectivity()
+                val nowMs = SystemClock.elapsedRealtime()
+                val decision = tunnelHealthPolicy.evaluateProbe(probe.isAlive, nowMs)
+                when (decision.assessment) {
+                    TunnelHealthAssessment.HEALTHY -> finalizePendingAutoFallback()
+                    TunnelHealthAssessment.GRACE_PERIOD -> {
+                        AppLogger.d(LOG_TAG, "Ignoring tunnel health failure during network grace period")
+                    }
+                    TunnelHealthAssessment.DEGRADED -> {
+                        AppLogger.w(
+                            LOG_TAG,
+                            "Auto-healing health check failed " +
+                                "(${decision.consecutiveFailures}/$AUTO_HEALING_FAILURE_ROUNDS): " +
+                                probe.failureSummary(),
+                        )
+                    }
+                    TunnelHealthAssessment.UNHEALTHY -> {
+                        AppLogger.w(
+                            LOG_TAG,
+                            "Tunnel health checks failed across all endpoints: ${probe.failureSummary()}",
+                        )
+                        if (rollbackPendingAutoFallback(nowMs)) continue
+                        if (!tunnelHealthPolicy.canStartRecovery(nowMs)) {
+                            AppLogger.w(LOG_TAG, "Auto-healing recovery suppressed by cooldown")
+                            continue
+                        }
+                        val fallbackSuccess = tryAutoFallback(nowMs)
                         if (!fallbackSuccess) {
-                            AppLogger.w(LOG_TAG, "Triggering auto-healing reconnect for stalled tunnel")
+                            tunnelHealthPolicy.recordRecovery(nowMs)
+                            AppLogger.w(LOG_TAG, "No validated fallback available; reconnecting current server")
                             scheduleReconnect()
                         }
                     }
@@ -1369,32 +1460,46 @@ class LevikVpnService : VpnService() {
         }
     }
 
-    private suspend fun tryAutoFallback(): Boolean {
+    private suspend fun tryAutoFallback(nowMs: Long): Boolean {
         if (!container.settings.autoFallbackServer.value) return false
         if (currentServer?.isMobileServer() == true) return false
         val profile = runCatching { readPreparedProfile() }.getOrNull() ?: return false
         if (profile.servers.size <= 1) return false
 
-        val currentId = readSelectedServerId() ?: profile.servers.firstOrNull()?.id ?: return false
+        val currentId = currentServer?.id ?: readSelectedServerId()
+            ?: profile.servers.firstOrNull()?.id
+            ?: return false
         val candidates = profile.servers.filter { server ->
             server.id != currentId &&
                 server.isEligibleForAutomaticSelection() &&
-                !server.isMobileServer()
+                !server.isMobileServer() &&
+                tunnelHealthPolicy.isCandidateEligible(server.id, nowMs)
         }
         if (candidates.isEmpty()) return false
 
         AppLogger.i(LOG_TAG, "Current server seems stalled, testing ${candidates.size} fallback servers")
-        var targetServer = candidates.first()
-        val alive = candidates.mapNotNull { s ->
-            val p = runCatching { ServerPinger.measure(s) }.getOrNull()
-            if (p != null) s to p else null
+        val alive = supervisorScope {
+            candidates.map { server ->
+                async(Dispatchers.IO) {
+                    server to runCatching { ServerPinger.measure(server) }.getOrNull()
+                }
+            }.awaitAll().mapNotNull { (server, latencyMs) ->
+                latencyMs?.let { server to it }
+            }
         }
-        if (alive.isNotEmpty()) {
-            targetServer = alive.minByOrNull { it.second }?.first ?: targetServer
+        val targetServer = alive.minByOrNull { it.second }?.first
+        if (targetServer == null) {
+            AppLogger.w(LOG_TAG, "No fallback server passed the underlying-network reachability check")
+            return false
         }
 
-        AppLogger.i(LOG_TAG, "Auto-failover selected a responsive server")
-        container.secureStore.put(SecureFileStore.SELECTED_SERVER, targetServer.id.encodeToByteArray())
+        pendingAutoFallback = PendingAutoFallback(
+            sourceServerId = currentId,
+            targetServerId = targetServer.id,
+        )
+        tunnelHealthPolicy.markCandidateFailed(currentId, nowMs)
+        tunnelHealthPolicy.recordRecovery(nowMs)
+        AppLogger.i(LOG_TAG, "Auto-failover selected a reachable candidate; tunnel validation pending")
 
         connectionJob?.cancel()
         connectionJob = serviceScope.launch {
@@ -1404,7 +1509,52 @@ class LevikVpnService : VpnService() {
         return true
     }
 
+    private fun finalizePendingAutoFallback() {
+        val pending = pendingAutoFallback ?: return
+        if (currentServer?.id != pending.targetServerId) return
+        runCatching {
+            container.secureStore.put(
+                SecureFileStore.SELECTED_SERVER,
+                pending.targetServerId.encodeToByteArray(),
+            )
+        }.onSuccess {
+            pendingAutoFallback = null
+            tunnelHealthPolicy.markCandidateHealthy(pending.targetServerId)
+            AppLogger.i(LOG_TAG, "Auto-failover tunnel validated; server selection committed")
+        }.onFailure { error ->
+            AppLogger.e(LOG_TAG, "Failed to persist validated auto-failover server", error)
+        }
+    }
+
+    private fun rollbackPendingAutoFallback(nowMs: Long): Boolean {
+        val pending = pendingAutoFallback ?: return false
+        if (currentServer?.id != pending.targetServerId) {
+            pendingAutoFallback = null
+            return false
+        }
+        pendingAutoFallback = null
+        tunnelHealthPolicy.markCandidateFailed(pending.targetServerId, nowMs)
+        tunnelHealthPolicy.recordRecovery(nowMs)
+        runCatching {
+            container.secureStore.put(
+                SecureFileStore.SELECTED_SERVER,
+                pending.sourceServerId.encodeToByteArray(),
+            )
+        }.onFailure { error ->
+            AppLogger.e(LOG_TAG, "Failed to restore server after auto-failover validation failure", error)
+        }
+        AppLogger.w(LOG_TAG, "Auto-failover candidate failed tunnel validation; rolling back")
+        connectionJob?.cancel()
+        connectionJob = serviceScope.launch {
+            stopConnection(stopService = false)
+            connect()
+        }
+        return true
+    }
+
     private suspend fun pauseConnection(minutes: Int) = connectionMutex.withLock {
+        pendingAutoFallback = null
+        tunnelHealthPolicy.reset()
         pauseJob?.cancel()
         connectionJob?.cancel()
         reconnectJob?.cancel()
@@ -1485,21 +1635,49 @@ class LevikVpnService : VpnService() {
         }
     }
 
-    private suspend fun checkConnectivity(): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val url = URL("https://1.1.1.1/cdn-cgi/trace")
-            val conn = (url.openConnection() as HttpURLConnection).apply {
-                connectTimeout = 4000
-                readTimeout = 4000
-                useCaches = false
-                requestMethod = "GET"
-            }
-            conn.inputStream.use { it.read() }
-            conn.disconnect()
-            true
-        } catch (_: Exception) {
-            false
+    private suspend fun checkConnectivity(): TunnelProbeResult = withContext(Dispatchers.IO) {
+        val observations = mutableListOf<TunnelProbeObservation>()
+        for (endpoint in HEALTH_CHECK_ENDPOINTS.shuffled()) {
+            val observation = probeEndpoint(endpoint)
+            observations += observation
+            if (observation.success) break
         }
+        TunnelProbeResult(observations)
+    }
+
+    private fun probeEndpoint(endpoint: HealthCheckEndpoint): TunnelProbeObservation {
+        var connection: HttpURLConnection? = null
+        return try {
+            connection = (URL(endpoint.url).openConnection() as HttpURLConnection).apply {
+                connectTimeout = HEALTH_CHECK_TIMEOUT_MS
+                readTimeout = HEALTH_CHECK_TIMEOUT_MS
+                useCaches = false
+                instanceFollowRedirects = false
+                requestMethod = "GET"
+                setRequestProperty("Cache-Control", "no-cache")
+            }
+            val status = connection.responseCode
+            if (status in 100..599) {
+                TunnelProbeObservation(endpoint.name, success = true)
+            } else {
+                TunnelProbeObservation(endpoint.name, success = false, failure = "http_$status")
+            }
+        } catch (error: Exception) {
+            TunnelProbeObservation(
+                endpoint = endpoint.name,
+                success = false,
+                failure = probeFailureCode(error),
+            )
+        } finally {
+            connection?.disconnect()
+        }
+    }
+
+    private fun probeFailureCode(error: Exception): String = when (error) {
+        is java.net.SocketTimeoutException -> "timeout"
+        is java.net.UnknownHostException -> "dns"
+        is javax.net.ssl.SSLException -> "tls"
+        else -> error.javaClass.simpleName.take(32).ifBlank { "network" }
     }
 
     private fun startStats() {
@@ -1701,6 +1879,37 @@ class LevikVpnService : VpnService() {
         return builder.build()
     }
 
+    private data class PendingAutoFallback(
+        val sourceServerId: String,
+        val targetServerId: String,
+    )
+
+    private data class HealthCheckEndpoint(
+        val name: String,
+        val url: String,
+    )
+
+    private data class TunnelProbeObservation(
+        val endpoint: String,
+        val success: Boolean,
+        val failure: String? = null,
+    )
+
+    private data class TunnelProbeResult(
+        val observations: List<TunnelProbeObservation>,
+    ) {
+        val isAlive: Boolean = observations.any(TunnelProbeObservation::success)
+
+        fun failureSummary(): String = observations
+            .asSequence()
+            .filterNot(TunnelProbeObservation::success)
+            .joinToString(separator = ", ") { observation ->
+                "${observation.endpoint}:${observation.failure ?: "failed"}"
+            }
+            .take(MAX_HEALTH_FAILURE_SUMMARY_LENGTH)
+            .ifBlank { "no endpoint returned a valid response" }
+    }
+
     companion object {
         const val ACTION_CONNECT = "com.leviknet.vpn.action.CONNECT"
         const val ACTION_DISCONNECT = "com.leviknet.vpn.action.DISCONNECT"
@@ -1726,13 +1935,25 @@ class LevikVpnService : VpnService() {
         private const val MOBILE_AUTOMATION_INTERVAL_MS = 30_000L
         private const val AUTOMATIC_SWITCH_ROLLBACK_DELAY_MS = 1_000L
         private const val STATS_INTERVAL_MS = 1_000L
-        private const val AUTO_HEALING_INTERVAL_MS = 30_000L
+        private const val AUTO_HEALING_MIN_INTERVAL_MS = 25_000L
+        private const val AUTO_HEALING_MAX_INTERVAL_MS = 45_000L
+        private const val AUTO_HEALING_FAILURE_ROUNDS = 3
+        private const val AUTO_HEALING_NETWORK_GRACE_MS = 20_000L
+        private const val AUTO_HEALING_RECOVERY_COOLDOWN_MS = 5 * 60_000L
+        private const val AUTO_HEALING_CANDIDATE_BACKOFF_MS = 15 * 60_000L
+        private const val HEALTH_CHECK_TIMEOUT_MS = 4_000
+        private const val MAX_HEALTH_FAILURE_SUMMARY_LENGTH = 220
         private const val RELAY_ENTITLEMENT_WATCHDOG_INTERVAL_MS = 120_000L
         private const val WAKELOCK_TIMEOUT_MS = 24 * 60 * 60 * 1000L
         private const val MAX_FAILURE_DETAIL_LENGTH = 300
         private const val TUN_MTU = 1500
         private const val TUN_IPV4_ADDRESS = "172.30.0.2"
         private const val TUN_IPV4_PREFIX = 30
+        private val HEALTH_CHECK_ENDPOINTS = listOf(
+            HealthCheckEndpoint("cloudflare", "https://1.1.1.1/cdn-cgi/trace"),
+            HealthCheckEndpoint("google", "https://www.gstatic.com/generate_204"),
+            HealthCheckEndpoint("apple", "https://captive.apple.com/hotspot-detect.html"),
+        )
         private const val TUN_IPV6_ADDRESS = "2600:1900:4000:5255::2"
         private const val TUN_IPV6_PREFIX = 64
         private val CONSENT_VALUE = "accepted-v1".encodeToByteArray()
