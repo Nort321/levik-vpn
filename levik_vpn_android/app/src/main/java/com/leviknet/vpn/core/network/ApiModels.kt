@@ -153,6 +153,7 @@ data class DeviceSummary(
 data class DeviceItem(
     val id: String,
     val label: String,
+    val client: String? = null,
 )
 
 @Serializable
@@ -320,6 +321,15 @@ data class ApiFailureResponse(
 data class ApiFailure(
     val code: String,
     val retryable: Boolean,
+    val details: ApiProblemDetails? = null,
+)
+
+@Serializable
+data class ApiProblemDetails(
+    val subscriptionId: String? = null,
+    val component: String? = null,
+    val used: Int? = null,
+    val limit: Int? = null,
 )
 
 @Serializable
@@ -414,7 +424,12 @@ enum class LoginState {
 sealed class ApiException(message: String, cause: Throwable? = null) : Exception(message, cause) {
     class Network(cause: Throwable) : ApiException("Network request failed", cause)
     class Unauthorized : ApiException("Session is not authorized")
-    class Rejected(val code: String, val retryable: Boolean, val status: Int) :
+    class Rejected(
+        val code: String,
+        val retryable: Boolean,
+        val status: Int,
+        val details: ApiProblemDetails? = null,
+    ) :
         ApiException("API rejected the request: $code")
 
     class InvalidResponse(message: String, cause: Throwable? = null) :

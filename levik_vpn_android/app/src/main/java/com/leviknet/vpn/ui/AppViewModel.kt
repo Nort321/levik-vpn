@@ -158,6 +158,9 @@ class AppViewModel(
                         uploadBps = vpn.uploadBytesPerSecond,
                     )).takeLast(30)
                     val withVpn = current.copy(
+                        problem = if (vpn.failure != null &&
+                            (current.vpn.failure != vpn.failure || current.vpn.state != vpn.state)
+                        ) vpn.failure.asProblem() else current.problem,
                         vpn = vpn,
                         liveSpeedHistory = newHistory,
                         whitelistMode = vpn.whitelistMode.takeUnless {
@@ -347,7 +350,7 @@ class AppViewModel(
                     }
                 } catch (error: Throwable) {
                     syncCachedProfile()
-                    mutableState.update { it.copy(message = error.toUiMessage()) }
+                    mutableState.update { it.copy(problem = error.toAppProblem()) }
                 }
             } else {
                 val profile = syncCachedProfile()
@@ -399,6 +402,7 @@ class AppViewModel(
 
             mutableState.update { it.copy(refreshing = true, message = null) }
             var lastError: Throwable? = null
+            var failedSubscriptionId: String? = null
             var success = false
 
             for (subscription in orderedSubs) {
@@ -416,11 +420,12 @@ class AppViewModel(
                 } catch (error: Throwable) {
                     AppLogger.w("AppViewModel", "Subscription profile failed to load: ${error.message}")
                     lastError = error
+                    failedSubscriptionId = subscription.uuid
                 }
             }
 
             if (!success && lastError != null) {
-                mutableState.update { it.copy(message = lastError.toUiMessage()) }
+                mutableState.update { it.copy(problem = lastError.toAppProblem(ProblemOperation.SERVERS, failedSubscriptionId)) }
             }
             mutableState.update { it.copy(refreshing = false) }
         }
@@ -463,7 +468,7 @@ class AppViewModel(
                 startOnboardingAction(action)
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
-                mutableState.update { it.copy(message = error.toUiMessage()) }
+                mutableState.update { it.copy(problem = error.toAppProblem(ProblemOperation.LOGIN)) }
             }
         }
     }
@@ -511,7 +516,7 @@ class AppViewModel(
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
                 mutableState.update {
-                    it.copy(login = LoginUiState.Idle, message = error.toUiMessage())
+                    it.copy(login = LoginUiState.Idle, problem = error.toAppProblem(ProblemOperation.LOGIN))
                 }
                 pendingOnboardingAction = null
             }
@@ -536,7 +541,7 @@ class AppViewModel(
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
                 mutableState.update {
-                    it.copy(login = LoginUiState.Idle, message = error.toUiMessage())
+                    it.copy(login = LoginUiState.Idle, problem = error.toAppProblem(ProblemOperation.LOGIN))
                 }
             }
         }
@@ -564,7 +569,7 @@ class AppViewModel(
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
                 mutableState.update {
-                    it.copy(login = LoginUiState.Idle, message = error.toUiMessage())
+                    it.copy(login = LoginUiState.Idle, problem = error.toAppProblem(ProblemOperation.LOGIN))
                 }
             }
         }
@@ -584,7 +589,7 @@ class AppViewModel(
                 mutableState.update {
                     it.copy(
                         showAppDataDisclosure = false,
-                        message = error.toUiMessage(),
+                        problem = error.toAppProblem(ProblemOperation.LOGIN),
                     )
                 }
             }
@@ -688,7 +693,7 @@ class AppViewModel(
                 repository.setSubscriptionShield(subscriptionId, enabled)
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
-                mutableState.update { it.copy(message = error.toUiMessage()) }
+                mutableState.update { it.copy(problem = error.toAppProblem()) }
             } finally {
                 mutableState.update { it.copy(refreshing = false) }
             }
@@ -716,7 +721,7 @@ class AppViewModel(
                 mutableState.update { it.copy(purchaseCatalog = catalog) }
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
-                mutableState.update { it.copy(message = error.toUiMessage()) }
+                mutableState.update { it.copy(problem = error.toAppProblem(ProblemOperation.PURCHASE)) }
             } finally {
                 mutableState.update { it.copy(purchaseLoading = false) }
             }
@@ -752,7 +757,7 @@ class AppViewModel(
                 effectChannel.send(AppEffect.OpenPayment(paymentUrl))
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
-                mutableState.update { it.copy(message = error.toUiMessage()) }
+                mutableState.update { it.copy(problem = error.toAppProblem(ProblemOperation.PURCHASE)) }
             } finally {
                 mutableState.update { it.copy(purchaseLoading = false) }
             }
@@ -768,7 +773,7 @@ class AppViewModel(
                 effectChannel.send(AppEffect.OpenPayment(paymentUrl))
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
-                mutableState.update { it.copy(message = error.toUiMessage()) }
+                mutableState.update { it.copy(problem = error.toAppProblem(ProblemOperation.PURCHASE)) }
             } finally {
                 mutableState.update { it.copy(purchaseLoading = false) }
             }
@@ -812,7 +817,7 @@ class AppViewModel(
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
                 if (showErrors) {
-                    mutableState.update { it.copy(message = error.toUiMessage()) }
+                    mutableState.update { it.copy(problem = error.toAppProblem()) }
                 }
             } finally {
                 mutableState.update { it.copy(refreshing = false) }
@@ -838,6 +843,7 @@ class AppViewModel(
     private fun prepareConnection(
         allowLteWithoutWhitelist: Boolean = false,
         attemptAllowlistConnection: Boolean = false,
+        subscriptionId: String? = null,
     ) {
         if (mutableState.value.refreshing) return
         viewModelScope.launch {
@@ -847,7 +853,7 @@ class AppViewModel(
             val subscription = account?.let {
                 activeSubscription(
                     it,
-                    preferredSubscriptionId = settings.selectedSubscriptionId.value
+                    preferredSubscriptionId = subscriptionId ?: settings.selectedSubscriptionId.value
                         ?: cached?.subscriptionId,
                 )
             }
@@ -889,12 +895,13 @@ class AppViewModel(
                             }
                         } catch (error: Throwable) {
                             if (error is CancellationException) throw error
-                            if (reusableCached == null) throw error
+                            if (reusableCached == null || !com.leviknet.vpn.data.canUseCachedProfileAfter(error)) throw error
                             profileRefreshPending = true
                             reusableCached
                         }
                     }
                 }
+                ensureSelectedSubscription(profile.subscriptionId)
                 val selected = selectServerForProfile(profile)
                 mutableState.update {
                     it.copy(profile = profile, selectedServerId = selected)
@@ -929,7 +936,7 @@ class AppViewModel(
                     mutableState.update { it.copy(showVpnDisclosure = true) }
                 }
             } catch (error: Throwable) {
-                mutableState.update { it.copy(message = error.toUiMessage()) }
+                mutableState.update { it.copy(problem = error.toAppProblem(ProblemOperation.CONNECT, subscription?.uuid)) }
             } finally {
                 mutableState.update { it.copy(refreshing = false) }
             }
@@ -949,7 +956,7 @@ class AppViewModel(
                 mutableState.update {
                     it.copy(
                         showVpnDisclosure = false,
-                        message = error.toUiMessage(),
+                        problem = error.toAppProblem(),
                     )
                 }
             }
@@ -981,7 +988,7 @@ class AppViewModel(
         viewModelScope.launch {
             runCatching { vpnController.connect() }
                 .onFailure { error ->
-                    mutableState.update { it.copy(message = error.toUiMessage()) }
+                    mutableState.update { it.copy(problem = error.toAppProblem()) }
                 }
         }
     }
@@ -1027,7 +1034,7 @@ class AppViewModel(
                     }
                 }
                 .onFailure { error ->
-                    mutableState.update { it.copy(message = error.toUiMessage()) }
+                    mutableState.update { it.copy(problem = error.toAppProblem()) }
                 }
         }
     }
@@ -1077,7 +1084,7 @@ class AppViewModel(
                 }
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
-                mutableState.update { it.copy(message = error.toUiMessage()) }
+                mutableState.update { it.copy(problem = error.toAppProblem()) }
             } finally {
                 mutableState.update { it.copy(refreshing = false) }
             }
@@ -1107,7 +1114,7 @@ class AppViewModel(
                 }
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
-                mutableState.update { it.copy(message = error.toUiMessage()) }
+                mutableState.update { it.copy(problem = error.toAppProblem(ProblemOperation.SELECT_SUBSCRIPTION, subscription.uuid)) }
             } finally {
                 mutableState.update { it.copy(refreshing = false) }
             }
@@ -1243,7 +1250,7 @@ class AppViewModel(
                     )
                 }
             } catch (error: Throwable) {
-                mutableState.update { it.copy(message = error.toUiMessage()) }
+                mutableState.update { it.copy(problem = error.toAppProblem()) }
             } finally {
                 mutableState.update { it.copy(refreshing = false) }
             }
@@ -1279,6 +1286,32 @@ class AppViewModel(
 
     fun clearMessage() {
         mutableState.update { it.copy(message = null) }
+    }
+
+    fun dismissProblem() {
+        mutableState.update { it.copy(problem = null, message = null) }
+    }
+
+    fun retryProblem(problem: AppProblem) {
+        dismissProblem()
+        if (problem.reason == ProblemReason.PROFILE) {
+            refreshAccount()
+            return
+        }
+        when (problem.operation) {
+            ProblemOperation.CONNECT -> {
+                if (mutableState.value.vpn.state in setOf(
+                        VpnConnectionState.DISCONNECTED, VpnConnectionState.ERROR, VpnConnectionState.LOCKDOWN,
+                    )
+                ) prepareConnection(subscriptionId = problem.subscriptionId)
+            }
+            ProblemOperation.SERVERS -> loadServers()
+            ProblemOperation.SELECT_SUBSCRIPTION -> problem.subscriptionId?.let(::selectSubscription)
+            ProblemOperation.LOGIN -> retryLogin()
+            ProblemOperation.PURCHASE -> refreshSubscriptionManagement()
+            ProblemOperation.ACCOUNT -> refreshAccount()
+            ProblemOperation.DEVICES -> refreshDevices()
+        }
     }
 
     private suspend fun pollChallenge(
@@ -1770,15 +1803,31 @@ class AppViewModel(
         }
     }
 
+    fun refreshDevices() {
+        if (mutableState.value.refreshing) return
+        viewModelScope.launch {
+            mutableState.update { it.copy(refreshing = true) }
+            try {
+                repository.refreshAccount()
+            } catch (error: Throwable) {
+                mutableState.update { it.copy(problem = error.toAppProblem(ProblemOperation.DEVICES)) }
+            } finally {
+                mutableState.update { it.copy(refreshing = false) }
+            }
+        }
+    }
+
     fun revokeDevice(subscriptionId: String, deviceId: String) {
+        if (mutableState.value.refreshing) return
         viewModelScope.launch {
             mutableState.update { it.copy(refreshing = true) }
             try {
                 repository.revokeDevice(subscriptionId, deviceId)
                 mutableState.update { it.copy(refreshing = false, message = UiMessage.DEVICE_REVOKED_SUCCESS) }
             } catch (e: Exception) {
-                AppLogger.e("AppViewModel", "Failed to revoke device: ${e.message}", e)
-                mutableState.update { it.copy(refreshing = false, message = UiMessage.DEVICE_REVOKE_FAILED) }
+                if (e is CancellationException) throw e
+                AppLogger.w("AppViewModel", "Failed to revoke device")
+                mutableState.update { it.copy(refreshing = false, problem = e.toAppProblem(ProblemOperation.DEVICES, subscriptionId)) }
             }
         }
     }
@@ -1942,24 +1991,6 @@ class AppViewModel(
     ): SubscriptionSummary? {
         val active = account.subscriptions.filter { it.isActiveAt(Instant.now()) }
         return active.firstOrNull { it.uuid == preferredSubscriptionId } ?: active.firstOrNull()
-    }
-
-    private fun Throwable.toUiMessage(): UiMessage = when (this) {
-        is ApiException.AttestationUnavailable -> UiMessage.ATTESTATION_UNAVAILABLE
-        is ApiException.Unauthorized -> UiMessage.SESSION_EXPIRED
-        is ApiException.Rejected -> when (code) {
-            "device_limit_reached" -> UiMessage.DEVICE_LIMIT_REACHED
-            "subscription_not_found" -> UiMessage.SUBSCRIPTION_REQUIRED
-            "profile_rate_limited", "rate_limited" -> UiMessage.RATE_LIMITED
-            "profile_upstream_unavailable", "profile_unavailable" -> UiMessage.PROFILE_UNAVAILABLE
-            "login_denied" -> UiMessage.LOGIN_DENIED
-            "payment_not_available", "order_payment_unavailable", "payment_url_unavailable" ->
-                UiMessage.PAYMENT_NOT_AVAILABLE
-            "order_already_in_progress" -> UiMessage.PAYMENT_ALREADY_PENDING
-            else -> UiMessage.GENERIC_ERROR
-        }
-        is IllegalArgumentException -> UiMessage.PROFILE_UNAVAILABLE
-        else -> UiMessage.GENERIC_ERROR
     }
 
     companion object {
@@ -2167,6 +2198,7 @@ data class AppUiState(
     val subscriptionManagementOpen: Boolean = false,
     val isSharingNote: Boolean = false,
     val message: UiMessage? = null,
+    val problem: AppProblem? = null,
 )
 
 internal fun displayedServerId(state: AppUiState): String? =

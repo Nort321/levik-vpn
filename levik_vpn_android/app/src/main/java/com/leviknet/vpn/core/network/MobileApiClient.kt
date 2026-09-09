@@ -434,6 +434,7 @@ internal fun mobileApiExceptionForHttpFailure(
             code = failure.code,
             retryable = failure.retryable,
             status = status,
+            details = failure.details,
         )
     }
     return ApiException.Rejected(

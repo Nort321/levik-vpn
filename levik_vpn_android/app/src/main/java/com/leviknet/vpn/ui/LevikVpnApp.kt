@@ -160,7 +160,8 @@ import com.leviknet.vpn.core.network.ReferralSummary
 fun LevikVpnApp(viewModel: AppViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
-    val message = state.message?.localized()
+    val problem = state.problem ?: state.message?.asProblem()
+    val message = state.message?.takeIf { it.asProblem() == null }?.localized()
     val context = LocalContext.current
     val trafficHistoryShareTitle = stringResource(R.string.traffic_history_export_title)
     val logsShareTitle = stringResource(R.string.logs_viewer_title)
@@ -184,8 +185,8 @@ fun LevikVpnApp(viewModel: AppViewModel) {
 
     LaunchedEffect(message) {
         if (message != null) {
-            snackbarHostState.showSnackbar(message)
             viewModel.clearMessage()
+            snackbarHostState.showSnackbar(message)
         }
     }
 
@@ -256,6 +257,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     onOpenDevices = { sub ->
                         selectedSubscriptionForDevices = sub
                         showDevicesDialog = true
+                        viewModel.refreshDevices()
                     },
                     onOpenLogs = { showLogsDialog = true },
                     onOpenSplitTunneling = {
@@ -543,9 +545,17 @@ fun LevikVpnApp(viewModel: AppViewModel) {
         onDismiss = viewModel::dismissUpdateDialog,
     )
 
-    if (showDevicesDialog && selectedSubscriptionForDevices != null) {
+    val liveDeviceSubscription = state.account?.subscriptions
+        ?.firstOrNull { it.uuid == selectedSubscriptionForDevices?.uuid }
+    if (showDevicesDialog && liveDeviceSubscription != null) {
         SubscriptionDevicesDialog(
-            subscription = selectedSubscriptionForDevices!!,
+            subscription = liveDeviceSubscription,
+            busy = state.refreshing,
+            onRefresh = viewModel::refreshDevices,
+            onConnect = {
+                showDevicesDialog = false
+                viewModel.retryProblem(AppProblem(ProblemReason.DEVICE_LIMIT, ProblemOperation.CONNECT, liveDeviceSubscription.uuid))
+            },
             onRevokeDevice = viewModel::revokeDevice,
             onOpenPlans = {
                 showDevicesDialog = false
@@ -555,6 +565,58 @@ fun LevikVpnApp(viewModel: AppViewModel) {
             onDismiss = {
                 showDevicesDialog = false
                 selectedSubscriptionForDevices = null
+            },
+        )
+    }
+
+    if (problem != null) {
+        val subscription = problemSubscription(problem, state)
+        ProblemDialog(
+            problem = problem,
+            subscription = subscription,
+            busy = state.refreshing || state.purchaseLoading,
+            onDismiss = viewModel::dismissProblem,
+            onAction = { action ->
+                viewModel.dismissProblem()
+                when (action) {
+                    ProblemAction.RETRY -> viewModel.retryProblem(problem)
+                    ProblemAction.DEVICES -> {
+                        selectedSubscriptionForDevices = subscription
+                        showDevicesDialog = subscription != null
+                        viewModel.refreshDevices()
+                    }
+                    ProblemAction.SUBSCRIPTIONS -> {
+                        showDevicesDialog = false
+                        if (state.session == SessionStatus.SignedOut) viewModel.beginWebsiteLogin()
+                        else viewModel.selectTab(AppTab.PROFILE)
+                    }
+                    ProblemAction.PLANS -> {
+                        showDevicesDialog = false
+                        openDistributionPlans(viewModel)
+                    }
+                    ProblemAction.LOGIN -> viewModel.beginWebsiteLogin()
+                    ProblemAction.SUPPORT -> viewModel.openSupport()
+                    ProblemAction.SERVERS -> viewModel.selectTab(AppTab.SERVERS)
+                    ProblemAction.DIAGNOSTICS -> {
+                        viewModel.selectTab(AppTab.HOME)
+                        viewModel.runDiagnostics()
+                    }
+                    ProblemAction.SETTINGS, ProblemAction.CLOCK -> {
+                        val intent = if (action == ProblemAction.CLOCK) {
+                            android.content.Intent(android.provider.Settings.ACTION_DATE_SETTINGS)
+                        } else {
+                            android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                android.net.Uri.fromParts("package", context.packageName, null))
+                        }
+                        try {
+                            context.startActivity(intent)
+                        } catch (_: android.content.ActivityNotFoundException) {
+                            viewModel.openSupport()
+                        } catch (_: SecurityException) {
+                            viewModel.openSupport()
+                        }
+                    }
+                }
             },
         )
     }
@@ -5724,6 +5786,9 @@ private fun SubscriptionCard(
 @Composable
 private fun SubscriptionDevicesDialog(
     subscription: SubscriptionSummary,
+    busy: Boolean,
+    onRefresh: () -> Unit,
+    onConnect: () -> Unit,
     onRevokeDevice: (subscriptionId: String, deviceId: String) -> Unit,
     onOpenPlans: () -> Unit,
     onDismiss: () -> Unit,
@@ -5741,6 +5806,7 @@ private fun SubscriptionDevicesDialog(
             },
             confirmButton = {
                 Button(
+                    enabled = !busy,
                     onClick = {
                         onRevokeDevice(subscription.uuid, dev.id)
                         deviceToRevoke = null
@@ -5770,7 +5836,7 @@ private fun SubscriptionDevicesDialog(
         shape = RoundedCornerShape(24.dp),
         title = {
             Column {
-                Text(stringResource(R.string.devices_dialog_title), fontWeight = FontWeight.Bold)
+                Text(subscription.title, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(4.dp))
                 Text(
                     text = stringResource(R.string.devices_count_format, subscription.devices.used, subscription.devices.limit),
@@ -5793,6 +5859,8 @@ private fun SubscriptionDevicesDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+
+                SubscriptionSlotUsage(subscription)
 
                 if (subscription.devices.items.isEmpty()) {
                     Box(
@@ -5834,14 +5902,15 @@ private fun SubscriptionDevicesDialog(
                                         text = dev.label,
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = FontWeight.SemiBold,
-                                        maxLines = 1,
+                                        maxLines = 3,
                                         overflow = TextOverflow.Ellipsis,
                                     )
                                     Text(
-                                        text = dev.id,
+                                        text = stringResource(R.string.device_client_format, dev.connectionClient()
+                                            ?: stringResource(R.string.device_client_unknown)),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
+                                        maxLines = 3,
                                         overflow = TextOverflow.Ellipsis,
                                     )
                                 }
@@ -5849,6 +5918,7 @@ private fun SubscriptionDevicesDialog(
                                     Spacer(Modifier.width(6.dp))
                                     OutlinedButton(
                                         onClick = { deviceToRevoke = dev },
+                                        enabled = !busy,
                                         shape = RoundedCornerShape(10.dp),
                                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                                         modifier = Modifier.height(34.dp),
@@ -5877,12 +5947,24 @@ private fun SubscriptionDevicesDialog(
             }
         },
         confirmButton = {
-            TextButton(
-                onClick = onDismiss,
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.height(LevikDimensions.ButtonHeight),
-            ) {
-                Text(stringResource(R.string.close), fontWeight = FontWeight.SemiBold)
+            Column {
+                TextButton(onClick = onRefresh, enabled = !busy) {
+                    Icon(painterResource(R.drawable.ic_refresh), contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.problem_action_refresh_devices))
+                }
+                Button(onClick = onConnect, enabled = !busy) {
+                    Icon(painterResource(R.drawable.ic_power), contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.problem_action_connect))
+                }
+                TextButton(
+                    onClick = onDismiss,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.height(LevikDimensions.ButtonHeight),
+                ) {
+                    Text(stringResource(R.string.close), fontWeight = FontWeight.SemiBold)
+                }
             }
         },
     )
@@ -6006,7 +6088,7 @@ private fun VpnFailure.localized(): String = stringResource(
         VpnFailure.CORE_UNAVAILABLE -> R.string.core_unavailable
         VpnFailure.INVALID_PROFILE -> R.string.core_rejected_config
         VpnFailure.PERMISSION_REVOKED -> R.string.vpn_permission_denied
-        VpnFailure.NETWORK -> R.string.generic_error
+        VpnFailure.NETWORK -> R.string.problem_vpn_network_body
         VpnFailure.NETWORK_REQUIREMENT -> R.string.network_requirement_unavailable
     },
 )

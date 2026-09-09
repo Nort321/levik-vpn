@@ -194,6 +194,15 @@ class AppRepository(
             val expectedDeviceId = withContext(Dispatchers.IO) {
                 deviceIdentity.deviceId()
             }
+            val subscription = _account.value?.subscriptions?.firstOrNull { it.uuid == subscriptionId }
+            if (subscription != null && deviceSlotProblem(subscription, expectedDeviceId) != null) {
+                // Recheck a full snapshot before blocking: a slot may have been freed elsewhere.
+                val fresh = refreshAccount().subscriptions.firstOrNull { it.uuid == subscriptionId }
+                    ?: throw ApiException.Rejected("subscription_not_found", false, 404)
+                deviceSlotProblem(fresh, expectedDeviceId)?.let { details ->
+                    throw ApiException.Rejected("device_limit_reached", false, 409, details)
+                }
+            }
             val xrayPrepared = try {
                 fetchPreparedTunnelProfile(
                     token = token,
