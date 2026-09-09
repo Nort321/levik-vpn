@@ -40,6 +40,8 @@ class XrayRuntime(
     private var activeOwner: Long? = null
     private var activeLease: Long? = null
     private var leaseCounter = 0L
+    private var dialerControllerRegistered = false
+    private var listenerControllerRegistered = false
 
     fun claimOwner(owner: Long) {
         ownership.claim(owner)
@@ -173,8 +175,16 @@ class XrayRuntime(
         }
         try {
             activeController.set(controller)
-            LibXray.registerDialerController(processController)
-            LibXray.registerListenerController(processController)
+            // Xray appends these process-wide callbacks; stopping a core does not remove them.
+            // Keep one forwarding callback per socket type across every connection/reconnect.
+            if (!dialerControllerRegistered) {
+                LibXray.registerDialerController(processController)
+                dialerControllerRegistered = true
+            }
+            if (!listenerControllerRegistered) {
+                LibXray.registerListenerController(processController)
+                listenerControllerRegistered = true
+            }
             LibXray.setDNS(processController, dnsServer)
             invokeForData(request)
             if (!ownership.isCurrent(owner)) {

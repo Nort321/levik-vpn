@@ -55,6 +55,7 @@ import kotlinx.coroutines.withContext
 class LevikVpnService : VpnService() {
     private val coreOwner = NEXT_CORE_OWNER.incrementAndGet()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val serviceCommands = VpnServiceCommands(serviceScope)
     private val connectionMutex = Mutex()
     private val mobileEvaluationMutex = Mutex()
     private val mobileSwitchPolicy = MobileServerSwitchPolicy()
@@ -156,6 +157,7 @@ class LevikVpnService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        serviceCommands.onStart(startId)
         val action = intent?.action ?: ACTION_CONNECT
         AppLogger.d(LOG_TAG, "onStartCommand action: $action")
         when (action) {
@@ -169,8 +171,8 @@ class LevikVpnService : VpnService() {
                 connectionJob?.cancel()
                 connectionJob = null
                 container.settings.setPausedUntilMs(0L)
-                serviceScope.launch {
-                    stopConnection(stopService = true)
+                serviceCommands.enqueueStop {
+                    stopConnection(stopService = true, stopStartId = startId)
                 }
             }
             ACTION_PAUSE -> {
@@ -207,7 +209,7 @@ class LevikVpnService : VpnService() {
                 pauseJob?.cancel()
                 pauseJob = null
                 container.settings.setPausedUntilMs(0L)
-                if (coreRunning && !lockdownActive) {
+                if (coreRunning && !lockdownActive && !serviceCommands.isStopping) {
                     VpnStateStore.update(coreOwner) {
                         it.copy(
                             state = VpnConnectionState.CONNECTED,
@@ -311,7 +313,14 @@ class LevikVpnService : VpnService() {
         super.onDestroy()
     }
 
-    private suspend fun connect(): Unit = connectionMutex.withLock connection@{
+    private suspend fun connect() {
+        // A quick OFF/ON must wait for the old core and TUN to finish closing. The stop job
+        // belongs to the service, so cancelling this connection cannot cancel that cleanup.
+        serviceCommands.awaitPendingStop()
+        connectAfterStop()
+    }
+
+    private suspend fun connectAfterStop(): Unit = connectionMutex.withLock connection@{
         if (destroyed.get()) return@connection
         val fallbackAttempt = pendingAutoFallback
         var attemptedServerId: String? = null
@@ -649,6 +658,7 @@ class LevikVpnService : VpnService() {
     private suspend fun stopConnection(
         stopService: Boolean,
         preserveError: Boolean = false,
+        stopStartId: Int? = null,
     ) = connectionMutex.withLock {
         lockdownActive = false
         if (!preserveError) {
@@ -673,11 +683,18 @@ class LevikVpnService : VpnService() {
         networkMonitor.stop(releaseCellular = false)
         stopCoreAndTun()
         runCatching { container.trafficHistoryStore.flush() }
-        if (!preserveError) {
-            VpnStateStore.set(coreOwner, VpnSnapshot())
+        // onStartCommand and this final decision must run on the same thread: an old OFF
+        // must neither remove a newer foreground notification nor stop a newer ON request.
+        withContext(Dispatchers.Main.immediate) {
+            if (stopStartId != null && !serviceCommands.isLatest(stopStartId)) return@withContext
+            if (!preserveError) {
+                VpnStateStore.set(coreOwner, VpnSnapshot())
+            }
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            if (stopService) {
+                if (stopStartId != null) stopSelfResult(stopStartId) else stopSelf()
+            }
         }
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        if (stopService) stopSelf()
     }
 
     private fun stopCoreAndTun() {
