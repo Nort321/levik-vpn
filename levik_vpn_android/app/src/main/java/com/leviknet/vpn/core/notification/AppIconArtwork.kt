@@ -49,7 +49,7 @@ internal object AppIconArtwork {
     fun updateNotification(context: Context, notification: Notification, icon: AppIcon): Notification =
         Notification.Builder.recoverBuilder(context, notification)
             .setSmallIcon(smallIcon(context, icon).toIcon(context))
-            .setLargeIcon(largeIcon(context, icon))
+            .setLargeIcon(null as Bitmap?)
             .setOnlyAlertOnce(true)
             .build()
 

@@ -7,7 +7,9 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
 import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.TrafficStats
 import android.net.VpnService
 import android.os.Build
@@ -37,6 +39,7 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
+import kotlin.coroutines.coroutineContext
 import kotlin.random.Random
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -47,6 +50,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Mutex
@@ -132,21 +136,30 @@ class LevikVpnService : VpnService() {
         wakeLock = null
     }
 
-    private fun fileDescriptorProtector(network: Network) =
-        TunnelFileDescriptorProtector protector@{ fd ->
-            if (fd !in 0..Int.MAX_VALUE.toLong()) return@protector false
-            val socketFd = fd.toInt()
-            if (!protect(socketFd)) return@protector false
-            runCatching {
-                // The descriptor received over SCM_RIGHTS already has an Android owner.
-                // fromFd duplicates it; adoptFd would claim the same descriptor again and
-                // Android fdsan aborts the whole process for that ownership violation.
-                ParcelFileDescriptor.fromFd(socketFd).use { pfd ->
-                    network.bindSocket(pfd.fileDescriptor)
-                }
-                true
-            }.getOrDefault(false)
+    private fun fileDescriptorProtector(network: Network, server: TunnelServer): TunnelFileDescriptorProtector {
+        val bindingFailureLogged = AtomicBoolean(false)
+        val requireBinding = server.engine != TunnelEngineKind.XRAY ||
+            server.networkRequirement != TunnelNetworkRequirement.ANY
+        return TunnelFileDescriptorProtector { fd ->
+            protectTunnelSocket(
+                fd = fd,
+                requireNetworkBinding = requireBinding,
+                protect = ::protect,
+                bind = { socketFd ->
+                    // Duplicate the borrowed descriptor; adoptFd violates fdsan ownership.
+                    ParcelFileDescriptor.fromFd(socketFd).use { pfd ->
+                        network.bindSocket(pfd.fileDescriptor)
+                    }
+                },
+                onBindingFailure = { error ->
+                    if (bindingFailureLogged.compareAndSet(false, true)) {
+                        AppLogger.w(LOG_TAG, "Socket network binding failed " +
+                            "(${error.javaClass.simpleName}); required=$requireBinding")
+                    }
+                },
+            )
         }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -441,8 +454,6 @@ class LevikVpnService : VpnService() {
                     tunPlan = xrayTunPlan(
                         primaryDns = primaryDns,
                         secondaryDns = secondaryDns,
-                        primaryDnsIpv6 = dnsProvider.primaryIpv6,
-                        secondaryDnsIpv6 = dnsProvider.secondaryIpv6,
                     ),
                 )
                 TunnelEngineKind.LEVIK_RELAY -> TunnelEngineRequest.Relay(
@@ -463,8 +474,6 @@ class LevikVpnService : VpnService() {
                     tunPlan = xrayTunPlan(
                         primaryDns = primaryDns,
                         secondaryDns = secondaryDns,
-                        primaryDnsIpv6 = dnsProvider.primaryIpv6,
-                        secondaryDnsIpv6 = dnsProvider.secondaryIpv6,
                     ),
                 )
             }
@@ -475,7 +484,7 @@ class LevikVpnService : VpnService() {
                 request = request,
                 environment = TunnelEngineEnvironment(
                     network = network,
-                    protector = fileDescriptorProtector(network),
+                    protector = fileDescriptorProtector(network, selected),
                     dnsServer = "$primaryDns:53",
                     terminalFailureHandler = ::onTunnelEngineTerminalFailure,
                 ),
@@ -562,7 +571,7 @@ class LevikVpnService : VpnService() {
                 return@connection
             }
             acquireWakeLock()
-            AppLogger.i(LOG_TAG, "VPN connected successfully")
+            AppLogger.i(LOG_TAG, "VPN interface and core started; end-to-end connectivity is monitored separately")
         } catch (error: CancellationException) {
             stopCoreAndTun()
             throw error
@@ -797,20 +806,6 @@ class LevikVpnService : VpnService() {
             .establish()
             ?: throw NetworkSetupException("Android denied the VPN interface")
     }
-
-    private fun xrayTunPlan(
-        primaryDns: String,
-        secondaryDns: String,
-        primaryDnsIpv6: String,
-        secondaryDnsIpv6: String,
-    ) = TunPlan(
-        mtu = TUN_MTU,
-        addresses = listOf(
-            TunAddress(TUN_IPV4_ADDRESS, TUN_IPV4_PREFIX),
-            TunAddress(TUN_IPV6_ADDRESS, TUN_IPV6_PREFIX),
-        ),
-        dnsServers = listOf(primaryDns, secondaryDns, primaryDnsIpv6, secondaryDnsIpv6),
-    )
 
     private fun protectPingSocket(socket: Socket): Boolean {
         if (!coreRunning) return true
@@ -1054,6 +1049,8 @@ class LevikVpnService : VpnService() {
                 try {
                     relayEntitlementWatchdogJob?.cancel()
                     relayEntitlementWatchdogJob = null
+                    autoHealingJob?.cancel()
+                    autoHealingJob = null
                     engine.stop(coreOwner, previousPrepared, coreLease)
                     coreRunning = false
                     coreLease = null
@@ -1074,7 +1071,7 @@ class LevikVpnService : VpnService() {
                         request = request,
                         environment = TunnelEngineEnvironment(
                             network = network,
-                            protector = fileDescriptorProtector(network),
+                            protector = fileDescriptorProtector(network, server),
                             dnsServer = "$primaryDns:53",
                             terminalFailureHandler = ::onTunnelEngineTerminalFailure,
                         ),
@@ -1356,8 +1353,6 @@ class LevikVpnService : VpnService() {
                 tunPlan = xrayTunPlan(
                     primaryDns = dnsProvider.primaryIpv4,
                     secondaryDns = dnsProvider.secondaryIpv4,
-                    primaryDnsIpv6 = dnsProvider.primaryIpv6,
-                    secondaryDnsIpv6 = dnsProvider.secondaryIpv6,
                 ),
             )
             val engine = container.tunnelEngineRegistry.require(TunnelEngineKind.XRAY)
@@ -1653,20 +1648,30 @@ class LevikVpnService : VpnService() {
         }
     }
 
+    // During network transitions the VPN may not yet be the default network.
+    @Suppress("DEPRECATION") // Snapshot all visible networks to avoid probing physical egress.
     private suspend fun checkConnectivity(): TunnelProbeResult = withContext(Dispatchers.IO) {
+        val manager = getSystemService(ConnectivityManager::class.java)
+        val vpnNetwork = manager.allNetworks.firstOrNull { network ->
+            manager.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+        } ?: return@withContext TunnelProbeResult(listOf(
+            TunnelProbeObservation("vpn", success = false, failure = "network_unavailable"),
+        ))
         val observations = mutableListOf<TunnelProbeObservation>()
         for (endpoint in HEALTH_CHECK_ENDPOINTS.shuffled()) {
-            val observation = probeEndpoint(endpoint)
+            coroutineContext.ensureActive()
+            val observation = probeEndpoint(vpnNetwork, endpoint)
+            coroutineContext.ensureActive()
             observations += observation
             if (observation.success) break
         }
         TunnelProbeResult(observations)
     }
 
-    private fun probeEndpoint(endpoint: HealthCheckEndpoint): TunnelProbeObservation {
+    private fun probeEndpoint(network: Network, endpoint: HealthCheckEndpoint): TunnelProbeObservation {
         var connection: HttpURLConnection? = null
         return try {
-            connection = (URL(endpoint.url).openConnection() as HttpURLConnection).apply {
+            connection = (network.openConnection(URL(endpoint.url)) as HttpURLConnection).apply {
                 connectTimeout = HEALTH_CHECK_TIMEOUT_MS
                 readTimeout = HEALTH_CHECK_TIMEOUT_MS
                 useCaches = false
@@ -1865,7 +1870,6 @@ class LevikVpnService : VpnService() {
 
         val builder = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(AppIconArtwork.smallIcon(this, container.settings.appIcon.value))
-            .setLargeIcon(AppIconArtwork.largeIcon(this, container.settings.appIcon.value))
             .setContentTitle(getString(R.string.app_name))
             .setContentText(text)
             .setContentIntent(contentIntent)
@@ -1965,16 +1969,11 @@ class LevikVpnService : VpnService() {
         private const val RELAY_ENTITLEMENT_WATCHDOG_INTERVAL_MS = 120_000L
         private const val WAKELOCK_TIMEOUT_MS = 24 * 60 * 60 * 1000L
         private const val MAX_FAILURE_DETAIL_LENGTH = 300
-        private const val TUN_MTU = 1500
-        private const val TUN_IPV4_ADDRESS = "172.30.0.2"
-        private const val TUN_IPV4_PREFIX = 30
         private val HEALTH_CHECK_ENDPOINTS = listOf(
             HealthCheckEndpoint("cloudflare", "https://1.1.1.1/cdn-cgi/trace"),
             HealthCheckEndpoint("google", "https://www.gstatic.com/generate_204"),
             HealthCheckEndpoint("apple", "https://captive.apple.com/hotspot-detect.html"),
         )
-        private const val TUN_IPV6_ADDRESS = "2600:1900:4000:5255::2"
-        private const val TUN_IPV6_PREFIX = 64
         private val CONSENT_VALUE = "accepted-v1".encodeToByteArray()
         private val NEXT_CORE_OWNER = AtomicLong(0)
     }

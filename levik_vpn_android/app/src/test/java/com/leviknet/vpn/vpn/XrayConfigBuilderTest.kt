@@ -528,6 +528,30 @@ class XrayConfigBuilderTest {
         assertTrue(config.getValue("routing").toString().contains("domain:allowed.example"))
     }
 
+    @Test
+    fun `anti DPI preserves Hysteria UDP transport and explicit dialer`() {
+        for ((protocol, transport) in listOf("hysteria" to "hysteria", "hysteria2" to "hysteria2", "vless" to "hysteria")) {
+            val selected = server("a".repeat(64), "server-a").copy(outbound = buildJsonObject {
+                put("tag", "server-a")
+                put("protocol", protocol)
+                put("settings", buildJsonObject { put("version", 2) })
+                put("streamSettings", buildJsonObject {
+                    put("network", transport)
+                    put("security", "tls")
+                    put("sockopt", buildJsonObject { put("dialerProxy", "existing-dialer") })
+                    put("hysteriaSettings", buildJsonObject { put("auth", "test-auth") })
+                })
+            })
+            val profile = PreparedTunnelProfile(
+                version = 1, profileId = "profile", subscriptionId = "subscription",
+                issuedAt = "2026-07-29T11:59:00Z", servers = listOf(selected),
+            )
+            val config = json.parseToJsonElement(builder.build(profile, selected.id, 42,
+                antiDpiEnabled = true)).jsonObject
+            assertEquals(selected.outbound, config.getValue("outbounds").jsonArray.first())
+        }
+    }
+
     private fun realityServer(id: String, tag: String, address: String = "de1.example.com"):
         TunnelServer = TunnelServer(
         id = id,

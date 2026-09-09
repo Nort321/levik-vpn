@@ -204,6 +204,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
             when {
                 state.session == SessionStatus.Loading -> LoadingScreen()
                 state.session == SessionStatus.SignedOut && state.profile == null -> LoginScreen(
+                    appIcon = state.appIcon,
                     login = state.login,
                     snackbarHostState = snackbarHostState,
                     onTelegramLogin = viewModel::beginTelegramLogin,
@@ -700,6 +701,7 @@ private fun LoadingScreen() {
 
 @Composable
 private fun LoginScreen(
+    appIcon: AppIcon,
     login: LoginUiState,
     snackbarHostState: SnackbarHostState,
     onTelegramLogin: () -> Unit,
@@ -813,7 +815,7 @@ private fun LoginScreen(
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Image(
-                        painter = painterResource(R.drawable.logo_light),
+                        painter = painterResource(appIcon.previewResource),
                         contentDescription = null,
                         modifier = Modifier.size(96.dp),
                     )
@@ -1131,6 +1133,7 @@ private fun MainContent(
                     onContinueOrder = onContinueOrder,
                 )
             } else ProfileScreen(
+                appIcon = state.appIcon,
                 modifier = contentModifier,
                 account = state.account,
                 profile = state.profile,
@@ -3355,6 +3358,7 @@ private fun StatsCard(icon: Painter, label: String, value: String) {
 
 @Composable
 private fun ProfileScreen(
+    appIcon: AppIcon,
     modifier: Modifier,
     account: MobileAccountResponse?,
     profile: PreparedTunnelProfile?,
@@ -4069,7 +4073,7 @@ private fun ProfileScreen(
                 border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
             ) {
                 Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Image(painterResource(R.drawable.logo_light), null, Modifier.size(40.dp))
+                    Image(painterResource(appIcon.previewResource), null, Modifier.size(40.dp))
                     Spacer(Modifier.width(14.dp))
                     Text(stringResource(R.string.app_icon_title), style = MaterialTheme.typography.titleMedium)
                 }

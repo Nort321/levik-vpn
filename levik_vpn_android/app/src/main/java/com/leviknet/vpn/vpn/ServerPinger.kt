@@ -40,10 +40,11 @@ object ServerPinger {
     fun measure(outbound: JsonObject): Long? {
         val endpoint = extractEndpoint(outbound) ?: return null
         val protocol = (outbound["protocol"] as? JsonPrimitive)?.contentOrNull?.lowercase()
-        return if (protocol == "hysteria" || protocol == "hysteria2" || protocol == "tuic" || protocol == "wireguard") {
-            measureUdp(endpoint.first, endpoint.second)
-        } else {
-            measureTcp(endpoint.first, endpoint.second)
+        return when (protocol) {
+            "hysteria", "hysteria2", "tuic" -> measureUdp(endpoint.first, endpoint.second)
+            // WireGuard and obfuscated QUIC have no unauthenticated generic ping.
+            "wireguard" -> null
+            else -> measureTcp(endpoint.first, endpoint.second)
         }
     }
 
@@ -67,48 +68,42 @@ object ServerPinger {
             DatagramSocket().use { socket ->
                 socket.soTimeout = TIMEOUT_MS
                 val protector = socketProtector.get()
-                if (protector?.protectDatagramSocket?.invoke(socket) == false) return null
-                val target = InetSocketAddress(address, port)
+                if (protector != null && protector.protectDatagramSocket?.invoke(socket) != true) return null
+                // A connected datagram socket accepts responses only from this endpoint.
+                socket.connect(InetSocketAddress(address, port))
                 val probe = buildQuicProbePacket()
-                val sendPacket = DatagramPacket(probe, probe.size, target)
-                socket.send(sendPacket)
-                val responseBuf = ByteArray(1500)
-                val receivePacket = DatagramPacket(responseBuf, responseBuf.size)
-                socket.receive(receivePacket)
+                socket.send(DatagramPacket(probe, probe.size))
+                val response = DatagramPacket(ByteArray(1500), 1500)
+                socket.receive(response)
+                if (!isQuicVersionNegotiation(probe, response.data.copyOf(response.length))) return null
             }
             (System.nanoTime() - startedAt) / 1_000_000
         } catch (_: Exception) {
-            try {
-                val fallbackStart = System.nanoTime()
-                val address = InetAddress.getByName(host)
-                if (address.isReachable(TIMEOUT_MS)) {
-                    (System.nanoTime() - fallbackStart) / 1_000_000
-                } else {
-                    measureTcp(host, port)
-                }
-            } catch (_: Exception) {
-                null
-            }
+            // TCP/ICMP success says nothing about this UDP service. A missing response
+            // means unknown latency (including obfuscated servers), not a failed VPN.
+            null
         }
     }
 
-    private fun buildQuicProbePacket(): ByteArray {
-        val packet = ByteArray(1200)
+    internal fun buildQuicProbePacket(): ByteArray {
+        val packet = ByteArray(1200).also(random::nextBytes)
         packet[0] = 0xC0.toByte()
-        packet[1] = 0x00
-        packet[2] = 0x00
-        packet[3] = 0x00
-        packet[4] = 0x01
-        packet[5] = 0x08
-        val dcid = ByteArray(8).also(random::nextBytes)
-        System.arraycopy(dcid, 0, packet, 6, 8)
-        packet[14] = 0x08
-        val scid = ByteArray(8).also(random::nextBytes)
-        System.arraycopy(scid, 0, packet, 15, 8)
-        packet[23] = 0x00
-        packet[24] = 0x44.toByte()
-        packet[25] = 0x90.toByte()
+        // RFC 9000 section 6.3: a reserved version solicits Version Negotiation.
+        // A synthetic v1 Initial without valid AEAD is silently discarded by servers.
+        for (index in 1..4) packet[index] = 0x0A
+        packet[5] = 8
+        packet[14] = 8
         return packet
+    }
+
+    internal fun isQuicVersionNegotiation(probe: ByteArray, response: ByteArray): Boolean {
+        if (probe.size < 23 || response.size < 27 || (response.size - 23) % 4 != 0) return false
+        if (response[0].toInt() and 0x80 == 0 || (1..4).any { response[it] != 0.toByte() }) return false
+        if (response[5] != 8.toByte() || response[14] != 8.toByte()) return false
+        if (!(0..7).all { response[6 + it] == probe[15 + it] && response[15 + it] == probe[6 + it] }) return false
+        val versions = (23 until response.size step 4).map { offset -> response.copyOfRange(offset, offset + 4) }
+        return versions.none { it.contentEquals(probe.copyOfRange(1, 5)) } &&
+            versions.any { it.contentEquals(byteArrayOf(0, 0, 0, 1)) }
     }
 
     internal fun extractEndpoint(outbound: JsonObject): Pair<String, Int>? {

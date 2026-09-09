@@ -348,6 +348,12 @@ class XrayConfigBuilder(
 
     private fun injectFragmentDialer(outbound: JsonObject): JsonObject {
         val stream = (outbound["streamSettings"] as? JsonObject) ?: buildJsonObject {}
+        val protocol = (outbound["protocol"] as? JsonPrimitive)?.contentOrNull?.lowercase()
+        val transport = (stream["network"] as? JsonPrimitive)?.contentOrNull?.lowercase()
+        // TCP TLS fragmentation must not replace Hysteria's UDP packet socket.
+        if (protocol in setOf("hysteria", "hysteria2", "tuic", "wireguard") ||
+            transport in setOf("hysteria", "hysteria2", "quic", "kcp", "mkcp")
+        ) return outbound
         val existingSockopt = (stream["sockopt"] as? JsonObject) ?: buildJsonObject {}
         val updatedSockopt = buildJsonObject {
             existingSockopt.forEach { (k, v) -> put(k, v) }
@@ -409,7 +415,7 @@ class XrayConfigBuilder(
         private const val FRAGMENT_TAG = "levik-fragment"
         private const val RELAY_PROXY_TAG = "levik-relay-proxy"
         private const val IPV6_DEFAULT_ROUTE = "::/0"
-        private const val TUN_MTU = 1500
+        internal const val TUN_MTU = 1500
         private const val MAX_SERVERS = 200
         private val SAFE_TAG = Regex("[A-Za-z0-9._:-]{1,128}")
         private val APP_OWNED_TAGS = setOf(TUN_INBOUND_TAG, DIRECT_TAG, BLOCK_TAG, FRAGMENT_TAG)

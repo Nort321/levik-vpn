@@ -13,6 +13,7 @@ import com.leviknet.vpn.data.AppIcon
 import com.leviknet.vpn.data.AppSettings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -80,13 +81,14 @@ class AppIconInstrumentedTest {
     }
 
     @Test
-    fun updatingArtworkPreservesTheExistingVpnNotificationStateAndActions() {
+    fun updatingArtworkRemovesDuplicateLogoAndPreservesVpnStateAndActions() {
         val intent = PendingIntent.getActivity(
             context, 271, Intent(context, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val original = Notification.Builder(context, "icon-test")
             .setSmallIcon(R.drawable.ic_shield)
+            .setLargeIcon(AppIconArtwork.largeIcon(context, AppIcon.LIGHT))
             .setContentTitle("VPN")
             .setContentText("Paused 05:00")
             .setContentIntent(intent)
@@ -103,6 +105,6 @@ class AppIconInstrumentedTest {
         assertTrue(updated.flags and Notification.FLAG_ONGOING_EVENT != 0)
         assertTrue(updated.flags and Notification.FLAG_ONLY_ALERT_ONCE != 0)
         assertNotNull(updated.smallIcon)
-        assertNotNull(updated.getLargeIcon())
+        assertNull(updated.getLargeIcon())
     }
 }

@@ -9,12 +9,14 @@ import android.service.quicksettings.TileService
 import com.leviknet.vpn.LevikVpnApplication
 import com.leviknet.vpn.MainActivity
 import com.leviknet.vpn.R
+import com.leviknet.vpn.core.notification.AppIconArtwork
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.combine
 
 class LevikVpnTileService : TileService() {
     private var serviceScope: CoroutineScope? = null
@@ -30,7 +32,10 @@ class LevikVpnTileService : TileService() {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         serviceScope = scope
         stateJob = scope.launch {
-            container.vpnController.state.collect { snapshot ->
+            combine(container.vpnController.state, container.settings.appIcon) { snapshot, icon ->
+                snapshot to icon
+            }.collect { (snapshot, icon) ->
+                qsTile?.icon = AppIconArtwork.smallIcon(this@LevikVpnTileService, icon).toIcon(this@LevikVpnTileService)
                 updateTileState(snapshot)
             }
         }

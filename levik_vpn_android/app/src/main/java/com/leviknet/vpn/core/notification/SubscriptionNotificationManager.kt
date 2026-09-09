@@ -196,7 +196,6 @@ object SubscriptionNotificationManager {
         val appIcon = AppIconManager(context).current()
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(AppIconArtwork.smallIcon(context, appIcon))
-            .setLargeIcon(AppIconArtwork.largeIcon(context, appIcon))
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
