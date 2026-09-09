@@ -150,7 +150,7 @@ import com.leviknet.vpn.vpn.VpnFailure
 import com.leviknet.vpn.vpn.VpnSnapshot
 import com.leviknet.vpn.vpn.countryFlag
 import com.leviknet.vpn.vpn.effectiveCategory
-import com.leviknet.vpn.vpn.isAllowlistMobileServer
+import com.leviknet.vpn.vpn.TunnelEngineKind
 import com.leviknet.vpn.vpn.isMobileServer
 import java.time.Instant
 import java.time.ZoneId
@@ -335,6 +335,13 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     Text(stringResource(R.string.vpn_disclosure_decline))
                 }
             },
+        )
+    }
+
+    if (state.showRelayIntroduction) {
+        RelayConnectionGuideDialog(
+            onDismiss = viewModel::dismissRelayIntroduction,
+            onContinue = viewModel::confirmRelayIntroduction,
         )
     }
 
@@ -2040,20 +2047,17 @@ private fun ServerSummaryCard(
                 )
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
-                    val isAllowlist = server?.isAllowlistMobileServer() == true && !automaticServer
-                    val isMobile = server?.isMobileServer() == true && !automaticServer
+                    val isAllowlist = server?.isMobileServer() == true && !automaticServer
                     val subtitleColor = when {
                         isAllowlist -> if (isDark) Color(0xFF60A5FA) else LevikBlue
-                        isMobile -> if (isDark) Color(0xFFFBBF24) else Color(0xFFD97706)
                         else -> MaterialTheme.colorScheme.onSurfaceVariant
                     }
                     Text(
                         text = when {
                             automaticServer -> stringResource(R.string.selected_server_automatic)
-                            server?.isAllowlistMobileServer() == true -> {
+                            server?.isMobileServer() == true -> {
                                 stringResource(R.string.selected_server_mobile_allowlist)
                             }
-                            server?.isMobileServer() == true -> stringResource(R.string.selected_server_mobile)
                             else -> stringResource(R.string.selected_server_regular)
                         },
                         style = MaterialTheme.typography.labelSmall,
@@ -2073,29 +2077,15 @@ private fun ServerSummaryCard(
                             modifier = Modifier.weight(1f, fill = false),
                         )
                         if (!automaticServer && server?.isMobileServer() == true) {
-                            val badgeColor = if (isAllowlist) {
-                                if (isDark) Color(0xFF60A5FA) else LevikBlue
-                            } else {
-                                if (isDark) Color(0xFFFBBF24) else Color(0xFFD97706)
-                            }
-                            val badgeBg = if (isAllowlist) {
-                                (if (isDark) Color(0xFF3B82F6) else LevikBlue).copy(alpha = 0.15f)
-                            } else {
-                                (if (isDark) Color(0xFFF59E0B) else Color(0xFFD97706)).copy(alpha = 0.15f)
-                            }
+                            val badgeColor = if (isDark) Color(0xFF60A5FA) else LevikBlue
+                            val badgeBg = badgeColor.copy(alpha = 0.15f)
                             Spacer(Modifier.width(6.dp))
                             Surface(
                                 shape = RoundedCornerShape(6.dp),
                                 color = badgeBg,
                             ) {
                                 Text(
-                                    text = stringResource(
-                                        if (isAllowlist) {
-                                            R.string.server_badge_mobile_allowlist
-                                        } else {
-                                            R.string.server_badge_mobile
-                                        },
-                                    ),
+                                    text = stringResource(R.string.server_badge_mobile_allowlist),
                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
@@ -2460,13 +2450,7 @@ private fun ServersScreen(
                 buildList {
                     add(ServerFilterType.ALL to stringResource(R.string.filter_all))
                     add(ServerFilterType.REGULAR to stringResource(R.string.filter_regular))
-                    add(ServerFilterType.MOBILE to stringResource(R.string.filter_mobile))
-                    if (BuildConfig.LEVIK_RELAY_ENABLED) {
-                        add(
-                            ServerFilterType.MOBILE_ALLOWLIST to
-                                stringResource(R.string.filter_mobile_allowlist),
-                        )
-                    }
+                    add(ServerFilterType.MOBILE_ALLOWLIST to stringResource(R.string.filter_mobile_allowlist))
                     add(ServerFilterType.FAVORITES to stringResource(R.string.filter_favorites))
                     add(ServerFilterType.FASTEST to stringResource(R.string.filter_fastest))
                 }.forEach { (type, label) ->
@@ -2515,17 +2499,7 @@ private fun ServersScreen(
                     val matchesQuery = query.isEmpty() ||
                         server.name.lowercase().contains(query) ||
                         server.countryCode.lowercase().contains(query)
-                    val matchesFilter = when (filterType) {
-                        ServerFilterType.ALL -> true
-                        ServerFilterType.REGULAR ->
-                            server.effectiveCategory() == TunnelServerCategory.REGULAR
-                        ServerFilterType.MOBILE ->
-                            server.effectiveCategory() == TunnelServerCategory.MOBILE
-                        ServerFilterType.MOBILE_ALLOWLIST ->
-                            server.effectiveCategory() == TunnelServerCategory.MOBILE_ALLOWLIST
-                        ServerFilterType.FAVORITES -> favoriteServerIds.contains(server.id)
-                        ServerFilterType.FASTEST -> true
-                    }
+                    val matchesFilter = filterType.matches(server, favoriteServerIds)
                     matchesQuery && matchesFilter
                 }
 
@@ -2621,15 +2595,11 @@ private fun ServersScreen(
                         val regularServers = filtered.filter {
                             it.effectiveCategory() == TunnelServerCategory.REGULAR
                         }
-                        val mobileServers = filtered.filter {
-                            it.effectiveCategory() == TunnelServerCategory.MOBILE
-                        }
                         val allowlistServers = filtered.filter {
-                            it.effectiveCategory() == TunnelServerCategory.MOBILE_ALLOWLIST
+                            it.isMobileServer()
                         }
                         val categoryCount = listOf(
                             regularServers,
-                            mobileServers,
                             allowlistServers,
                         ).count(List<TunnelServer>::isNotEmpty)
 
@@ -2643,28 +2613,6 @@ private fun ServersScreen(
                                     )
                                 }
                                 items(regularServers, key = TunnelServer::id) { server ->
-                                    ServerItemCard(
-                                        server = server,
-                                        selected = !automaticServer && server.id == selectedServerId,
-                                        isFav = favoriteServerIds.contains(server.id),
-                                        pingValue = serverPings[server.id],
-                                        pingingServers = pingingServers,
-                                        isDark = isDark,
-                                        onServerSelected = onServerSelected,
-                                        onToggleFavorite = onToggleFavorite,
-                                    )
-                                }
-                            }
-                            if (mobileServers.isNotEmpty()) {
-                                item(key = "section_mobile_header") {
-                                    ServerCategoryHeader(
-                                        title = R.string.servers_category_mobile,
-                                        description = R.string.servers_category_mobile_desc,
-                                        badge = R.string.server_badge_mobile,
-                                        accent = if (isDark) Color(0xFFFBBF24) else Color(0xFFD97706),
-                                    )
-                                }
-                                items(mobileServers, key = TunnelServer::id) { server ->
                                     ServerItemCard(
                                         server = server,
                                         selected = !automaticServer && server.id == selectedServerId,
@@ -2788,6 +2736,10 @@ private fun ServerItemCard(
     onServerSelected: (String) -> Unit,
     onToggleFavorite: (String) -> Unit,
 ) {
+    var showGuide by remember(server.id) { mutableStateOf(false) }
+    if (showGuide) {
+        RelayConnectionGuideDialog(onDismiss = { showGuide = false })
+    }
     val flagDescriptionText = flagDescription(server.countryCode)
     Surface(
         modifier = Modifier
@@ -2825,30 +2777,15 @@ private fun ServerItemCard(
                             modifier = Modifier.weight(1f, fill = false),
                         )
                         if (server.isMobileServer()) {
-                            val isAllowlist = server.isAllowlistMobileServer()
-                            val badgeColor = if (isAllowlist) {
-                                if (isDark) Color(0xFF60A5FA) else LevikBlue
-                            } else {
-                                if (isDark) Color(0xFFFBBF24) else Color(0xFFD97706)
-                            }
-                            val badgeBg = if (isAllowlist) {
-                                (if (isDark) Color(0xFF3B82F6) else LevikBlue).copy(alpha = 0.15f)
-                            } else {
-                                (if (isDark) Color(0xFFF59E0B) else Color(0xFFD97706)).copy(alpha = 0.15f)
-                            }
+                            val badgeColor = if (isDark) Color(0xFF60A5FA) else LevikBlue
+                            val badgeBg = badgeColor.copy(alpha = 0.15f)
                             Spacer(Modifier.width(6.dp))
                             Surface(
                                 shape = RoundedCornerShape(6.dp),
                                 color = badgeBg,
                             ) {
                                 Text(
-                                    text = stringResource(
-                                        if (isAllowlist) {
-                                            R.string.server_badge_mobile_allowlist
-                                        } else {
-                                            R.string.server_badge_mobile
-                                        },
-                                    ),
+                                    text = stringResource(R.string.server_badge_mobile_allowlist),
                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
@@ -2872,6 +2809,17 @@ private fun ServerItemCard(
                     )
                 }
                 RadioButton(selected = selected, onClick = null)
+            }
+            if (server.engine == TunnelEngineKind.LEVIK_RELAY) {
+                TextButton(onClick = { showGuide = true }) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_web),
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.relay_guide_open))
+                }
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),

@@ -47,6 +47,7 @@ import com.leviknet.vpn.data.isActiveAt
 import com.leviknet.vpn.vpn.PreparedTunnelProfile
 import com.leviknet.vpn.vpn.ServerPinger
 import com.leviknet.vpn.vpn.TunnelServer
+import com.leviknet.vpn.vpn.TunnelEngineKind
 import com.leviknet.vpn.vpn.VpnConnectionState
 import com.leviknet.vpn.vpn.VpnController
 import com.leviknet.vpn.vpn.VpnSnapshot
@@ -105,6 +106,8 @@ class AppViewModel(
     private var whitelistDetectionJob: Job? = null
     private var pendingLteAction: PendingLteAction? = null
     private var pendingAllowlistAction: PendingAllowlistAction? = null
+    private var pendingRelayIntroduction: PendingRelayIntroduction? = null
+    private val explainedRelayServerIds = mutableSetOf<String>()
     private var pendingWifiAutoConnect = false
     private val serverPingMutex = Mutex()
     private val appIconSelectionMutex = Mutex()
@@ -914,6 +917,13 @@ class AppViewModel(
                     it.copy(profile = profile, selectedServerId = selected)
                 }
                 val selectedServer = profile.servers.firstOrNull { it.id == selected }
+                if (selectedServer?.engine == TunnelEngineKind.LEVIK_RELAY &&
+                    selectedServer.id !in explainedRelayServerIds
+                ) {
+                    pendingRelayIntroduction = PendingRelayIntroduction.Connect(selectedServer.id, profile.subscriptionId)
+                    mutableState.update { it.copy(showRelayIntroduction = true) }
+                    return@launch
+                }
                 if (!attemptAllowlistConnection &&
                     selectedServer?.isAllowlistMobileServer() == true
                 ) {
@@ -1000,9 +1010,16 @@ class AppViewModel(
         }
     }
 
-    fun selectServer(serverId: String) {
+    fun selectServer(serverId: String) = selectServer(serverId, showIntroduction = true)
+
+    private fun selectServer(serverId: String, showIntroduction: Boolean) {
         val profile = mutableState.value.profile ?: return
         val server = profile.servers.firstOrNull { it.id == serverId } ?: return
+        if (showIntroduction && server.engine == TunnelEngineKind.LEVIK_RELAY) {
+            pendingRelayIntroduction = PendingRelayIntroduction.SelectServer(serverId)
+            mutableState.update { it.copy(showRelayIntroduction = true) }
+            return
+        }
         if (server.isAllowlistMobileServer() &&
             mutableState.value.whitelistMode != WhitelistMode.ACTIVE &&
             mutableState.value.vpn.state in ACTIVE_TUNNEL_STATES
@@ -1020,6 +1037,22 @@ class AppViewModel(
             return
         }
         selectServerNow(serverId)
+    }
+
+    fun confirmRelayIntroduction() {
+        val action = pendingRelayIntroduction ?: return
+        pendingRelayIntroduction = null
+        mutableState.update { it.copy(showRelayIntroduction = false) }
+        explainedRelayServerIds += action.serverId
+        when (action) {
+            is PendingRelayIntroduction.SelectServer -> selectServer(action.serverId, showIntroduction = false)
+            is PendingRelayIntroduction.Connect -> prepareConnection(subscriptionId = action.subscriptionId)
+        }
+    }
+
+    fun dismissRelayIntroduction() {
+        pendingRelayIntroduction = null
+        mutableState.update { it.copy(showRelayIntroduction = false) }
     }
 
     private fun selectServerNow(serverId: String) {
@@ -2150,10 +2183,16 @@ data class SpeedSample(
 enum class ServerFilterType {
     ALL,
     REGULAR,
-    MOBILE,
     MOBILE_ALLOWLIST,
     FAVORITES,
-    FASTEST,
+    FASTEST;
+
+    fun matches(server: TunnelServer, favorites: Set<String>): Boolean = when (this) {
+        ALL, FASTEST -> true
+        REGULAR -> !server.isMobileServer()
+        MOBILE_ALLOWLIST -> server.isMobileServer()
+        FAVORITES -> server.id in favorites
+    }
 }
 
 data class AppUiState(
@@ -2173,6 +2212,7 @@ data class AppUiState(
     val showAppDataDisclosure: Boolean = false,
     val showVpnDisclosure: Boolean = false,
     val showLogoutConfirmation: Boolean = false,
+    val showRelayIntroduction: Boolean = false,
     val showLteWhitelistWarning: Boolean = false,
     val showAllowlistRequiredWarning: Boolean = false,
     val whitelistMode: WhitelistMode = WhitelistMode.UNKNOWN,
@@ -2294,4 +2334,10 @@ sealed interface AppEffect {
     data object RequestVpnPermission : AppEffect
     data object RequestNotificationPermission : AppEffect
     data object RequestLocationPermission : AppEffect
+}
+
+private sealed interface PendingRelayIntroduction {
+    val serverId: String
+    data class SelectServer(override val serverId: String) : PendingRelayIntroduction
+    data class Connect(override val serverId: String, val subscriptionId: String) : PendingRelayIntroduction
 }

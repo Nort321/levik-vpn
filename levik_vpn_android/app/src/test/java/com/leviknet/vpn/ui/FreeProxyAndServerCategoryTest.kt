@@ -18,7 +18,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.util.Locale
 
 class FreeProxyAndServerCategoryTest {
 
@@ -45,50 +44,38 @@ class FreeProxyAndServerCategoryTest {
     }
 
     @Test
-    fun `server filter types include all regular and mobile`() {
+    fun `server filters expose a single allow-list category`() {
         val values = ServerFilterType.values()
         assertTrue(values.contains(ServerFilterType.ALL))
         assertTrue(values.contains(ServerFilterType.REGULAR))
-        assertTrue(values.contains(ServerFilterType.MOBILE))
+        assertFalse(values.any { it.name == "MOBILE" })
         assertTrue(values.contains(ServerFilterType.MOBILE_ALLOWLIST))
         assertTrue(values.contains(ServerFilterType.FAVORITES))
         assertTrue(values.contains(ServerFilterType.FASTEST))
     }
 
     @Test
-    fun `identifies mobile and regular servers correctly`() {
-        fun isMobile(server: TunnelServer): Boolean {
-            val n = server.name.uppercase(Locale.ROOT)
-            val t = server.tag.uppercase(Locale.ROOT)
-            return n.contains("LTE") || n.contains("MOBILE") || n.contains("МОБИЛЬН") ||
-                t.contains("LTE") || t.contains("MOBILE")
-        }
+    fun `allow-list filter includes every LTE and relay server including cached profiles`() {
+        val regular = TunnelServer(
+            id = "regular", tag = "germany", name = "Germany", countryCode = "DE",
+            outbound = JsonObject(emptyMap()),
+        )
+        val lteByName = regular.copy(id = "lte-name", name = "LTE Universal")
+        val lteByTag = regular.copy(id = "lte-tag", tag = "levik-lte-2")
+        val cachedMobile = regular.copy(id = "cached", category = TunnelServerCategory.MOBILE)
+        val relay = regular.copy(
+            id = "relay:1", engine = TunnelEngineKind.LEVIK_RELAY,
+            category = TunnelServerCategory.MOBILE_ALLOWLIST,
+        )
+        val servers = listOf(regular, lteByName, lteByTag, cachedMobile, relay)
 
-        val lteServer1 = TunnelServer(
-            id = "1",
-            tag = "levik-lte-1",
-            name = "LTE ⚡",
-            countryCode = "RU",
-            outbound = JsonObject(emptyMap()),
+        assertEquals(
+            listOf(lteByName, lteByTag, cachedMobile, relay),
+            servers.filter { ServerFilterType.MOBILE_ALLOWLIST.matches(it, emptySet()) },
         )
-        val lteServer2 = TunnelServer(
-            id = "2",
-            tag = "levik-2",
-            name = "LTE • Universal",
-            countryCode = "RU",
-            outbound = JsonObject(emptyMap()),
-        )
-        val regularServer = TunnelServer(
-            id = "3",
-            tag = "levik-de",
-            name = "Germany Prime",
-            countryCode = "DE",
-            outbound = JsonObject(emptyMap()),
-        )
-
-        assertTrue(isMobile(lteServer1))
-        assertTrue(isMobile(lteServer2))
-        assertFalse(isMobile(regularServer))
+        assertEquals(listOf(regular), servers.filter { ServerFilterType.REGULAR.matches(it, emptySet()) })
+        assertEquals(listOf(lteByTag), servers.filter { ServerFilterType.FAVORITES.matches(it, setOf(lteByTag.id)) })
+        assertEquals(servers, servers.filter { ServerFilterType.ALL.matches(it, emptySet()) })
     }
 
     @Test
@@ -154,7 +141,7 @@ class FreeProxyAndServerCategoryTest {
     }
 
     @Test
-    fun `allow-list relay is an explicit third category and never automatic`() {
+    fun `allow-list relay retains its runtime category and is never automatic`() {
         val relay = TunnelServer(
             id = "relay:de-1",
             tag = "relay:de-1",
