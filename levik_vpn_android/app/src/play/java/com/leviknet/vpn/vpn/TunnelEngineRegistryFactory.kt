@@ -7,5 +7,5 @@ internal fun createTunnelEngineRegistry(
     @Suppress("UNUSED_PARAMETER") nativeLibraryDir: String,
     @Suppress("UNUSED_PARAMETER") appContext: Context? = null,
 ): TunnelEngineRegistry = TunnelEngineRegistry(
-    listOf(XrayTunnelEngineAdapter(xrayRuntime)),
+    listOf(XrayTunnelEngineAdapter(xrayRuntime, PlayTunnelSecurity::validate)),
 )

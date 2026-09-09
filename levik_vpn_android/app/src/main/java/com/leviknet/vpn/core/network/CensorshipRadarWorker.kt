@@ -9,6 +9,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.leviknet.vpn.LevikVpnApplication
+import com.leviknet.vpn.BuildConfig
 import java.util.concurrent.TimeUnit
 
 class CensorshipRadarWorker(
@@ -24,6 +25,9 @@ class CensorshipRadarWorker(
                 vpnSnapshot = container.vpnController.state.value,
                 apiClient = container.apiClient,
                 sendTelemetry = true,
+                telemetryStillAllowed = {
+                    !BuildConfig.IS_PLAY_DISTRIBUTION || container.settings.anonymousTelemetryEnabled.value
+                },
             )
             Result.success()
         }.getOrElse {

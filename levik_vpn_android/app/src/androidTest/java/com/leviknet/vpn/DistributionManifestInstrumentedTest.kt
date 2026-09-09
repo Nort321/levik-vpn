@@ -49,6 +49,8 @@ class DistributionManifestInstrumentedTest {
 
         if (BuildConfig.IS_PLAY_DISTRIBUTION) {
             assertFalse(requestedPermissions.contains(Manifest.permission.REQUEST_INSTALL_PACKAGES))
+            assertFalse(requestedPermissions.contains(Manifest.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS))
+            assertTrue(requestedPermissions.contains(Manifest.permission.QUERY_ALL_PACKAGES))
             assertNull(fileProvider)
         } else {
             assertTrue(requestedPermissions.contains(Manifest.permission.REQUEST_INSTALL_PACKAGES))

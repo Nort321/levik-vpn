@@ -252,6 +252,7 @@ private data class PreparedXrayEngineSession(
 
 class XrayTunnelEngineAdapter(
     private val runtime: XrayRuntime,
+    private val validateConfig: (String) -> Unit = {},
 ) : TunnelEngineAdapter {
     override val kind: TunnelEngineKind = TunnelEngineKind.XRAY
 
@@ -281,9 +282,11 @@ class XrayTunnelEngineAdapter(
                 xray.environment.protector.protectAndBind(fd)
         }
         // libXray consumes a borrowed fd embedded in its JSON and does not assume ownership.
+        val config = xray.request.configFactory.build(tun.borrowedFd)
+        validateConfig(config)
         return runtime.start(
             owner = owner,
-            configJson = xray.request.configFactory.build(tun.borrowedFd),
+            configJson = config,
             controller = controller,
             dnsServer = xray.environment.dnsServer,
         )

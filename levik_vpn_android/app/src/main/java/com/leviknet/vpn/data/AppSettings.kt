@@ -3,6 +3,7 @@ package com.leviknet.vpn.data
 import android.content.Context
 import androidx.core.content.edit
 import com.leviknet.vpn.core.notification.AppIconArtwork
+import com.leviknet.vpn.BuildConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -184,6 +185,25 @@ class AppSettings(context: Context) {
     }
 
     private val preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+    // Play requires a new affirmative choice; do not inherit the old default-on setting.
+    private val whitelistMapPreferenceKey = if (BuildConfig.IS_PLAY_DISTRIBUTION) {
+        "play_whitelist_map_consent_v1"
+    } else WHITELIST_MAP_ENABLED
+    private val telemetryPreferenceKey = if (BuildConfig.IS_PLAY_DISTRIBUTION) {
+        "play_diagnostics_consent_v1"
+    } else ANONYMOUS_TELEMETRY_ENABLED
+    private val wifiPreferenceKey = if (BuildConfig.IS_PLAY_DISTRIBUTION) {
+        "play_wifi_consent_v1"
+    } else AUTO_CONNECT_UNTRUSTED_WIFI
+
+    fun hasInstalledAppsConsent(): Boolean = !BuildConfig.IS_PLAY_DISTRIBUTION ||
+        preferences.getBoolean("play_installed_apps_consent_v1", false)
+
+    fun acceptInstalledAppsConsent() {
+        if (BuildConfig.IS_PLAY_DISTRIBUTION) {
+            preferences.edit(commit = true) { putBoolean("play_installed_apps_consent_v1", true) }
+        }
+    }
 
     private val mutableRoutingPreset = MutableStateFlow(
         runCatching {
@@ -229,7 +249,7 @@ class AppSettings(context: Context) {
         preferences.getBoolean(KILL_SWITCH_ENABLED, false),
     )
     private val mutableAutoConnectUntrustedWifi = MutableStateFlow(
-        preferences.getBoolean(AUTO_CONNECT_UNTRUSTED_WIFI, false),
+        preferences.getBoolean(wifiPreferenceKey, false),
     )
     private val mutableTrustedWifiSsids = MutableStateFlow(
         preferences.getStringSet(TRUSTED_WIFI_SSIDS, emptySet()) ?: emptySet(),
@@ -296,7 +316,7 @@ class AppSettings(context: Context) {
         preferences.getStringSet(CUSTOM_PROXY_DOMAINS, emptySet()) ?: emptySet(),
     )
     private val mutableAnonymousTelemetryEnabled = MutableStateFlow(
-        preferences.getBoolean(ANONYMOUS_TELEMETRY_ENABLED, false),
+        preferences.getBoolean(telemetryPreferenceKey, false),
     )
     private val mutablePausedUntilMs = MutableStateFlow(
         preferences.getLong(PAUSED_UNTIL_MS, 0L),
@@ -329,7 +349,9 @@ class AppSettings(context: Context) {
     val favoriteServerIds: StateFlow<Set<String>> = mutableFavoriteServerIds.asStateFlow()
     val customDirectDomains: StateFlow<Set<String>> = mutableCustomDirectDomains.asStateFlow()
     val customProxyDomains: StateFlow<Set<String>> = mutableCustomProxyDomains.asStateFlow()
-    private val mutableWhitelistMapEnabled = MutableStateFlow(preferences.getBoolean(WHITELIST_MAP_ENABLED, true))
+    private val mutableWhitelistMapEnabled = MutableStateFlow(
+        preferences.getBoolean(whitelistMapPreferenceKey, !BuildConfig.IS_PLAY_DISTRIBUTION),
+    )
     val whitelistMapEnabled: StateFlow<Boolean> = mutableWhitelistMapEnabled.asStateFlow()
 
     val anonymousTelemetryEnabled: StateFlow<Boolean> = mutableAnonymousTelemetryEnabled.asStateFlow()
@@ -412,7 +434,7 @@ class AppSettings(context: Context) {
 
     fun setAutoConnectUntrustedWifi(enabled: Boolean) {
         preferences.edit(commit = true) {
-            putBoolean(AUTO_CONNECT_UNTRUSTED_WIFI, enabled)
+            putBoolean(wifiPreferenceKey, enabled)
         }
         mutableAutoConnectUntrustedWifi.value = enabled
     }
@@ -556,13 +578,13 @@ class AppSettings(context: Context) {
     }
 
     fun setWhitelistMapEnabled(enabled: Boolean) {
-        preferences.edit(commit = true) { putBoolean(WHITELIST_MAP_ENABLED, enabled) }
+        preferences.edit(commit = true) { putBoolean(whitelistMapPreferenceKey, enabled) }
         mutableWhitelistMapEnabled.value = enabled
     }
 
     fun setAnonymousTelemetryEnabled(enabled: Boolean) {
         preferences.edit(commit = true) {
-            putBoolean(ANONYMOUS_TELEMETRY_ENABLED, enabled)
+            putBoolean(telemetryPreferenceKey, enabled)
         }
         mutableAnonymousTelemetryEnabled.value = enabled
     }

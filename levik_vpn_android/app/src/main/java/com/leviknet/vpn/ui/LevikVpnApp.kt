@@ -173,6 +173,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
     var showPauseDialog by remember { mutableStateOf(false) }
     var showAntiDpiDialog by remember { mutableStateOf(false) }
     var showSplitTunnelDialog by remember { mutableStateOf(false) }
+    var pendingInstalledAppsAction by remember { mutableStateOf<(() -> Unit)?>(null) }
     var showAppSelectorDialog by remember { mutableStateOf(false) }
     var showDnsDialog by remember { mutableStateOf(false) }
     var showAppIconDialog by remember { mutableStateOf(false) }
@@ -247,7 +248,13 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     onServerFilterChanged = viewModel::setServerFilter,
                     onRunDiagnostics = viewModel::runDiagnostics,
                     onAnalyzeAppTraffic = {
-                        viewModel.loadPerAppTraffic(context.packageManager, context)
+                        if (viewModel.hasInstalledAppsConsent()) {
+                            viewModel.loadPerAppTraffic(context.packageManager, context)
+                        } else {
+                            pendingInstalledAppsAction = {
+                                viewModel.loadPerAppTraffic(context.packageManager, context)
+                            }
+                        }
                     },
                     onResetPerAppTrafficBaseline = {
                         viewModel.resetPerAppTrafficBaseline(context.packageManager, context)
@@ -265,8 +272,15 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     },
                     onOpenLogs = { showLogsDialog = true },
                     onOpenSplitTunneling = {
-                        viewModel.loadInstalledApps(context.packageManager)
-                        showSplitTunnelDialog = true
+                        if (!viewModel.hasInstalledAppsConsent()) {
+                            pendingInstalledAppsAction = {
+                                viewModel.loadInstalledApps(context.packageManager)
+                                showSplitTunnelDialog = true
+                            }
+                        } else {
+                            viewModel.loadInstalledApps(context.packageManager)
+                            showSplitTunnelDialog = true
+                        }
                     },
                     onOpenDns = { showDnsDialog = true },
                     onOpenTheme = { showThemeDialog = true },
@@ -289,6 +303,23 @@ fun LevikVpnApp(viewModel: AppViewModel) {
             }
         }
     }
+
+    DistributionDataDisclosureDialog(
+        disclosure = state.optionalDataDisclosure,
+        onAccept = viewModel::acceptOptionalDataDisclosure,
+        onDecline = viewModel::declineOptionalDataDisclosure,
+    )
+
+    DistributionInstalledAppsDisclosure(
+        visible = pendingInstalledAppsAction != null,
+        onAccept = {
+            viewModel.acceptInstalledAppsConsent()
+            val action = pendingInstalledAppsAction
+            pendingInstalledAppsAction = null
+            action?.invoke()
+        },
+        onDecline = { pendingInstalledAppsAction = null },
+    )
 
     if (state.showAppDataDisclosure) {
         AlertDialog(

@@ -12,6 +12,7 @@ import android.os.Build
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
+import com.leviknet.vpn.BuildConfig
 import com.leviknet.vpn.data.AppSettings
 import com.leviknet.vpn.core.logger.AppLogger
 import java.util.concurrent.ConcurrentHashMap
@@ -77,6 +78,9 @@ class WifiAutoConnectMonitor(
         network: Network,
         capabilities: NetworkCapabilities? = null,
     ) {
+        if (BuildConfig.IS_PLAY_DISTRIBUTION &&
+            (!settings.autoConnectUntrustedWifi.value || !hasLocationPermission())
+        ) return
         val ssid = currentSsid(capabilities) ?: return
         scope.launch { evaluateAutoConnect(ssid) }
     }

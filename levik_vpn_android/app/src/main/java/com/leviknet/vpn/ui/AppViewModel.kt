@@ -1222,6 +1222,14 @@ class AppViewModel(
             settings.setAutoConnectUntrustedWifi(false)
             return
         }
+        if (BuildConfig.IS_PLAY_DISTRIBUTION) {
+            mutableState.update { it.copy(optionalDataDisclosure = OptionalDataDisclosure.WIFI) }
+            return
+        }
+        requestWifiPermission()
+    }
+
+    private fun requestWifiPermission() {
         pendingWifiAutoConnect = true
         viewModelScope.launch {
             effectChannel.send(AppEffect.RequestLocationPermission)
@@ -1314,7 +1322,9 @@ class AppViewModel(
 
     fun openPrivacyPolicy() {
         viewModelScope.launch {
-            effectChannel.send(AppEffect.OpenExternal(PRIVACY_POLICY_URL))
+            effectChannel.send(AppEffect.OpenExternal(
+                if (BuildConfig.IS_PLAY_DISTRIBUTION) "$PRIVACY_POLICY_URL?distribution=play" else PRIVACY_POLICY_URL,
+            ))
         }
     }
 
@@ -1745,6 +1755,7 @@ class AppViewModel(
     }
 
     fun loadInstalledApps(packageManager: PackageManager) {
+        if (!settings.hasInstalledAppsConsent()) return
         viewModelScope.launch(Dispatchers.IO) {
             // Include installed system packages and services without launcher activities.
             val applications = try {
@@ -1778,6 +1789,7 @@ class AppViewModel(
 
     /** uid -> (rx, tx) totals for every launcher-visible package. */
     private fun collectUidTraffic(): Map<Int, Pair<Long, Long>>? {
+        if (!settings.hasInstalledAppsConsent()) return null
         val pm = appContext?.packageManager ?: return null
         return try {
             val intent = android.content.Intent(android.content.Intent.ACTION_MAIN, null).apply {
@@ -1809,6 +1821,7 @@ class AppViewModel(
     }
 
     fun loadPerAppTraffic(packageManager: PackageManager, context: Context) {
+        if (!settings.hasInstalledAppsConsent()) return
         viewModelScope.launch(Dispatchers.IO) {
             val baseline = perAppTrafficBaseline
             val intent = android.content.Intent(android.content.Intent.ACTION_MAIN, null).apply {
@@ -1905,6 +1918,9 @@ class AppViewModel(
                 vpnSnapshot = vpnController.state.value,
                 apiClient = apiClient,
                 sendTelemetry = settings.anonymousTelemetryEnabled.value,
+                telemetryStillAllowed = {
+                    !BuildConfig.IS_PLAY_DISTRIBUTION || settings.anonymousTelemetryEnabled.value
+                },
             )
             mutableState.update { it.copy(runningDiagnostics = false, diagnosticReport = report) }
         }
@@ -1969,6 +1985,10 @@ class AppViewModel(
     }
 
     fun setWhitelistMapEnabled(enabled: Boolean) {
+        if (BuildConfig.IS_PLAY_DISTRIBUTION && enabled) {
+            mutableState.update { it.copy(optionalDataDisclosure = OptionalDataDisclosure.MAP) }
+            return
+        }
         settings.setWhitelistMapEnabled(enabled)
     }
 
@@ -1979,9 +1999,35 @@ class AppViewModel(
     }
 
     fun setAnonymousTelemetryEnabled(enabled: Boolean) {
+        if (BuildConfig.IS_PLAY_DISTRIBUTION && enabled) {
+            mutableState.update { it.copy(optionalDataDisclosure = OptionalDataDisclosure.DIAGNOSTICS) }
+            return
+        }
+        updateAnonymousTelemetry(enabled)
+    }
+
+    private fun updateAnonymousTelemetry(enabled: Boolean) {
         settings.setAnonymousTelemetryEnabled(enabled)
         appContext?.let { CensorshipRadarWorker.configure(it, enabled) }
     }
+
+    fun acceptOptionalDataDisclosure() {
+        val disclosure = mutableState.value.optionalDataDisclosure ?: return
+        mutableState.update { it.copy(optionalDataDisclosure = null) }
+        when (disclosure) {
+            OptionalDataDisclosure.MAP -> settings.setWhitelistMapEnabled(true)
+            OptionalDataDisclosure.DIAGNOSTICS -> updateAnonymousTelemetry(true)
+            OptionalDataDisclosure.WIFI -> requestWifiPermission()
+        }
+    }
+
+    fun declineOptionalDataDisclosure() {
+        mutableState.update { it.copy(optionalDataDisclosure = null) }
+    }
+
+    fun hasInstalledAppsConsent(): Boolean = settings.hasInstalledAppsConsent()
+
+    fun acceptInstalledAppsConsent() = settings.acceptInstalledAppsConsent()
 
     fun shareDiagnosticReportAsNote() {
         val report = mutableState.value.diagnosticReport ?: return
@@ -2195,6 +2241,8 @@ enum class ServerFilterType {
     }
 }
 
+enum class OptionalDataDisclosure { MAP, DIAGNOSTICS, WIFI }
+
 data class AppUiState(
     val session: SessionStatus = SessionStatus.Loading,
     val account: MobileAccountResponse? = null,
@@ -2211,6 +2259,7 @@ data class AppUiState(
     val refreshing: Boolean = false,
     val showAppDataDisclosure: Boolean = false,
     val showVpnDisclosure: Boolean = false,
+    val optionalDataDisclosure: OptionalDataDisclosure? = null,
     val showLogoutConfirmation: Boolean = false,
     val showRelayIntroduction: Boolean = false,
     val showLteWhitelistWarning: Boolean = false,

@@ -60,6 +60,11 @@ class MainActivity : ComponentActivity() {
     ) { granted ->
         viewModel.onLocationPermissionResult(granted)
     }
+    private val playLocationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { grants ->
+        viewModel.onLocationPermissionResult(grants[Manifest.permission.ACCESS_FINE_LOCATION] == true)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -134,33 +139,7 @@ class MainActivity : ComponentActivity() {
                 val shareIntent = Intent.createChooser(sendIntent, effect.title)
                 startActivity(shareIntent)
             }
-            AppEffect.RequestBatteryOptimization -> {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    val pm = getSystemService(android.os.PowerManager::class.java)
-                    if (pm?.isIgnoringBatteryOptimizations(packageName) == true) {
-                        val settingsIntent = Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                        runCatching { startActivity(settingsIntent) }.onFailure {
-                            val appDetailsIntent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                                data = "package:$packageName".toUri()
-                            }
-                            runCatching { startActivity(appDetailsIntent) }
-                        }
-                    } else {
-                        val requestIntent = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                            data = "package:$packageName".toUri()
-                        }
-                        runCatching { startActivity(requestIntent) }.onFailure {
-                            val settingsIntent = Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                            runCatching { startActivity(settingsIntent) }.onFailure {
-                                val appDetailsIntent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                                    data = "package:$packageName".toUri()
-                                }
-                                runCatching { startActivity(appDetailsIntent) }
-                            }
-                        }
-                    }
-                }
-            }
+            AppEffect.RequestBatteryOptimization -> openDistributionBatterySettings()
             AppEffect.RequestVpnPermission -> {
                 val permissionIntent = container.vpnController.permissionIntent()
                 if (permissionIntent == null) {
@@ -188,6 +167,12 @@ class MainActivity : ComponentActivity() {
                     ) == PackageManager.PERMISSION_GRANTED
                 ) {
                     viewModel.onLocationPermissionResult(granted = true)
+                } else if (BuildConfig.IS_PLAY_DISTRIBUTION) {
+                    // Android 12+ requires coarse and fine to be requested together.
+                    playLocationPermissionLauncher.launch(arrayOf(
+                        Manifest.permission.ACCESS_COARSE_LOCATION,
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                    ))
                 } else {
                     locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
                 }

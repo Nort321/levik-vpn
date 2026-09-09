@@ -82,6 +82,7 @@ object NetworkDiagnostics {
         vpnSnapshot: VpnSnapshot,
         apiClient: MobileApiClient,
         sendTelemetry: Boolean = true,
+        telemetryStillAllowed: () -> Boolean = { true },
     ): DiagnosticReport = withContext(Dispatchers.IO) {
         val checksDeferred = async {
             supervisorScope {
@@ -110,7 +111,7 @@ object NetworkDiagnostics {
             timestamp = timestamp,
         )
 
-        if (sendTelemetry) {
+        if (sendTelemetry && telemetryStillAllowed()) {
             runCatching {
                 val results = checks.map { check ->
                     BrowserCheckReportServiceResult(
