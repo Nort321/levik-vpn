@@ -22,6 +22,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 internal class DirectAppUpdateManager(
@@ -55,13 +57,30 @@ internal class DirectAppUpdateManager(
     private val mutableState = MutableStateFlow<UpdateState>(UpdateState.Idle)
     override val state: StateFlow<UpdateState> = mutableState.asStateFlow()
 
+    private val checkMutex = Mutex()
     private var lastVerifiedUpdate: AppUpdateDto? = null
 
     init {
         cleanupStaleDownloads()
     }
 
-    override suspend fun checkForUpdates(silent: Boolean): AppUpdateDto? = withContext(Dispatchers.IO) {
+    override suspend fun checkForUpdates(silent: Boolean): AppUpdateDto? = checkMutex.withLock {
+        // A notification tap or foreground event must not interrupt an active download.
+        when (val current = state.value) {
+            is UpdateState.Downloading -> null
+            is UpdateState.ReadyToInstall -> current.info
+            else -> lookupUpdate(silent = silent, background = false)
+        }
+    }
+
+    override suspend fun checkForUpdatesInBackground(): AppUpdateDto? = checkMutex.withLock {
+        lookupUpdate(silent = true, background = true)
+    }
+
+    private suspend fun lookupUpdate(
+        silent: Boolean,
+        background: Boolean,
+    ): AppUpdateDto? = withContext(Dispatchers.IO) {
         val configured = configuration.getOrElse { error ->
             AppLogger.e(LOG_TAG, "Direct update verification is not configured", error)
             if (!silent) mutableState.value = UpdateState.Error(CONFIGURATION_ERROR_MESSAGE)
@@ -79,7 +98,7 @@ internal class DirectAppUpdateManager(
         when (val lookup = configured.releaseClient.lookupLatestStableRelease(silent)) {
             ReleaseLookupResult.Skipped -> null
             ReleaseLookupResult.NoStableRelease -> {
-                lastVerifiedUpdate = null
+                if (!background) lastVerifiedUpdate = null
                 if (!silent) mutableState.value = UpdateState.UpToDate
                 null
             }
@@ -117,17 +136,21 @@ internal class DirectAppUpdateManager(
                         )
                     }
                     configured.releaseClient.recordVerifiedRelease(update.latestVersionCode)
-                    lastVerifiedUpdate = update
-                    mutableState.value = UpdateState.Available(update)
+                    if (!background) {
+                        lastVerifiedUpdate = update
+                        mutableState.value = UpdateState.Available(update)
+                    }
                     AppLogger.i(
                         LOG_TAG,
                         "Verified Direct update v${update.latestVersionName} (${update.latestVersionCode})",
                     )
                     update
                 } catch (error: UpdateNotNewerException) {
-                    lastVerifiedUpdate = null
+                    if (!background) lastVerifiedUpdate = null
                     if (!silent) mutableState.value = UpdateState.UpToDate
                     null
+                } catch (error: CancellationException) {
+                    throw error
                 } catch (error: Exception) {
                     configured.releaseClient.recordAssetFailure(error)
                     AppLogger.e(LOG_TAG, "Direct update metadata validation failed", error)

@@ -23,6 +23,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.leviknet.vpn.core.auth.ExternalUriPolicy
 import com.leviknet.vpn.core.auth.DeepLinkRouter
+import com.leviknet.vpn.core.update.consumeUpdateNotificationIntent
 import com.leviknet.vpn.core.logger.AppLogger
 import com.leviknet.vpn.core.notification.AppIconArtwork
 import com.leviknet.vpn.data.AppIcon
@@ -79,13 +80,21 @@ class MainActivity : ComponentActivity() {
                 launch { container.settings.appIcon.collect(::updateTaskIcon) }
             }
         }
-        intent?.data?.let { uri -> viewModel.handleDeepLink(uri) }
+        intent?.let(::handleLaunchIntent)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        intent.data?.let { uri -> viewModel.handleDeepLink(uri) }
+        handleLaunchIntent(intent)
+    }
+
+    private fun handleLaunchIntent(intent: Intent) {
+        if (consumeUpdateNotificationIntent(intent)) {
+            viewModel.checkForUpdates()
+        } else {
+            intent.data?.let { uri -> viewModel.handleDeepLink(uri) }
+        }
     }
 
     override fun onResume() {

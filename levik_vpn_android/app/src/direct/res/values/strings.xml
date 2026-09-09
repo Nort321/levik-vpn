@@ -22,4 +22,7 @@
     <string name="relay_vk_auth_notification">Open the authorization window to connect the VPN</string>
     <string name="relay_vk_login_prompt">Sign in to VK. Your account data stays inside the VK WebView.</string>
     <string name="relay_vk_joining">Establishing the protected VK channel…</string>
+    <string name="notification_channel_updates">App updates</string>
+    <string name="notification_channel_updates_desc">Notifications about new versions of Levik VPN</string>
+    <string name="notification_update_available">Levik VPN %1$s is available. Tap to update.</string>
 </resources>

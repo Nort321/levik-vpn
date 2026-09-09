@@ -18,3 +18,9 @@ private object DisabledAppUpdateManager : AppUpdateManager {
 
     override fun dismiss() = Unit
 }
+
+@Suppress("UNUSED_PARAMETER")
+internal fun scheduleBackgroundUpdateChecks(context: Context) = Unit
+
+@Suppress("UNUSED_PARAMETER")
+internal fun consumeUpdateNotificationIntent(intent: android.content.Intent): Boolean = false

@@ -37,6 +37,9 @@ interface AppUpdateManager {
 
     suspend fun checkForUpdates(silent: Boolean = false): AppUpdateDto?
 
+    /** Verifies update metadata without changing the foreground dialog or download state. */
+    suspend fun checkForUpdatesInBackground(): AppUpdateDto? = null
+
     suspend fun downloadAndInstall(update: AppUpdateDto)
 
     fun dismiss()

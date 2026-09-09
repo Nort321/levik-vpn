@@ -22,4 +22,7 @@
     <string name="relay_vk_joining">Получаем защищённый канал VK…</string>
     <string name="subscription_buy_slots_btn">Докупить слоты</string>
     <string name="subscription_buy_traffic_btn">Докупить трафик</string>
+    <string name="notification_channel_updates">Обновления приложения</string>
+    <string name="notification_channel_updates_desc">Уведомления о новых версиях Levik VPN</string>
+    <string name="notification_update_available">Вышла новая версия Levik VPN %1$s. Нажмите, чтобы обновиться.</string>
 </resources>

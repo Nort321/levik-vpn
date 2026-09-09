@@ -1924,7 +1924,7 @@ class AppViewModel(
 
     fun checkForUpdates() {
         if (!BuildConfig.SELF_UPDATE_ENABLED) return
-        viewModelScope.launch {
+        updateCheckJob = viewModelScope.launch {
             updateManager.checkForUpdates(silent = false)
         }
     }

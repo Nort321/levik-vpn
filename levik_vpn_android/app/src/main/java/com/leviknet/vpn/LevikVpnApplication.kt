@@ -14,5 +14,6 @@ class LevikVpnApplication : Application() {
         container
         com.leviknet.vpn.core.notification.SubscriptionNotificationManager.ensureChannel(this)
         com.leviknet.vpn.vpn.SubscriptionSyncWorker.enqueuePeriodic(this)
+        com.leviknet.vpn.core.update.scheduleBackgroundUpdateChecks(this)
     }
 }
