@@ -3,7 +3,6 @@ package com.leviknet.vpn.ui
 import com.leviknet.vpn.BuildConfig
 import com.leviknet.vpn.core.network.*
 import com.leviknet.vpn.data.canUseCachedProfileAfter
-import com.leviknet.vpn.data.deviceSlotProblem
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import org.junit.Assert.*
@@ -47,36 +46,6 @@ class AppProblemTest {
     }
 
     @Test
-    fun `full mobile component identifies the exact subscription and quota`() {
-        val sub = multi()
-        assertEquals(ApiProblemDetails("multi", "mobile", 1, 1), deviceSlotProblem(sub, "current"))
-        assertEquals(ApiProblemDetails("multi", "regular", 1, 1), deviceSlotProblem(
-            sub.copy(components = sub.components!!.copy(regular = component(1, 1, "regular:other"))), "current",
-        ))
-    }
-
-    @Test
-    fun `own registration in one component cannot hide a full other component`() {
-        val sub = multi()
-        assertNotNull(deviceSlotProblem(sub, "current"))
-        assertNull(deviceSlotProblem(sub.copy(components = sub.components!!.copy(
-            mobile = component(1, 1, "mobile:current"),
-        )), "current"))
-    }
-
-    @Test
-    fun `a truncated device list cannot prove that the current device is absent`() {
-        assertNull(deviceSlotProblem(subscription().copy(devices = DeviceSummary(2, 2, listOf(DeviceItem("other", "Phone")))), "current"))
-    }
-
-    @Test
-    fun `unlimited and freed slots allow a new device`() {
-        assertNull(deviceSlotProblem(subscription().copy(devices = DeviceSummary(5, 0, emptyList())), "current"))
-        assertNull(deviceSlotProblem(subscription().copy(devices = DeviceSummary(0, 1, emptyList())), "current"))
-        assertNull(deviceSlotProblem(subscription().copy(devices = DeviceSummary(1, 1, listOf(DeviceItem("current", "Phone")))), "current"))
-    }
-
-    @Test
     fun `account target never silently switches to an unrelated subscription`() {
         val other = subscription().copy(uuid = "other")
         val state = AppUiState(account = account(listOf(other)), selectedSubscriptionId = "other")
@@ -111,6 +80,22 @@ class AppProblemTest {
     }
 
     @Test
+    fun `server device limit without details still offers recovery for the requested subscription`() {
+        val failure = Json.decodeFromString<ApiFailure>("""{"code":"device_limit_reached","retryable":false}""")
+        val problem = ApiException.Rejected(failure.code, failure.retryable, 409, failure.details)
+            .toAppProblem(ProblemOperation.CONNECT, "single")
+        val sub = subscription()
+        val target = problemSubscription(problem, AppUiState(account = account(listOf(sub))))
+
+        assertEquals(ProblemReason.DEVICE_LIMIT, problem.reason)
+        assertEquals(ProblemOperation.CONNECT, problem.operation)
+        assertEquals(sub, target)
+        assertNull(problem.details)
+        assertEquals(ProblemAction.DEVICES, problemActions(problem, target).first())
+        assertTrue(problemActions(problem, target).contains(ProblemAction.SUBSCRIPTIONS))
+    }
+
+    @Test
     fun `cache cannot conceal authoritative account and slot errors`() {
         assertTrue(canUseCachedProfileAfter(ApiException.Network(IOException())))
         assertTrue(canUseCachedProfileAfter(ApiException.Rejected("temporarily_unavailable", true, 503)))
@@ -118,15 +103,6 @@ class AppProblemTest {
         assertFalse(canUseCachedProfileAfter(ApiException.Rejected("subscription_not_found", false, 404)))
         assertFalse(canUseCachedProfileAfter(ApiException.InvalidResponse("invalid")))
     }
-
-    private fun component(used: Int, limit: Int, id: String) = SubscriptionComponent(
-        TrafficSummary(0, 0), DeviceSummary(used, limit, listOf(DeviceItem(id, "Phone"))),
-    )
-
-    private fun multi() = subscription().copy(
-        uuid = "multi",
-        components = SubscriptionComponents(component(1, 2, "regular:current"), component(1, 1, "mobile:other")),
-    )
 
     private fun subscription() = SubscriptionSummary(
         uuid = "single", tariffId = "solo", title = "VPN", status = "active",
