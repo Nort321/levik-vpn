@@ -2,6 +2,7 @@ package com.leviknet.vpn.data
 
 import android.content.Context
 import androidx.core.content.edit
+import com.leviknet.vpn.core.notification.AppIconArtwork
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -167,15 +168,18 @@ enum class ThemeMode {
 }
 
 class AppSettings(context: Context) {
+    private val appContext = context.applicationContext
     private val appIconManager = AppIconManager(context)
     private val mutableAppIcon = MutableStateFlow(appIconManager.current())
     val appIcon: StateFlow<AppIcon> = mutableAppIcon.asStateFlow()
 
+    @Synchronized
     fun setAppIcon(icon: AppIcon) {
         try {
             appIconManager.select(icon)
         } finally {
             mutableAppIcon.value = appIconManager.current()
+            AppIconArtwork.refreshNotifications(appContext, mutableAppIcon.value)
         }
     }
 

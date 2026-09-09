@@ -59,7 +59,7 @@
     <string name="servers_description">Выберите точку подключения Levik VPN.</string>
     <string name="servers_empty">Для этой подписки нет совместимых серверов.</string>
     <string name="server_automatic">Автоматически</string>
-    <string name="server_automatic_description">Проверить серверы вне России и подключиться к серверу с минимальным пингом, отдавая приоритет обычным серверам.</string>
+    <string name="server_automatic_description">Подключиться к серверу с минимальным пингом, отдавая приоритет обычным серверам вне России. Мобильные LTE-серверы также участвуют в выборе.</string>
     <string name="server_ping_checking">Проверяем все серверы…</string>
     <string name="server_ping_checking_short">…</string>
     <string name="server_ping_unavailable">Не удалось измерить пинг серверов. Оставлен предыдущий доступный сервер.</string>

@@ -63,10 +63,17 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".LauncherActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay" />
 
         <activity-alias
             android:name=".LauncherLight"
-            android:targetActivity=".MainActivity"
+            android:targetActivity=".LauncherActivity"
             android:enabled="true"
             android:exported="true"
             android:icon="@mipmap/ic_launcher"
@@ -80,7 +87,7 @@
 
         <activity-alias
             android:name=".LauncherDark"
-            android:targetActivity=".MainActivity"
+            android:targetActivity=".LauncherActivity"
             android:enabled="false"
             android:exported="true"
             android:icon="@mipmap/ic_launcher_dark"
@@ -94,7 +101,7 @@
 
         <activity-alias
             android:name=".LauncherMonochrome"
-            android:targetActivity=".MainActivity"
+            android:targetActivity=".LauncherActivity"
             android:enabled="false"
             android:exported="true"
             android:icon="@mipmap/ic_launcher_mono"

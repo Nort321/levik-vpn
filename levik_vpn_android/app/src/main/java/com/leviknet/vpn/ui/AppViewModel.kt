@@ -107,6 +107,7 @@ class AppViewModel(
     private var pendingAllowlistAction: PendingAllowlistAction? = null
     private var pendingWifiAutoConnect = false
     private val serverPingMutex = Mutex()
+    private val appIconSelectionMutex = Mutex()
     private val perAppBaselineMutex = Mutex()
     private val lteTrafficAccumulator = LteTrafficAccumulator()
     private val whitelistDetector = whitelistDetector ?: appContext?.let(::WhitelistDetector)
@@ -1627,10 +1628,16 @@ class AppViewModel(
     }
 
     fun setAppIcon(icon: AppIcon) {
-        try {
-            settings.setAppIcon(icon)
-        } catch (_: RuntimeException) {
-            mutableState.update { it.copy(message = UiMessage.GENERIC_ERROR) }
+        viewModelScope.launch {
+            appIconSelectionMutex.withLock {
+                try {
+                    withContext(Dispatchers.IO) { settings.setAppIcon(icon) }
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: RuntimeException) {
+                    mutableState.update { it.copy(message = UiMessage.GENERIC_ERROR) }
+                }
+            }
         }
     }
 

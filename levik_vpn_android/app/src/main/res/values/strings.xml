@@ -59,7 +59,7 @@
     <string name="servers_description">Choose the endpoint Levik VPN will use.</string>
     <string name="servers_empty">No compatible servers are available for this subscription.</string>
     <string name="server_automatic">Automatic</string>
-    <string name="server_automatic_description">Checks non-Russian servers and connects through the one with the lowest latency, preferring regular servers.</string>
+    <string name="server_automatic_description">Connects through the lowest-latency server, preferring regular servers outside Russia. Mobile LTE servers are also eligible.</string>
     <string name="server_ping_checking">Checking all servers…</string>
     <string name="server_ping_checking_short">…</string>
     <string name="server_ping_unavailable">Could not measure server latency. The previous available server was kept.</string>

@@ -4,11 +4,18 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import androidx.annotation.DrawableRes
+import com.leviknet.vpn.R
 
-enum class AppIcon(val aliasName: String) {
-    LIGHT("LauncherLight"),
-    DARK("LauncherDark"),
-    MONOCHROME("LauncherMonochrome"),
+enum class AppIcon(
+    val aliasName: String,
+    @param:DrawableRes val launcherResource: Int,
+    @param:DrawableRes val foregroundResource: Int,
+    @param:DrawableRes val previewResource: Int,
+) {
+    LIGHT("LauncherLight", R.mipmap.ic_launcher, R.drawable.ic_launcher_foreground, R.drawable.logo_light),
+    DARK("LauncherDark", R.mipmap.ic_launcher_dark, R.drawable.ic_launcher_dark_foreground, R.drawable.logo_dark),
+    MONOCHROME("LauncherMonochrome", R.mipmap.ic_launcher_mono, R.drawable.ic_launcher_mono_foreground, R.drawable.logo_mono),
 }
 
 /** PackageManager persists the selection across restarts and app updates. */
@@ -22,15 +29,21 @@ internal class AppIconManager(context: Context) {
     )
 
     fun current(): AppIcon = AppIcon.entries.firstOrNull { icon ->
-        val state = packageManager.getComponentEnabledSetting(component(icon))
-        state == PackageManager.COMPONENT_ENABLED_STATE_ENABLED ||
-            (state == PackageManager.COMPONENT_ENABLED_STATE_DEFAULT && icon == AppIcon.LIGHT)
+        packageManager.getComponentEnabledSetting(component(icon)) ==
+            PackageManager.COMPONENT_ENABLED_STATE_ENABLED
     } ?: AppIcon.LIGHT
 
+    @Synchronized
     fun select(icon: AppIcon) {
         val previous = AppIcon.entries.associateWith {
             packageManager.getComponentEnabledSetting(component(it))
         }
+        // Re-selecting the current icon must not invalidate launcher shortcuts again.
+        val enabled = previous.filter { (entry, state) ->
+            state == PackageManager.COMPONENT_ENABLED_STATE_ENABLED ||
+                (state == PackageManager.COMPONENT_ENABLED_STATE_DEFAULT && entry == AppIcon.LIGHT)
+        }.keys
+        if (enabled == setOf(icon)) return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             packageManager.setComponentEnabledSettings(AppIcon.entries.map {
                 PackageManager.ComponentEnabledSetting(

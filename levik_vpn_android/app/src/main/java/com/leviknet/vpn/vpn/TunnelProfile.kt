@@ -191,4 +191,4 @@ fun TunnelServer.isRussianServer(): Boolean =
     countryCode.trim().equals("RU", ignoreCase = true)
 
 fun TunnelServer.isEligibleForAutomaticSelection(): Boolean =
-    engine == TunnelEngineKind.XRAY && !isRussianServer()
+    engine == TunnelEngineKind.XRAY && (!isRussianServer() || isStandardMobileServer())

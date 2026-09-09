@@ -5137,11 +5137,6 @@ private fun AppIconDialog(
                         AppIcon.DARK -> R.string.app_icon_dark
                         AppIcon.MONOCHROME -> R.string.app_icon_monochrome
                     }
-                    val preview = when (icon) {
-                        AppIcon.LIGHT -> R.drawable.logo_light
-                        AppIcon.DARK -> R.drawable.logo_dark
-                        AppIcon.MONOCHROME -> R.drawable.logo_mono
-                    }
                     Row(
                         Modifier.fillMaxWidth().selectable(
                             selected = currentIcon == icon,
@@ -5151,7 +5146,7 @@ private fun AppIconDialog(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         RadioButton(selected = currentIcon == icon, onClick = null)
-                        Image(painterResource(preview), null, Modifier.padding(horizontal = 12.dp).size(48.dp))
+                        Image(painterResource(icon.previewResource), null, Modifier.padding(horizontal = 12.dp).size(48.dp))
                         Text(stringResource(label))
                     }
                 }

@@ -11,6 +11,7 @@ import com.leviknet.vpn.R
 import com.leviknet.vpn.core.logger.AppLogger
 import com.leviknet.vpn.core.network.SubscriptionSummary
 import com.leviknet.vpn.data.AppSettings
+import com.leviknet.vpn.data.AppIconManager
 import java.time.Duration
 import java.time.Instant
 
@@ -192,8 +193,10 @@ object SubscriptionNotificationManager {
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         val pendingIntent = PendingIntent.getActivity(context, notificationId, launchIntent, flags)
 
+        val appIcon = AppIconManager(context).current()
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_shield)
+            .setSmallIcon(AppIconArtwork.smallIcon(context, appIcon))
+            .setLargeIcon(AppIconArtwork.largeIcon(context, appIcon))
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))

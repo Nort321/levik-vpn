@@ -21,6 +21,7 @@ import com.leviknet.vpn.LevikVpnApplication
 import com.leviknet.vpn.MainActivity
 import com.leviknet.vpn.R
 import com.leviknet.vpn.core.logger.AppLogger
+import com.leviknet.vpn.core.notification.AppIconArtwork
 import com.leviknet.vpn.core.network.WhitelistMode
 import com.leviknet.vpn.core.security.SecureFileStore
 import com.leviknet.vpn.data.DnsProvider
@@ -1863,7 +1864,8 @@ class LevikVpnService : VpnService() {
         }
 
         val builder = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_shield)
+            .setSmallIcon(AppIconArtwork.smallIcon(this, container.settings.appIcon.value))
+            .setLargeIcon(AppIconArtwork.largeIcon(this, container.settings.appIcon.value))
             .setContentTitle(getString(R.string.app_name))
             .setContentText(text)
             .setContentIntent(contentIntent)

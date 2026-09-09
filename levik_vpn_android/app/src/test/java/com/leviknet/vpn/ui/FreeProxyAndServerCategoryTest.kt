@@ -92,7 +92,7 @@ class FreeProxyAndServerCategoryTest {
     }
 
     @Test
-    fun `russian servers are manual-only`() {
+    fun `regular russian servers are manual-only`() {
         val russian = TunnelServer(
             id = "ru",
             tag = "russia-fallback",
@@ -112,6 +112,45 @@ class FreeProxyAndServerCategoryTest {
         assertFalse(russian.isEligibleForAutomaticSelection())
         assertTrue(german.isEligibleForAutomaticSelection())
         assertTrue(german.copy(name = "LTE Germany").isEligibleForAutomaticSelection())
+    }
+
+    @Test
+    fun `mobile-only subscription retains an automatic candidate alongside relay`() {
+        val lte = TunnelServer(
+            id = "lte-ru",
+            tag = "lte-ru",
+            name = "LTE",
+            countryCode = "RU",
+            outbound = JsonObject(emptyMap()),
+            category = TunnelServerCategory.MOBILE,
+        )
+        val relay = lte.copy(
+            id = "relay:de-1",
+            tag = "relay:de-1",
+            countryCode = "DE",
+            engine = TunnelEngineKind.LEVIK_RELAY,
+            category = TunnelServerCategory.MOBILE_ALLOWLIST,
+        )
+
+        assertEquals(listOf(lte), listOf(lte).filter(TunnelServer::isEligibleForAutomaticSelection))
+        assertEquals(listOf(lte), listOf(lte, relay).filter(TunnelServer::isEligibleForAutomaticSelection))
+        assertFalse(lte.copy(category = TunnelServerCategory.REGULAR).isEligibleForAutomaticSelection())
+    }
+
+    @Test
+    fun `legacy russian LTE profile remains eligible after updating the app`() {
+        val cached = TunnelServer(
+            id = "cached-lte",
+            tag = "levik-0",
+            name = "LTE",
+            countryCode = "ru",
+            outbound = JsonObject(emptyMap()),
+        )
+
+        assertTrue(cached.isEligibleForAutomaticSelection())
+        assertTrue(cached.copy(name = "Мобильный VPN").isEligibleForAutomaticSelection())
+        assertFalse(cached.copy(name = "Россия").isEligibleForAutomaticSelection())
+        assertFalse(cached.copy(engine = TunnelEngineKind.LEVIK_RELAY).isEligibleForAutomaticSelection())
     }
 
     @Test

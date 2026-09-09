@@ -3,6 +3,7 @@ package com.leviknet.vpn
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.app.ActivityManager
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -22,6 +23,9 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.leviknet.vpn.core.auth.ExternalUriPolicy
 import com.leviknet.vpn.core.auth.DeepLinkRouter
+import com.leviknet.vpn.core.logger.AppLogger
+import com.leviknet.vpn.core.notification.AppIconArtwork
+import com.leviknet.vpn.data.AppIcon
 import com.leviknet.vpn.ui.AppEffect
 import com.leviknet.vpn.ui.AppViewModel
 import com.leviknet.vpn.ui.LevikVpnApp
@@ -71,7 +75,8 @@ class MainActivity : ComponentActivity() {
         }
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                viewModel.effects.collect(::handleEffect)
+                launch { viewModel.effects.collect(::handleEffect) }
+                launch { container.settings.appIcon.collect(::updateTaskIcon) }
             }
         }
         intent?.data?.let { uri -> viewModel.handleDeepLink(uri) }
@@ -86,6 +91,24 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         viewModel.onAppForegrounded()
+    }
+
+    @Suppress("DEPRECATION") // Bitmap constructor is required on Android 8/8.1.
+    private fun updateTaskIcon(icon: AppIcon) {
+        runCatching {
+            val label = getString(R.string.app_name)
+            val description = when {
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ->
+                    ActivityManager.TaskDescription.Builder()
+                        .setLabel(label)
+                        .setIcon(icon.launcherResource)
+                        .build()
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.P ->
+                    ActivityManager.TaskDescription(label, icon.launcherResource)
+                else -> ActivityManager.TaskDescription(label, AppIconArtwork.largeIcon(this, icon))
+            }
+            setTaskDescription(description)
+        }.onFailure { AppLogger.w("MainActivity", "Could not refresh task icon") }
     }
 
     private fun handleEffect(effect: AppEffect) {
