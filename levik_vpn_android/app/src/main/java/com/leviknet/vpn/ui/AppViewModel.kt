@@ -40,6 +40,7 @@ import com.leviknet.vpn.data.LoginPollResult
 import com.leviknet.vpn.data.RoutingPreset
 import com.leviknet.vpn.data.SessionStatus
 import com.leviknet.vpn.data.SplitTunnelMode
+import com.leviknet.vpn.data.AppIcon
 import com.leviknet.vpn.data.ThemeMode
 import com.leviknet.vpn.data.TrafficHistoryStore
 import com.leviknet.vpn.data.isActiveAt
@@ -265,6 +266,11 @@ class AppViewModel(
         viewModelScope.launch {
             settings.customDnsIpv4.collect { ip ->
                 mutableState.update { it.copy(customDnsIpv4 = ip) }
+            }
+        }
+        viewModelScope.launch {
+            settings.appIcon.collect { icon ->
+                mutableState.update { it.copy(appIcon = icon) }
             }
         }
         viewModelScope.launch {
@@ -1620,6 +1626,14 @@ class AppViewModel(
         }
     }
 
+    fun setAppIcon(icon: AppIcon) {
+        try {
+            settings.setAppIcon(icon)
+        } catch (_: RuntimeException) {
+            mutableState.update { it.copy(message = UiMessage.GENERIC_ERROR) }
+        }
+    }
+
     fun setThemeMode(mode: ThemeMode) {
         settings.setThemeMode(mode)
     }
@@ -2176,6 +2190,7 @@ data class AppUiState(
     val liveSpeedHistory: List<SpeedSample> = emptyList(),
     val dnsProvider: DnsProvider = DnsProvider.CLOUDFLARE,
     val customDnsIpv4: String = "1.1.1.1",
+    val appIcon: AppIcon = AppIcon.LIGHT,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val useDynamicColors: Boolean = false,
     val autoConnectOnBoot: Boolean = false,

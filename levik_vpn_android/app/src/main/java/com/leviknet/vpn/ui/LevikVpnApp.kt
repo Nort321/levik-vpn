@@ -42,6 +42,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -136,6 +137,7 @@ import com.leviknet.vpn.data.DnsProvider
 import com.leviknet.vpn.data.RoutingPreset
 import com.leviknet.vpn.data.SessionStatus
 import com.leviknet.vpn.data.SplitTunnelMode
+import com.leviknet.vpn.data.AppIcon
 import com.leviknet.vpn.data.ThemeMode
 import com.leviknet.vpn.data.isActiveAt
 import com.leviknet.vpn.ui.theme.*
@@ -173,6 +175,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
     var showSplitTunnelDialog by remember { mutableStateOf(false) }
     var showAppSelectorDialog by remember { mutableStateOf(false) }
     var showDnsDialog by remember { mutableStateOf(false) }
+    var showAppIconDialog by remember { mutableStateOf(false) }
     var showThemeDialog by remember { mutableStateOf(false) }
     var showCustomRoutingDialog by remember { mutableStateOf(false) }
     var showRoutingPresetDialog by remember { mutableStateOf(false) }
@@ -266,6 +269,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     },
                     onOpenDns = { showDnsDialog = true },
                     onOpenTheme = { showThemeDialog = true },
+                    onOpenAppIcon = { showAppIconDialog = true },
                     onOpenCustomRouting = { showCustomRoutingDialog = true },
                     onAutoConnectBootChanged = viewModel::setAutoConnectOnBoot,
                     onAutoFallbackChanged = viewModel::setAutoFallbackServer,
@@ -493,6 +497,14 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                 showKillSwitchDialog = false
             },
             onDismiss = { showKillSwitchDialog = false },
+        )
+    }
+
+    if (showAppIconDialog) {
+        AppIconDialog(
+            currentIcon = state.appIcon,
+            onIconSelected = viewModel::setAppIcon,
+            onDismiss = { showAppIconDialog = false },
         )
     }
 
@@ -800,11 +812,10 @@ private fun LoginScreen(
                 shadowElevation = 2.dp,
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_shield),
+                    Image(
+                        painter = painterResource(R.drawable.logo_light),
                         contentDescription = null,
-                        modifier = Modifier.size(46.dp),
-                        tint = LevikBlue,
+                        modifier = Modifier.size(96.dp),
                     )
                 }
             }
@@ -1028,6 +1039,7 @@ private fun MainContent(
     onOpenSplitTunneling: () -> Unit,
     onOpenDns: () -> Unit,
     onOpenTheme: () -> Unit,
+    onOpenAppIcon: () -> Unit,
     onOpenCustomRouting: () -> Unit,
     onAutoConnectBootChanged: (Boolean) -> Unit,
     onAutoFallbackChanged: (Boolean) -> Unit,
@@ -1159,6 +1171,7 @@ private fun MainContent(
                 onOpenDns = onOpenDns,
                 themeMode = state.themeMode,
                 onOpenTheme = onOpenTheme,
+                onOpenAppIcon = onOpenAppIcon,
                 onOpenCustomRouting = onOpenCustomRouting,
                 customDirectCount = state.customDirectDomains.size,
                 customProxyCount = state.customProxyDomains.size,
@@ -3379,6 +3392,7 @@ private fun ProfileScreen(
     onOpenDns: () -> Unit,
     themeMode: ThemeMode,
     onOpenTheme: () -> Unit,
+    onOpenAppIcon: () -> Unit,
     onOpenCustomRouting: () -> Unit,
     customDirectCount: Int,
     customProxyCount: Int,
@@ -4046,6 +4060,20 @@ private fun ProfileScreen(
             }
 
             DistributionUpdateSettingsItem(onCheckForUpdates = onCheckForUpdates)
+
+            Surface(
+                onClick = onOpenAppIcon,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            ) {
+                Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Image(painterResource(R.drawable.logo_light), null, Modifier.size(40.dp))
+                    Spacer(Modifier.width(14.dp))
+                    Text(stringResource(R.string.app_icon_title), style = MaterialTheme.typography.titleMedium)
+                }
+            }
 
             // Theme Setting Item
             Surface(
@@ -5087,6 +5115,53 @@ private fun DnsProviderDialog(
                 modifier = Modifier.height(LevikDimensions.ButtonHeight),
             ) {
                 Text(stringResource(R.string.close), fontWeight = FontWeight.SemiBold)
+            }
+        },
+    )
+}
+
+@Composable
+private fun AppIconDialog(
+    currentIcon: AppIcon,
+    onIconSelected: (AppIcon) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.app_icon_title)) },
+        text = {
+            Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                AppIcon.entries.forEach { icon ->
+                    val label = when (icon) {
+                        AppIcon.LIGHT -> R.string.app_icon_light
+                        AppIcon.DARK -> R.string.app_icon_dark
+                        AppIcon.MONOCHROME -> R.string.app_icon_monochrome
+                    }
+                    val preview = when (icon) {
+                        AppIcon.LIGHT -> R.drawable.logo_light
+                        AppIcon.DARK -> R.drawable.logo_dark
+                        AppIcon.MONOCHROME -> R.drawable.logo_mono
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().selectable(
+                            selected = currentIcon == icon,
+                            role = androidx.compose.ui.semantics.Role.RadioButton,
+                            onClick = { onIconSelected(icon) },
+                        ).padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = currentIcon == icon, onClick = null)
+                        Image(painterResource(preview), null, Modifier.padding(horizontal = 12.dp).size(48.dp))
+                        Text(stringResource(label))
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Icon(painterResource(R.drawable.ic_close), null, Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.close))
             }
         },
     )

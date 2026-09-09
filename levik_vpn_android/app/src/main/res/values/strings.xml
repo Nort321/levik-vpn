@@ -506,4 +506,8 @@
     <string name="device_client_format">Client: %1$s</string>
     <string name="device_client_unknown">not provided by the server</string>
     <string name="problem_action_refresh_devices">Refresh devices</string>
+    <string name="app_icon_title">App icon</string>
+    <string name="app_icon_light">Light</string>
+    <string name="app_icon_dark">Dark</string>
+    <string name="app_icon_monochrome">Monochrome</string>
 </resources>

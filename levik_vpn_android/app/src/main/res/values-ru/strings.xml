@@ -506,4 +506,8 @@
     <string name="device_client_format">Клиент: %1$s</string>
     <string name="device_client_unknown">не передан сервером</string>
     <string name="problem_action_refresh_devices">Обновить устройства</string>
+    <string name="app_icon_title">Иконка приложения</string>
+    <string name="app_icon_light">Светлая</string>
+    <string name="app_icon_dark">Тёмная</string>
+    <string name="app_icon_monochrome">Монохромная</string>
 </resources>

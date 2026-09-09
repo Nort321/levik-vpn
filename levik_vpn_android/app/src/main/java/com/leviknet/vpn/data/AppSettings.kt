@@ -167,6 +167,18 @@ enum class ThemeMode {
 }
 
 class AppSettings(context: Context) {
+    private val appIconManager = AppIconManager(context)
+    private val mutableAppIcon = MutableStateFlow(appIconManager.current())
+    val appIcon: StateFlow<AppIcon> = mutableAppIcon.asStateFlow()
+
+    fun setAppIcon(icon: AppIcon) {
+        try {
+            appIconManager.select(icon)
+        } finally {
+            mutableAppIcon.value = appIconManager.current()
+        }
+    }
+
     private val preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
 
     private val mutableRoutingPreset = MutableStateFlow(
