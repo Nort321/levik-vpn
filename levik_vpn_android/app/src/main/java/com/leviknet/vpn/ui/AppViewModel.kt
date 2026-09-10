@@ -995,13 +995,10 @@ class AppViewModel(
         viewModelScope.launch { effectChannel.send(AppEffect.RequestNotificationPermission) }
     }
 
+    @Suppress("UNUSED_PARAMETER") // Notification permission is optional and must not gate VPN startup.
     fun onNotificationPermissionResult(granted: Boolean) {
         if (!connectionPending) return
         connectionPending = false
-        if (!granted) {
-            mutableState.update { it.copy(message = UiMessage.NOTIFICATION_PERMISSION_DENIED) }
-            return
-        }
         viewModelScope.launch {
             runCatching { vpnController.connect() }
                 .onFailure { error ->

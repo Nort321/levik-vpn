@@ -107,6 +107,8 @@ data class TunnelEngineEnvironment(
     val network: Network?,
     val protector: TunnelFileDescriptorProtector,
     val dnsServer: String,
+    /** VPN exclusion without physical-network binding, used by Xray's local relay proxy. */
+    val unboundSocketProtector: (Long) -> Boolean,
     /** Stable-code callback for an engine that fails after [TunnelEngineAdapter.start] returns. */
     val terminalFailureHandler: (String) -> Unit = {},
 )

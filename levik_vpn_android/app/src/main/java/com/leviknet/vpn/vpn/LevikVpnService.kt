@@ -486,6 +486,7 @@ class LevikVpnService : VpnService() {
                     network = network,
                     protector = fileDescriptorProtector(network, selected),
                     dnsServer = "$primaryDns:53",
+                    unboundSocketProtector = { fd -> protectUnboundTunnelSocket(fd, ::protect) },
                     terminalFailureHandler = ::onTunnelEngineTerminalFailure,
                 ),
             )
@@ -1073,6 +1074,7 @@ class LevikVpnService : VpnService() {
                             network = network,
                             protector = fileDescriptorProtector(network, server),
                             dnsServer = "$primaryDns:53",
+                            unboundSocketProtector = { fd -> protectUnboundTunnelSocket(fd, ::protect) },
                             terminalFailureHandler = ::onTunnelEngineTerminalFailure,
                         ),
                     )
@@ -1363,6 +1365,7 @@ class LevikVpnService : VpnService() {
                     network = null,
                     protector = TunnelFileDescriptorProtector { false },
                     dnsServer = "${dnsProvider.primaryIpv4}:53",
+                    unboundSocketProtector = { false },
                 ),
             )
             val acceptedPrepared = lifecycleGate.withLock {

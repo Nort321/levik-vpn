@@ -1,5 +1,15 @@
 package com.leviknet.vpn.vpn
 
+/** Protects Xray's relay sockets without pinning loopback SOCKS traffic to a physical network. */
+internal fun protectUnboundTunnelSocket(fd: Long, protect: (Int) -> Boolean): Boolean {
+    if (fd !in 0..Int.MAX_VALUE.toLong()) return false
+    return try {
+        protect(fd.toInt())
+    } catch (_: Exception) {
+        false
+    }
+}
+
 /** Network pinning is best-effort only for servers that allow any physical network. */
 internal fun protectTunnelSocket(
     fd: Long,

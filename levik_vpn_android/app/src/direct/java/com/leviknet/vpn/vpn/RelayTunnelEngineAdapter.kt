@@ -148,7 +148,7 @@ internal class RelayTunnelEngineAdapter(
             active.nativeSession.start()
             val controller = object : libXray.DialerController {
                 override fun protectFd(fd: Long): Boolean =
-                    relay.environment.protector.protectAndBind(fd)
+                    relay.environment.unboundSocketProtector(fd)
             }
             val lease = xrayRuntime.start(
                 owner = owner,

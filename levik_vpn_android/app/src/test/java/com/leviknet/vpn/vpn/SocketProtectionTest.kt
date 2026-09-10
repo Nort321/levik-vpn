@@ -8,6 +8,22 @@ import org.junit.Test
 
 class SocketProtectionTest {
     @Test
+    fun `unbound relay protection excludes VPN without physical network binding`() {
+        val calls = mutableListOf<Int>()
+        assertTrue(protectUnboundTunnelSocket(42) { calls += it; true })
+        assertEquals(listOf(42), calls)
+    }
+
+    @Test
+    fun `unbound relay protection fails closed`() {
+        listOf(-1L, Int.MAX_VALUE.toLong() + 1).forEach { fd ->
+            assertFalse(protectUnboundTunnelSocket(fd) { error("invalid descriptor") })
+        }
+        assertFalse(protectUnboundTunnelSocket(42) { false })
+        assertFalse(protectUnboundTunnelSocket(42) { throw SecurityException() })
+    }
+
+    @Test
     fun `invalid descriptors never reach Android`() {
         listOf(-1L, Int.MAX_VALUE.toLong() + 1).forEach { fd ->
             assertFalse(protectTunnelSocket(fd, false, { error("protect") }, { error("bind") }, {}))
