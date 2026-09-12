@@ -6164,6 +6164,7 @@ private fun ActivationScannerDialog(
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted -> permissionGranted = granted }
+    var cameraUnavailable by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         if (!permissionGranted) permissionLauncher.launch(Manifest.permission.CAMERA)
@@ -6173,9 +6174,12 @@ private fun ActivationScannerDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.activation_scan_title), fontWeight = FontWeight.Bold) },
         text = {
-            if (permissionGranted) {
+            if (cameraUnavailable) {
+                Text(stringResource(R.string.activation_camera_unavailable))
+            } else if (permissionGranted) {
                 QrCameraPreview(
                     onCodeScanned = onCodeScanned,
+                    onCameraError = { cameraUnavailable = true },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(320.dp)
@@ -6202,12 +6206,14 @@ private fun ActivationScannerDialog(
 @Composable
 private fun QrCameraPreview(
     onCodeScanned: (String) -> Unit,
+    onCameraError: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val analyzerExecutor = remember { Executors.newSingleThreadExecutor() }
     val delivered = remember { AtomicBoolean(false) }
+    val disposed = remember { AtomicBoolean(false) }
     val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
 
     AndroidView(
@@ -6217,35 +6223,42 @@ private fun QrCameraPreview(
                 scaleType = PreviewView.ScaleType.FILL_CENTER
                 implementationMode = PreviewView.ImplementationMode.COMPATIBLE
                 cameraProviderFuture.addListener({
-                    val cameraProvider = cameraProviderFuture.get()
-                    val preview = Preview.Builder().build().also {
-                        it.surfaceProvider = surfaceProvider
-                    }
-                    val analysis = ImageAnalysis.Builder()
-                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                        .build()
-                    analysis.setAnalyzer(analyzerExecutor) { image ->
-                        try {
-                            if (!delivered.get()) {
-                                decodeQrCode(image)?.let(ActivationCodeParser::parse)?.let { code ->
-                                    if (delivered.compareAndSet(false, true)) {
-                                        ContextCompat.getMainExecutor(context).execute {
-                                            onCodeScanned(code)
+                    if (disposed.get() || delivered.get()) return@addListener
+                    try {
+                        val cameraProvider = cameraProviderFuture.get()
+                        val preview = Preview.Builder().build().also {
+                            it.surfaceProvider = surfaceProvider
+                        }
+                        val analysis = ImageAnalysis.Builder()
+                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                            .build()
+                        analysis.setAnalyzer(analyzerExecutor) { image ->
+                            try {
+                                if (!disposed.get() && !delivered.get()) {
+                                    decodeQrCode(image)?.let(ActivationCodeParser::parse)?.let { code ->
+                                        if (delivered.compareAndSet(false, true)) {
+                                            ContextCompat.getMainExecutor(context).execute {
+                                                if (!disposed.get()) onCodeScanned(code)
+                                            }
                                         }
                                     }
                                 }
+                            } finally {
+                                image.close()
                             }
-                        } finally {
-                            image.close()
+                        }
+                        cameraProvider.unbindAll()
+                        cameraProvider.bindToLifecycle(
+                            lifecycleOwner,
+                            CameraSelector.DEFAULT_BACK_CAMERA,
+                            preview,
+                            analysis,
+                        )
+                    } catch (_: Exception) {
+                        if (!disposed.get() && delivered.compareAndSet(false, true)) {
+                            onCameraError()
                         }
                     }
-                    cameraProvider.unbindAll()
-                    cameraProvider.bindToLifecycle(
-                        lifecycleOwner,
-                        CameraSelector.DEFAULT_BACK_CAMERA,
-                        preview,
-                        analysis,
-                    )
                 }, ContextCompat.getMainExecutor(viewContext))
             }
         },
@@ -6253,6 +6266,7 @@ private fun QrCameraPreview(
 
     DisposableEffect(cameraProviderFuture, lifecycleOwner) {
         onDispose {
+            disposed.set(true)
             delivered.set(true)
             if (cameraProviderFuture.isDone) {
                 runCatching { cameraProviderFuture.get().unbindAll() }

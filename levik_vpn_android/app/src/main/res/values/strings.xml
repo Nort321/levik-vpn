@@ -386,6 +386,7 @@
     <string name="activation_scan_title">Scan QR code</string>
     <string name="activation_camera_permission">Camera access is needed to scan the activation QR code.</string>
     <string name="activation_camera_permission_button">Allow camera access</string>
+    <string name="activation_camera_unavailable">The camera is unavailable. Close this dialog and try again.</string>
     <string name="activation_confirm_title">Authorize device?</string>
     <string name="activation_confirm_body">Authorize the device displaying code %1$s.</string>
     <string name="activation_confirm_button">Authorize</string>

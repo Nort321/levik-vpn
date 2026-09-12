@@ -386,6 +386,7 @@
     <string name="activation_scan_title">Сканировать QR-код</string>
     <string name="activation_camera_permission">Для сканирования QR-кода активации нужен доступ к камере.</string>
     <string name="activation_camera_permission_button">Разрешить доступ к камере</string>
+    <string name="activation_camera_unavailable">Камера недоступна. Закройте окно и повторите попытку.</string>
     <string name="activation_confirm_title">Авторизовать устройство?</string>
     <string name="activation_confirm_body">Авторизовать устройство с кодом %1$s.</string>
     <string name="activation_confirm_button">Авторизовать</string>
