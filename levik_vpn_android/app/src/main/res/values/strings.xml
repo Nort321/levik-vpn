@@ -11,6 +11,11 @@
     <string name="login_confirm_telegram">Confirm with the Telegram bot</string>
     <string name="login_telegram_privacy_note">The @levikvpnbot chat will open. You do not enter your phone number, password, or login code.</string>
     <string name="login_website">Sign in to your account</string>
+    <string name="login_qr">Sign in with QR code</string>
+    <string name="login_qr_code_description">QR code for signing in</string>
+    <string name="login_qr_caption">If you are already signed in on another device, scan this QR code with the Levik VPN app for quick sign-in</string>
+    <string name="login_waiting_qr">Sign in with QR code</string>
+    <string name="login_waiting_qr_description">Scan this code from a device where you are already signed in. This screen updates automatically.</string>
     <string name="login_waiting_telegram">Confirm in the Telegram bot</string>
     <string name="login_waiting_telegram_description">Tap Confirm in the bot and return to Levik VPN. Access will activate automatically.</string>
     <string name="login_waiting_website">Complete sign-in on the website</string>
@@ -377,6 +382,15 @@
     <string name="device_revoke_failed">Failed to revoke device: %1$s</string>
     <string name="devices_empty">No active devices recorded for this subscription</string>
     <string name="devices_manage_btn">Manage Devices</string>
+    <string name="activation_scan_button">Link device with QR</string>
+    <string name="activation_scan_title">Scan QR code</string>
+    <string name="activation_camera_permission">Camera access is needed to scan the activation QR code.</string>
+    <string name="activation_camera_permission_button">Allow camera access</string>
+    <string name="activation_confirm_title">Authorize device?</string>
+    <string name="activation_confirm_body">Authorize the device displaying code %1$s.</string>
+    <string name="activation_confirm_button">Authorize</string>
+    <string name="device_authorized_success">Device authorized</string>
+    <string name="device_authorization_failed">Could not authorize the device. Check the code and try again.</string>
     <string name="subscription_rotate_key_btn">Rotate Key</string>
 
     <string name="notification_channel_alerts">Subscription &amp; Traffic Alerts</string>

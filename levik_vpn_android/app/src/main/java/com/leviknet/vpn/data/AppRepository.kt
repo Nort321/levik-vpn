@@ -365,6 +365,11 @@ class AppRepository(
         refreshAccount()
     }
 
+    suspend fun authorizeActivation(code: String) {
+        val token = requireToken()
+        apiClient.authorizeActivation(token, code)
+    }
+
     suspend fun fetchFreeProxyLink(): String {
         val response = runCatching { apiClient.freeProxy() }.getOrNull()
         val link = response?.link?.takeIf { response.ok && it.startsWith("tg://") }

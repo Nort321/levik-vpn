@@ -318,6 +318,17 @@ data class SimpleSuccessResponse(
 )
 
 @Serializable
+data class MobileAuthorizeActivationRequest(
+    val code: String,
+)
+
+@Serializable
+data class MobileAuthorizeActivationResponse(
+    val ok: Boolean,
+    val state: String,
+)
+
+@Serializable
 data class ShieldUpdateRequest(
     val subscriptionId: String,
     val enabled: Boolean,

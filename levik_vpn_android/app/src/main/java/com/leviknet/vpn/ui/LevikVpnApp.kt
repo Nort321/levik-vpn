@@ -1,13 +1,20 @@
 package com.leviknet.vpn.ui
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
 import android.provider.Settings
+import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import java.util.Locale
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedVisibility
@@ -82,6 +89,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -102,6 +110,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -120,10 +129,18 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
+import androidx.core.content.ContextCompat
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.leviknet.vpn.BuildConfig
 import com.leviknet.vpn.R
 import com.leviknet.vpn.core.auth.ChallengeAuthorization
+import com.leviknet.vpn.core.auth.ActivationCodeParser
 import com.leviknet.vpn.core.logger.LogEntry
 import com.leviknet.vpn.core.network.DiagnosticReport
 import com.leviknet.vpn.core.network.LevikStatusSnapshot
@@ -157,6 +174,13 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import com.leviknet.vpn.core.network.ReferralSummary
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.BinaryBitmap
+import com.google.zxing.DecodeHintType
+import com.google.zxing.MultiFormatReader
+import com.google.zxing.PlanarYUVLuminanceSource
+import com.google.zxing.common.HybridBinarizer
+import com.google.zxing.qrcode.QRCodeWriter
 
 @Composable
 fun LevikVpnApp(viewModel: AppViewModel) {
@@ -184,6 +208,8 @@ fun LevikVpnApp(viewModel: AppViewModel) {
     var showKillSwitchDialog by remember { mutableStateOf(false) }
     var showLogsDialog by remember { mutableStateOf(false) }
     var showDevicesDialog by remember { mutableStateOf(false) }
+    var showActivationScanner by remember { mutableStateOf(false) }
+    var pendingActivationCode by remember { mutableStateOf<String?>(null) }
     var selectedSubscriptionForDevices by remember { mutableStateOf<SubscriptionSummary?>(null) }
     var showClearTrafficHistoryDialog by remember { mutableStateOf(false) }
 
@@ -210,6 +236,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     snackbarHostState = snackbarHostState,
                     onTelegramLogin = viewModel::beginTelegramLogin,
                     onWebsiteLogin = viewModel::beginWebsiteLogin,
+                    onQrLogin = viewModel::beginQrLogin,
                     onDeviceTrial = viewModel::activateDeviceTrial,
                     onLteTrial = viewModel::activateLteTrial,
                     onFreeProxy = viewModel::openFreeProxyBot,
@@ -608,6 +635,10 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                 viewModel.retryProblem(AppProblem(ProblemReason.DEVICE_LIMIT, ProblemOperation.CONNECT, liveDeviceSubscription.uuid))
             },
             onRevokeDevice = viewModel::revokeDevice,
+            onScanActivation = {
+                showDevicesDialog = false
+                showActivationScanner = true
+            },
             onOpenPlans = {
                 showDevicesDialog = false
                 selectedSubscriptionForDevices = null
@@ -616,6 +647,37 @@ fun LevikVpnApp(viewModel: AppViewModel) {
             onDismiss = {
                 showDevicesDialog = false
                 selectedSubscriptionForDevices = null
+            },
+        )
+    }
+
+    if (showActivationScanner) {
+        ActivationScannerDialog(
+            onCodeScanned = { code ->
+                showActivationScanner = false
+                pendingActivationCode = code
+            },
+            onDismiss = { showActivationScanner = false },
+        )
+    }
+
+    pendingActivationCode?.let { code ->
+        AlertDialog(
+            onDismissRequest = { pendingActivationCode = null },
+            title = { Text(stringResource(R.string.activation_confirm_title)) },
+            text = { Text(stringResource(R.string.activation_confirm_body, code)) },
+            confirmButton = {
+                Button(onClick = {
+                    pendingActivationCode = null
+                    viewModel.authorizeActivation(code)
+                }) {
+                    Text(stringResource(R.string.activation_confirm_button))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingActivationCode = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
             },
         )
     }
@@ -744,6 +806,7 @@ private fun LoginScreen(
     snackbarHostState: SnackbarHostState,
     onTelegramLogin: () -> Unit,
     onWebsiteLogin: () -> Unit,
+    onQrLogin: () -> Unit,
     onDeviceTrial: () -> Unit,
     onLteTrial: () -> Unit,
     onFreeProxy: () -> Unit,
@@ -754,6 +817,7 @@ private fun LoginScreen(
     var showTrialChoice by remember { mutableStateOf(false) }
     val waitingForWebsite =
         (login as? LoginUiState.Waiting)?.authorization is ChallengeAuthorization.AccountActivation
+    val waitingForQr = (login as? LoginUiState.Waiting)?.showQr == true
 
     if (showTrialChoice) {
         AlertDialog(
@@ -865,7 +929,9 @@ private fun LoginScreen(
             Text(
                 text = when (login) {
                     is LoginUiState.Waiting -> stringResource(
-                        if (waitingForWebsite) {
+                        if (waitingForQr) {
+                            R.string.login_waiting_qr
+                        } else if (waitingForWebsite) {
                             R.string.login_waiting_website
                         } else {
                             R.string.login_waiting_telegram
@@ -882,7 +948,9 @@ private fun LoginScreen(
             Text(
                 text = if (login is LoginUiState.Waiting) {
                     stringResource(
-                        if (waitingForWebsite) {
+                        if (waitingForQr) {
+                            R.string.login_waiting_qr_description
+                        } else if (waitingForWebsite) {
                             R.string.login_waiting_website_description
                         } else {
                             R.string.login_waiting_telegram_description
@@ -898,6 +966,19 @@ private fun LoginScreen(
             )
             if (login is LoginUiState.Waiting) {
                 Spacer(Modifier.height(18.dp))
+                if (waitingForQr) {
+                    val qrBitmap = remember(login.authorization.uri) {
+                        activationQrBitmap(login.authorization.uri)
+                    }
+                    Image(
+                        bitmap = qrBitmap.asImageBitmap(),
+                        contentDescription = stringResource(R.string.login_qr_code_description),
+                        modifier = Modifier
+                            .size(240.dp)
+                            .clip(RoundedCornerShape(16.dp)),
+                    )
+                    Spacer(Modifier.height(12.dp))
+                }
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = MaterialTheme.colorScheme.surfaceVariant,
@@ -912,11 +993,20 @@ private fun LoginScreen(
                         color = LevikBlue,
                     )
                 }
+                if (waitingForQr) {
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        text = stringResource(R.string.login_qr_caption),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                    )
+                }
             }
             Spacer(Modifier.height(28.dp))
             when (login) {
                 LoginUiState.Loading -> CircularProgressIndicator()
-                is LoginUiState.Waiting -> OutlinedButton(
+                is LoginUiState.Waiting -> if (!waitingForQr) OutlinedButton(
                     onClick = onOpenAgain,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -934,7 +1024,7 @@ private fun LoginScreen(
                         fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold,
                     )
-                }
+                } else Unit
                 LoginUiState.Expired -> Button(
                     onClick = onRetry,
                     modifier = Modifier
@@ -1007,6 +1097,26 @@ private fun LoginScreen(
                         Spacer(Modifier.width(8.dp))
                         Text(
                             stringResource(R.string.login_website),
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = onQrLogin,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(LevikDimensions.ButtonHeight),
+                        shape = RoundedCornerShape(14.dp),
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_qr_code),
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            stringResource(R.string.login_qr),
                             fontSize = 15.sp,
                             fontWeight = FontWeight.SemiBold,
                         )
@@ -5843,6 +5953,7 @@ private fun SubscriptionDevicesDialog(
     onRefresh: () -> Unit,
     onConnect: () -> Unit,
     onRevokeDevice: (subscriptionId: String, deviceId: String) -> Unit,
+    onScanActivation: () -> Unit,
     onOpenPlans: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -5912,6 +6023,21 @@ private fun SubscriptionDevicesDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+
+                OutlinedButton(
+                    onClick = onScanActivation,
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    Icon(
+                        painterResource(R.drawable.ic_qr_code),
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.activation_scan_button), fontWeight = FontWeight.SemiBold)
+                }
 
                 SubscriptionSlotUsage(subscription)
 
@@ -6024,6 +6150,163 @@ private fun SubscriptionDevicesDialog(
 }
 
 @Composable
+private fun ActivationScannerDialog(
+    onCodeScanned: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    var permissionGranted by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+                PackageManager.PERMISSION_GRANTED,
+        )
+    }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted -> permissionGranted = granted }
+
+    LaunchedEffect(Unit) {
+        if (!permissionGranted) permissionLauncher.launch(Manifest.permission.CAMERA)
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.activation_scan_title), fontWeight = FontWeight.Bold) },
+        text = {
+            if (permissionGranted) {
+                QrCameraPreview(
+                    onCodeScanned = onCodeScanned,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(320.dp)
+                        .clip(RoundedCornerShape(16.dp)),
+                )
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(stringResource(R.string.activation_camera_permission))
+                    OutlinedButton(onClick = {
+                        permissionLauncher.launch(Manifest.permission.CAMERA)
+                    }) {
+                        Text(stringResource(R.string.activation_camera_permission_button))
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+        },
+    )
+}
+
+@Composable
+private fun QrCameraPreview(
+    onCodeScanned: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val analyzerExecutor = remember { Executors.newSingleThreadExecutor() }
+    val delivered = remember { AtomicBoolean(false) }
+    val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
+
+    AndroidView(
+        modifier = modifier,
+        factory = { viewContext ->
+            PreviewView(viewContext).apply {
+                scaleType = PreviewView.ScaleType.FILL_CENTER
+                implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                cameraProviderFuture.addListener({
+                    val cameraProvider = cameraProviderFuture.get()
+                    val preview = Preview.Builder().build().also {
+                        it.surfaceProvider = surfaceProvider
+                    }
+                    val analysis = ImageAnalysis.Builder()
+                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                        .build()
+                    analysis.setAnalyzer(analyzerExecutor) { image ->
+                        try {
+                            if (!delivered.get()) {
+                                decodeQrCode(image)?.let(ActivationCodeParser::parse)?.let { code ->
+                                    if (delivered.compareAndSet(false, true)) {
+                                        ContextCompat.getMainExecutor(context).execute {
+                                            onCodeScanned(code)
+                                        }
+                                    }
+                                }
+                            }
+                        } finally {
+                            image.close()
+                        }
+                    }
+                    cameraProvider.unbindAll()
+                    cameraProvider.bindToLifecycle(
+                        lifecycleOwner,
+                        CameraSelector.DEFAULT_BACK_CAMERA,
+                        preview,
+                        analysis,
+                    )
+                }, ContextCompat.getMainExecutor(viewContext))
+            }
+        },
+    )
+
+    DisposableEffect(cameraProviderFuture, lifecycleOwner) {
+        onDispose {
+            delivered.set(true)
+            if (cameraProviderFuture.isDone) {
+                runCatching { cameraProviderFuture.get().unbindAll() }
+            }
+            analyzerExecutor.shutdownNow()
+        }
+    }
+}
+
+private fun decodeQrCode(image: androidx.camera.core.ImageProxy): String? {
+    val plane = image.planes.firstOrNull() ?: return null
+    val width = image.width
+    val height = image.height
+    val buffer = plane.buffer
+    val data = ByteArray(width * height)
+    val rowStride = plane.rowStride
+    val pixelStride = plane.pixelStride
+    val row = ByteArray(rowStride)
+    buffer.rewind()
+    for (y in 0 until height) {
+        val bytesToRead = minOf(rowStride, buffer.remaining())
+        if (bytesToRead <= 0) break
+        buffer.get(row, 0, bytesToRead)
+        for (x in 0 until width) {
+            val sourceIndex = x * pixelStride
+            if (sourceIndex < bytesToRead) data[y * width + x] = row[sourceIndex]
+        }
+    }
+    val source = PlanarYUVLuminanceSource(data, width, height, 0, 0, width, height, false)
+    val reader = MultiFormatReader().apply {
+        setHints(
+            mapOf(
+                DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE),
+                DecodeHintType.TRY_HARDER to true,
+            ),
+        )
+    }
+    return runCatching {
+        reader.decodeWithState(BinaryBitmap(HybridBinarizer(source))).text
+    }.getOrNull().also { reader.reset() }
+}
+
+private fun activationQrBitmap(value: String, size: Int = 768): Bitmap {
+    val matrix = QRCodeWriter().encode(value, BarcodeFormat.QR_CODE, size, size)
+    val pixels = IntArray(size * size)
+    for (y in 0 until size) {
+        for (x in 0 until size) {
+            pixels[y * size + x] = if (matrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE
+        }
+    }
+    return Bitmap.createBitmap(pixels, size, size, Bitmap.Config.ARGB_8888)
+}
+
+@Composable
 private fun ProfileLine(label: String, value: String) {
     Row(
         modifier = Modifier
@@ -6113,6 +6396,8 @@ private fun UiMessage.localized(): String = stringResource(
         UiMessage.SERVER_PING_UNAVAILABLE -> R.string.server_ping_unavailable
         UiMessage.DEVICE_REVOKED_SUCCESS -> R.string.device_revoked_success
         UiMessage.DEVICE_REVOKE_FAILED -> R.string.device_revoke_failed
+        UiMessage.DEVICE_AUTHORIZED_SUCCESS -> R.string.device_authorized_success
+        UiMessage.DEVICE_AUTHORIZATION_FAILED -> R.string.device_authorization_failed
         UiMessage.TRAFFIC_HISTORY_CLEARED -> R.string.traffic_history_cleared
         UiMessage.TRAFFIC_HISTORY_EXPORTED -> R.string.traffic_history_exported
         UiMessage.PAYMENT_OPEN_FAILED -> R.string.payment_open_failed

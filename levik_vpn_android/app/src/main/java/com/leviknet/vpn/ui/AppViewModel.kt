@@ -97,6 +97,7 @@ class AppViewModel(
     private val effectChannel = Channel<AppEffect>(Channel.BUFFERED)
     private var loginStartJob: Job? = null
     private var loginPollJob: Job? = null
+    private var activationAuthorizationJob: Job? = null
     private var updateCheckJob: Job? = null
     private var pendingOnboardingAction: OnboardingAction? = null
     private var connectionPending = false
@@ -455,6 +456,8 @@ class AppViewModel(
 
     fun beginWebsiteLogin() = beginOnboarding(OnboardingAction.WEBSITE_LOGIN)
 
+    fun beginQrLogin() = beginOnboarding(OnboardingAction.QR_LOGIN)
+
     fun activateDeviceTrial() = beginOnboarding(OnboardingAction.DEVICE_TRIAL)
 
     fun activateLteTrial() {
@@ -505,14 +508,22 @@ class AppViewModel(
             OnboardingAction.TELEGRAM_LOGIN -> startLogin(
                 accountActivationSupported = false,
                 activateLteTrialAfterLogin = false,
+                showQr = false,
             )
             OnboardingAction.TELEGRAM_LTE_TRIAL -> startLogin(
                 accountActivationSupported = false,
                 activateLteTrialAfterLogin = true,
+                showQr = false,
             )
             OnboardingAction.WEBSITE_LOGIN -> startLogin(
                 accountActivationSupported = true,
                 activateLteTrialAfterLogin = false,
+                showQr = false,
+            )
+            OnboardingAction.QR_LOGIN -> startLogin(
+                accountActivationSupported = true,
+                activateLteTrialAfterLogin = false,
+                showQr = true,
             )
         }
     }
@@ -570,6 +581,7 @@ class AppViewModel(
     private fun startLogin(
         accountActivationSupported: Boolean,
         activateLteTrialAfterLogin: Boolean,
+        showQr: Boolean,
     ) {
         loginPollJob?.cancel()
         loginPollJob = viewModelScope.launch {
@@ -582,9 +594,9 @@ class AppViewModel(
                     "Authentication challenge does not contain a supported authorization target."
                 }
                 mutableState.update {
-                    it.copy(login = LoginUiState.Waiting(challenge, authorization))
+                    it.copy(login = LoginUiState.Waiting(challenge, authorization, showQr))
                 }
-                openChallengeAuthorization(authorization)
+                if (!showQr) openChallengeAuthorization(authorization)
                 pollChallenge(challenge, activateLteTrialAfterLogin)
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
@@ -1906,6 +1918,20 @@ class AppViewModel(
         }
     }
 
+    fun authorizeActivation(code: String) {
+        if (activationAuthorizationJob?.isActive == true) return
+        activationAuthorizationJob = viewModelScope.launch {
+            try {
+                repository.authorizeActivation(code)
+                mutableState.update { it.copy(message = UiMessage.DEVICE_AUTHORIZED_SUCCESS) }
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                AppLogger.w("AppViewModel", "Failed to authorize activation")
+                mutableState.update { it.copy(message = UiMessage.DEVICE_AUTHORIZATION_FAILED) }
+            }
+        }
+    }
+
     fun clearTrafficHistory() {
         trafficHistoryStore?.clearHistory()
         mutableState.update { it.copy(message = UiMessage.TRAFFIC_HISTORY_CLEARED) }
@@ -2336,6 +2362,7 @@ private enum class OnboardingAction {
     TELEGRAM_LOGIN,
     TELEGRAM_LTE_TRIAL,
     WEBSITE_LOGIN,
+    QR_LOGIN,
 }
 
 private sealed interface PendingLteAction {
@@ -2354,6 +2381,7 @@ sealed interface LoginUiState {
     data class Waiting(
         val challenge: AuthChallengeResponse,
         val authorization: ChallengeAuthorization,
+        val showQr: Boolean = false,
     ) : LoginUiState
     data object Expired : LoginUiState
 }
@@ -2374,6 +2402,8 @@ enum class UiMessage {
     SERVER_PING_UNAVAILABLE,
     DEVICE_REVOKED_SUCCESS,
     DEVICE_REVOKE_FAILED,
+    DEVICE_AUTHORIZED_SUCCESS,
+    DEVICE_AUTHORIZATION_FAILED,
     TRAFFIC_HISTORY_CLEARED,
     TRAFFIC_HISTORY_EXPORTED,
     PAYMENT_OPEN_FAILED,

@@ -11,6 +11,11 @@
     <string name="login_confirm_telegram">Подтвердить через Telegram-бота</string>
     <string name="login_telegram_privacy_note">Откроется бот @levikvpnbot. Номер телефона, пароль и код входа вводить не нужно.</string>
     <string name="login_website">Войти в личный кабинет</string>
+    <string name="login_qr">Вход по QR-коду</string>
+    <string name="login_qr_code_description">QR-код для входа</string>
+    <string name="login_qr_caption">Если у вас уже выполнен вход на другом устройстве, отсканируйте этот QR-код приложением Levik VPN для быстрого входа</string>
+    <string name="login_waiting_qr">Вход по QR-коду</string>
+    <string name="login_waiting_qr_description">Отсканируйте код на устройстве, где уже выполнен вход. Этот экран обновится автоматически.</string>
     <string name="login_waiting_telegram">Подтвердите подключение в Telegram-боте</string>
     <string name="login_waiting_telegram_description">Нажмите «Подтвердить» в боте и вернитесь в Levik VPN. Доступ активируется автоматически.</string>
     <string name="login_waiting_website">Завершите вход в личном кабинете</string>
@@ -377,6 +382,15 @@
     <string name="device_revoke_failed">Не удалось отозвать устройство: %1$s</string>
     <string name="devices_empty">К подписке пока не привязано активных устройств</string>
     <string name="devices_manage_btn">Устройства</string>
+    <string name="activation_scan_button">Связать устройство по QR</string>
+    <string name="activation_scan_title">Сканировать QR-код</string>
+    <string name="activation_camera_permission">Для сканирования QR-кода активации нужен доступ к камере.</string>
+    <string name="activation_camera_permission_button">Разрешить доступ к камере</string>
+    <string name="activation_confirm_title">Авторизовать устройство?</string>
+    <string name="activation_confirm_body">Авторизовать устройство с кодом %1$s.</string>
+    <string name="activation_confirm_button">Авторизовать</string>
+    <string name="device_authorized_success">Устройство авторизовано</string>
+    <string name="device_authorization_failed">Не удалось авторизовать устройство. Проверьте код и повторите попытку.</string>
     <string name="subscription_rotate_key_btn">Сменить ключ</string>
 
     <string name="notification_channel_alerts">Уведомления о подписке и трафике</string>

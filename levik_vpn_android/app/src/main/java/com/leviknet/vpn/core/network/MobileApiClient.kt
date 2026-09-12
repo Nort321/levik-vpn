@@ -185,6 +185,21 @@ class MobileApiClient(
         return response.enabled
     }
 
+    suspend fun authorizeActivation(
+        accessToken: String,
+        code: String,
+    ): MobileAuthorizeActivationResponse {
+        val response = post<MobileAuthorizeActivationRequest, MobileAuthorizeActivationResponse>(
+            path = ACTIVATION_AUTHORIZE_PATH,
+            request = MobileAuthorizeActivationRequest(code),
+            accessToken = accessToken,
+            requiresIntegrity = false,
+        )
+        checkSuccess(response.ok)
+        check(response.state == "authorized") { "Mobile API returned an invalid activation state" }
+        return response
+    }
+
     suspend fun checkIp(): IpCheckResponse {
         return request<IpCheckResponse>(
             method = METHOD_GET,
@@ -395,6 +410,7 @@ class MobileApiClient(
         private const val TRIAL_ACTIVATE_PATH = "/api/mobile/v1/trial/activate"
         private const val REVOKE_DEVICE_PATH = "/api/mobile/v1/devices/revoke"
         private const val SUBSCRIPTION_SHIELD_PATH = "/api/mobile/v1/subscriptions/shield"
+        internal const val ACTIVATION_AUTHORIZE_PATH = "/api/mobile/v1/activation/authorize"
         private const val ACCOUNT_PATH = "/api/mobile/v1/account"
         private const val CATALOG_PATH = "/api/mobile/v1/catalog"
         private const val ORDER_CREATE_PATH = "/api/mobile/v1/orders/create"
