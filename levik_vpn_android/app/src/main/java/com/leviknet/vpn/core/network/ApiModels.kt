@@ -74,6 +74,24 @@ data class MobileAccountResponse(
     val subscriptions: List<SubscriptionSummary>,
     val orders: List<OrderSummary>,
     val freeProxy: FreeProxySummary,
+    val support: MobileSupportSummary? = null,
+)
+
+@Serializable
+data class MobileSupportSummary(
+    val unreadCount: Int = 0,
+    val latestReply: MobileSupportReply? = null,
+)
+
+@Serializable
+data class MobileSupportReply(
+    val replyId: String,
+    val ticketId: String,
+    val reference: String,
+    val subject: String,
+    val messageSnippet: String,
+    val createdAt: String,
+    val ticketUrl: String? = null,
 )
 
 @Serializable

@@ -392,6 +392,10 @@
     <string name="notification_traffic_100">Лимит трафика исчерпан (100%). VPN-подключение отключено.</string>
     <string name="notification_profile_revoked_title">Устройство отозвано</string>
     <string name="notification_profile_revoked">Доступ для этого устройства был отозван. VPN отключен.</string>
+    <string name="notification_channel_support">Поддержка Levik</string>
+    <string name="notification_channel_support_desc">Уведомления об ответах службы поддержки</string>
+    <string name="notification_support_reply_title">Ответ службы поддержки</string>
+    <string name="notification_support_reply_text">%1$s: %2$s</string>
 
     <string name="split_tunnel_off">Все приложения через VPN</string>
     <string name="split_tunnel_include_count">Только выбранные (%1$d)</string>

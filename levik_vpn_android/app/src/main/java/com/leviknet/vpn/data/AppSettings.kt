@@ -616,6 +616,15 @@ class AppSettings(context: Context) {
         }
     }
 
+    fun getLastNotifiedSupportReplyId(): String? =
+        preferences.getString(LAST_NOTIFIED_SUPPORT_REPLY_ID, null)
+
+    fun setLastNotifiedSupportReplyId(replyId: String) {
+        preferences.edit(commit = true) {
+            putString(LAST_NOTIFIED_SUPPORT_REPLY_ID, replyId)
+        }
+    }
+
     companion object {
         private const val PREFERENCES_NAME = "levik_settings_v1"
         private const val ROUTING_PRESET = "routing_preset"
@@ -647,5 +656,6 @@ class AppSettings(context: Context) {
         private const val WHITELIST_MAP_ENABLED = "whitelist_map_enabled"
         private const val ANONYMOUS_TELEMETRY_ENABLED = "anonymous_telemetry_enabled"
         private const val PAUSED_UNTIL_MS = "paused_until_ms"
+        private const val LAST_NOTIFIED_SUPPORT_REPLY_ID = "last_notified_support_reply_id"
     }
 }

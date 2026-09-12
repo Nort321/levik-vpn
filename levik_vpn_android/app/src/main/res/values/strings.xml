@@ -392,6 +392,10 @@
     <string name="notification_traffic_100">Traffic limit reached (100%). VPN connection stopped.</string>
     <string name="notification_profile_revoked_title">Device Revoked</string>
     <string name="notification_profile_revoked">This device was revoked from the subscription. VPN disconnected.</string>
+    <string name="notification_channel_support">Levik Support</string>
+    <string name="notification_channel_support_desc">Notifications for support replies</string>
+    <string name="notification_support_reply_title">Support Reply</string>
+    <string name="notification_support_reply_text">%1$s: %2$s</string>
 
     <string name="split_tunnel_off">All apps through VPN</string>
     <string name="split_tunnel_include_count">Only selected apps (%1$d)</string>

@@ -20,6 +20,7 @@ import com.leviknet.vpn.core.auth.DeepLinkRouter
 import com.leviknet.vpn.core.logger.AppLogger
 import com.leviknet.vpn.core.logger.LogEntry
 import com.leviknet.vpn.core.network.ApiException
+import com.leviknet.vpn.core.notification.SupportNotificationManager
 import com.leviknet.vpn.core.network.CensorshipRadarWorker
 import com.leviknet.vpn.core.network.CatalogResponse
 import com.leviknet.vpn.core.network.AuthChallengeResponse
@@ -130,6 +131,15 @@ class AppViewModel(
         }
         viewModelScope.launch {
             repository.account.collect { account ->
+                account?.support?.let { support ->
+                    appContext?.let { context ->
+                        SupportNotificationManager.checkAndNotify(
+                            context = context,
+                            support = support,
+                            settings = settings,
+                        )
+                    }
+                }
                 mutableState.update { current ->
                     val withAccount = current.copy(account = account)
                     withAccount.copy(

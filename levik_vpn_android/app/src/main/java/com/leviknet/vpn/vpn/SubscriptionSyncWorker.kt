@@ -14,6 +14,7 @@ import com.leviknet.vpn.LevikVpnApplication
 import com.leviknet.vpn.core.logger.AppLogger
 import com.leviknet.vpn.core.network.ApiException
 import com.leviknet.vpn.core.notification.SubscriptionNotificationManager
+import com.leviknet.vpn.core.notification.SupportNotificationManager
 import com.leviknet.vpn.data.SessionStatus
 import com.leviknet.vpn.data.containsActiveSubscription
 import com.leviknet.vpn.data.isActiveAt
@@ -46,6 +47,13 @@ class SubscriptionSyncWorker(
                 ?.firstOrNull { it.id == selectedServerBeforeRefresh }
                 ?.engine
             val account = container.repository.refreshAccount()
+            account.support?.let { support ->
+                SupportNotificationManager.checkAndNotify(
+                    context = applicationContext,
+                    support = support,
+                    settings = container.settings,
+                )
+            }
             val now = Instant.now()
             val active = account.subscriptions.filter { it.isActiveAt(now) }
             val selected = active.firstOrNull {
