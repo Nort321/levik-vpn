@@ -274,6 +274,12 @@
     <string name="split_tunnel_select_apps">Select apps (%1$d selected)</string>
     <string name="split_tunnel_search">Search apps…</string>
     <string name="split_tunnel_no_apps">No matching applications found</string>
+    <string name="split_tunnel_copy">Copy</string>
+    <string name="split_tunnel_paste">Paste</string>
+    <string name="split_tunnel_copied">Package names copied: %1$d</string>
+    <string name="split_tunnel_imported">Package names added: %1$d</string>
+    <string name="split_tunnel_nothing_to_import">No new valid package names to add</string>
+    <string name="split_tunnel_clipboard_error">Could not copy or import package names. Try again.</string>
 
     <string name="dns_settings_title">DNS Provider &amp; DoH</string>
     <string name="dns_settings_desc">Configure DNS resolver, DoH encrypted DNS and ad blocking</string>

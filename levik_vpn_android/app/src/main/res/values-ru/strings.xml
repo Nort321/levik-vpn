@@ -274,6 +274,12 @@
     <string name="split_tunnel_select_apps">Выбрать приложения (выбрано: %1$d)</string>
     <string name="split_tunnel_search">Поиск приложений…</string>
     <string name="split_tunnel_no_apps">Приложения не найдены</string>
+    <string name="split_tunnel_copy">Копировать</string>
+    <string name="split_tunnel_paste">Вставить</string>
+    <string name="split_tunnel_copied">Скопировано имён пакетов: %1$d</string>
+    <string name="split_tunnel_imported">Добавлено имён пакетов: %1$d</string>
+    <string name="split_tunnel_nothing_to_import">Нет новых корректных имён пакетов для добавления</string>
+    <string name="split_tunnel_clipboard_error">Не удалось скопировать или импортировать имена пакетов. Попробуйте ещё раз.</string>
 
     <string name="dns_settings_title">DNS-провайдер и DoH</string>
     <string name="dns_settings_desc">Настройка DNS, шифрование DoH и блокировка рекламы</string>

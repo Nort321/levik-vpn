@@ -9,6 +9,7 @@ import android.content.res.Configuration
 import android.provider.Settings
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.widget.Toast
 import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -110,6 +111,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -142,6 +144,7 @@ import com.leviknet.vpn.R
 import com.leviknet.vpn.core.auth.ChallengeAuthorization
 import com.leviknet.vpn.core.auth.ActivationCodeParser
 import com.leviknet.vpn.core.logger.LogEntry
+import com.leviknet.vpn.core.logger.AppLogger
 import com.leviknet.vpn.core.network.DiagnosticReport
 import com.leviknet.vpn.core.network.LevikStatusSnapshot
 import com.leviknet.vpn.core.network.MobileAccountResponse
@@ -154,6 +157,7 @@ import com.leviknet.vpn.data.DnsProvider
 import com.leviknet.vpn.data.RoutingPreset
 import com.leviknet.vpn.data.SessionStatus
 import com.leviknet.vpn.data.SplitTunnelMode
+import com.leviknet.vpn.data.SplitTunnelPackageList
 import com.leviknet.vpn.data.AppIcon
 import com.leviknet.vpn.data.ThemeMode
 import com.leviknet.vpn.data.isActiveAt
@@ -522,6 +526,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
             apps = state.installedApps,
             selectedPackages = state.splitTunnelPackages,
             onTogglePackage = viewModel::toggleSplitTunnelPackage,
+            onImportPackages = viewModel::importSplitTunnelPackages,
             onDismiss = { showAppSelectorDialog = false },
         )
     }
@@ -5004,12 +5009,22 @@ private fun AppSelectorDialog(
     apps: List<InstalledAppItem>,
     selectedPackages: Set<String>,
     onTogglePackage: (String) -> Unit,
+    onImportPackages: (String) -> Int,
     onDismiss: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val resources = LocalResources.current
     var searchQuery by remember { mutableStateOf("") }
-    val filteredApps = remember(apps, searchQuery) {
-        if (searchQuery.isBlank()) apps
-        else apps.filter {
+    val selectableApps = remember(apps, selectedPackages) {
+        val installedPackages = apps.mapTo(mutableSetOf(), InstalledAppItem::packageName)
+        // Keep imported packages removable even when they are not installed on this device.
+        apps + (selectedPackages - installedPackages).sorted().map { packageName ->
+            InstalledAppItem(packageName, packageName, null)
+        }
+    }
+    val filteredApps = remember(selectableApps, searchQuery) {
+        if (searchQuery.isBlank()) selectableApps
+        else selectableApps.filter {
             it.label.contains(searchQuery, ignoreCase = true) ||
                 it.packageName.contains(searchQuery, ignoreCase = true)
         }
@@ -5021,6 +5036,59 @@ private fun AppSelectorDialog(
         title = { Text(stringResource(R.string.split_tunnel_select_apps, selectedPackages.size), fontWeight = FontWeight.Bold) },
         text = {
             Column(modifier = Modifier.height(420.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(
+                        enabled = selectedPackages.isNotEmpty(),
+                        onClick = {
+                            val message = try {
+                                val clipboard = context.getSystemService(ClipboardManager::class.java)
+                                    ?: error("Clipboard unavailable")
+                                clipboard.setPrimaryClip(
+                                    ClipData.newPlainText(
+                                        resources.getString(R.string.split_tunneling_title),
+                                        SplitTunnelPackageList.format(selectedPackages),
+                                    ),
+                                )
+                                resources.getString(R.string.split_tunnel_copied, selectedPackages.size)
+                            } catch (_: RuntimeException) {
+                                AppLogger.w("AppSelectorDialog", "Unable to copy or import split tunnel packages")
+                                resources.getString(R.string.split_tunnel_clipboard_error)
+                            }
+                            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                        },
+                    ) {
+                        Icon(painterResource(R.drawable.ic_copy), contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.split_tunnel_copy))
+                    }
+                    TextButton(
+                        onClick = {
+                            val message = try {
+                                val clipboard = context.getSystemService(ClipboardManager::class.java)
+                                    ?: error("Clipboard unavailable")
+                                val clip = clipboard.primaryClip
+                                // Read text only: do not resolve clipboard URIs or launch intents.
+                                val text = if (clip == null) "" else (0 until clip.itemCount)
+                                    .mapNotNull { clip.getItemAt(it).text }
+                                    .joinToString("\n")
+                                val addedCount = onImportPackages(text)
+                                if (addedCount == 0) {
+                                    resources.getString(R.string.split_tunnel_nothing_to_import)
+                                } else {
+                                    resources.getString(R.string.split_tunnel_imported, addedCount)
+                                }
+                            } catch (_: RuntimeException) {
+                                AppLogger.w("AppSelectorDialog", "Unable to copy or import split tunnel packages")
+                                resources.getString(R.string.split_tunnel_clipboard_error)
+                            }
+                            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                        },
+                    ) {
+                        Icon(painterResource(R.drawable.ic_paste), contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.split_tunnel_paste))
+                    }
+                }
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },

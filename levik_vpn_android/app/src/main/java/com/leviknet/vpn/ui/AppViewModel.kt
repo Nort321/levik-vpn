@@ -41,6 +41,7 @@ import com.leviknet.vpn.data.LoginPollResult
 import com.leviknet.vpn.data.RoutingPreset
 import com.leviknet.vpn.data.SessionStatus
 import com.leviknet.vpn.data.SplitTunnelMode
+import com.leviknet.vpn.data.SplitTunnelPackageList
 import com.leviknet.vpn.data.AppIcon
 import com.leviknet.vpn.data.ThemeMode
 import com.leviknet.vpn.data.TrafficHistoryStore
@@ -1673,6 +1674,18 @@ class AppViewModel(
         if (mutableState.value.vpn.state == VpnConnectionState.CONNECTED) {
             vpnController.reconfigure()
         }
+    }
+
+    fun importSplitTunnelPackages(text: String): Int {
+        val current = settings.splitTunnelPackages.value
+        val additions = SplitTunnelPackageList.parse(text) - current - BuildConfig.APPLICATION_ID
+        if (additions.isEmpty()) return 0
+
+        settings.setSplitTunnelPackages(current + additions)
+        if (mutableState.value.vpn.state == VpnConnectionState.CONNECTED) {
+            vpnController.reconfigure()
+        }
+        return additions.size
     }
 
     fun setDnsProvider(provider: DnsProvider) {
