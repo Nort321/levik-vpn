@@ -539,4 +539,7 @@
     <string name="relay_guide_alternative">Prefer not to sign in to VK? Cancel and try another server without this label, if your subscription includes one. Availability during restrictions depends on your provider.</string>
     <string name="relay_guide_continue">Got it, continue</string>
     <string name="relay_guide_done">Close</string>
+    <string name="problem_pairing_title">This QR code is no longer valid</string>
+    <string name="problem_pairing_body">Create a new code on the Devices page in your Levik account, then scan it here.</string>
+    <string name="pairing_already_signed_in">You are already signed in. To connect another account, sign out in Profile first.</string>
 </resources>

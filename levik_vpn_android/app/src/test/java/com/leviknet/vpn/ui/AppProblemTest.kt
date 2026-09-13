@@ -40,6 +40,16 @@ class AppProblemTest {
         assertEquals(ProblemReason.UNKNOWN, ApiException.Rejected("new_code", false, 403).toAppProblem().reason)
     }
 
+    @Test
+    fun `expired pairing offers scanning a new QR instead of password login`() {
+        for (code in listOf("pairing_expired", "pairing_used")) {
+            val problem = ApiException.Rejected(code, false, 410).toAppProblem(ProblemOperation.LOGIN)
+            assertEquals(ProblemReason.PAIRING, problem.reason)
+            assertEquals(ProblemAction.SCAN_QR, problemActions(problem, null).first())
+        }
+        assertNull(UiMessage.PAIRING_ALREADY_SIGNED_IN.asProblem())
+    }
+
     @Test(expected = CancellationException::class)
     fun `cancellation does not produce a user error`() {
         CancellationException().toAppProblem()

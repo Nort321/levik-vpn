@@ -10,7 +10,7 @@ import java.net.SocketTimeoutException
 
 enum class ProblemReason {
     NETWORK, TIMEOUT, SERVICE, PROFILE, DEVICE_LIMIT, SUBSCRIPTION, TRAFFIC,
-    SESSION, LOGIN, ATTESTATION, CLOCK, RATE_LIMIT, TRIAL, PAYMENT, ORDER,
+    SESSION, LOGIN, PAIRING, ATTESTATION, CLOCK, RATE_LIMIT, TRIAL, PAYMENT, ORDER,
     PERMISSION, NOTIFICATIONS, LOCATION, DEVICE_REVOKE, UNSUPPORTED, REQUEST, UNKNOWN,
     VPN_CORE, VPN_NETWORK, VPN_NETWORK_REQUIREMENT,
 }
@@ -41,6 +41,7 @@ internal fun Throwable.toAppProblem(
             "subscription_not_found", "subscription_expired", "subscription_inactive" -> ProblemReason.SUBSCRIPTION
             "traffic_limit_reached", "traffic_exhausted", "traffic_limit_exceeded" -> ProblemReason.TRAFFIC
             "authentication_required", "session_expired", "account_not_found", "invalid_device_binding" -> ProblemReason.SESSION
+            "pairing_expired", "pairing_used" -> ProblemReason.PAIRING
             "login_denied", "login_expired", "authorization_denied", "authorization_expired" -> ProblemReason.LOGIN
             "integrity_required", "invalid_integrity_token", "integrity_rejected",
             "integrity_verifier_unavailable", "integrity_verification_unavailable" -> ProblemReason.ATTESTATION
@@ -50,7 +51,7 @@ internal fun Throwable.toAppProblem(
             "payment_not_available", "order_payment_unavailable", "payment_url_unavailable", "payments_disabled", "payment_method_unavailable", "payment_provider_unavailable" -> ProblemReason.PAYMENT
             "order_already_in_progress", "order_not_found", "order_not_allowed", "traffic_addon_unavailable", "slot_addon_unavailable", "renewal_unavailable" -> ProblemReason.ORDER
             "profile_upstream_unavailable", "temporarily_unavailable", "bridge_unavailable",
-            "account_unavailable", "login_unavailable", "session_binding_failed" -> ProblemReason.SERVICE
+            "pairing_unavailable", "account_unavailable", "login_unavailable", "session_binding_failed" -> ProblemReason.SERVICE
             "profile_unavailable", "invalid_profile_response", "profile_too_large", "invalid_profile_expiry",
             "relay_profile_binding_mismatch", "invalid_relay_profile" -> ProblemReason.PROFILE
             "device_not_found", "relay_device_not_registered" -> ProblemReason.DEVICE_REVOKE
@@ -71,7 +72,7 @@ internal fun Throwable.toAppProblem(
 }
 
 internal fun UiMessage.asProblem(): AppProblem? = when (this) {
-    UiMessage.SUBSCRIPTION_UPDATED, UiMessage.DEVICE_REVOKED_SUCCESS, UiMessage.SERVER_PING_UNAVAILABLE,
+    UiMessage.PAIRING_ALREADY_SIGNED_IN, UiMessage.SUBSCRIPTION_UPDATED, UiMessage.DEVICE_REVOKED_SUCCESS, UiMessage.SERVER_PING_UNAVAILABLE,
     UiMessage.TRAFFIC_HISTORY_CLEARED, UiMessage.TRAFFIC_HISTORY_EXPORTED -> null
     else -> AppProblem(when (this) {
         UiMessage.SESSION_EXPIRED -> ProblemReason.SESSION

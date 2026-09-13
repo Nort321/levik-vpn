@@ -39,6 +39,18 @@ class MobileApiClient(
         return response
     }
 
+    suspend fun claimDevicePairing(request: DevicePairingRequest): AuthStatusResponse {
+        val response = post<DevicePairingRequest, AuthStatusResponse>(
+            path = DEVICE_PAIRING_PATH,
+            request = request,
+            accessToken = null,
+            requiresIntegrity = true,
+        )
+        checkSuccess(response.ok)
+        check(response.state == "authenticated") { "Invalid pairing state" }
+        return response
+    }
+
     suspend fun pollStatus(request: AuthStatusRequest): AuthStatusResponse {
         val response = post<AuthStatusRequest, AuthStatusResponse>(
             path = AUTH_STATUS_PATH,
@@ -404,6 +416,7 @@ class MobileApiClient(
     }
 
     companion object {
+        internal const val DEVICE_PAIRING_PATH = "/api/mobile/v1/devices/pair"
         private const val AUTH_CHALLENGE_PATH = "/api/mobile/v1/auth/challenge"
         private const val AUTH_STATUS_PATH = "/api/mobile/v1/auth/status"
         private const val AUTH_LOGOUT_PATH = "/api/mobile/v1/auth/logout"

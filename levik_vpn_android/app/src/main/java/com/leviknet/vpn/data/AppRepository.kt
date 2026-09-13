@@ -8,6 +8,7 @@ import com.leviknet.vpn.core.network.AuthChallengeResponse
 import com.leviknet.vpn.core.network.AuthStatusRequest
 import com.leviknet.vpn.core.network.CatalogResponse
 import com.leviknet.vpn.core.network.CreateOrderRequest
+import com.leviknet.vpn.core.network.DevicePairingRequest
 import com.leviknet.vpn.core.network.DeviceTrialActivationRequest
 import com.leviknet.vpn.core.network.OrderSummary
 import com.leviknet.vpn.core.network.LoginState
@@ -112,6 +113,33 @@ class AppRepository(
             }
             apiClient.createChallenge(request)
         }
+
+    suspend fun claimDevicePairing(pairingToken: String): Unit = authMutex.withLock {
+        require(pairingToken.matches(Regex("[A-Za-z0-9_-]{43}"))) { "Invalid pairing token" }
+        if (readToken() != null) {
+            throw ApiException.Rejected("pairing_requires_sign_out", false, 409)
+        }
+        val request = withContext(Dispatchers.IO) {
+            DevicePairingRequest(
+                pairingToken = pairingToken,
+                publicKeySpki = deviceIdentity.publicKeySpkiBase64Url(),
+                deviceLabel = deviceLabel(),
+                deviceModel = Build.MODEL.sanitized(MAX_DEVICE_FIELD_LENGTH),
+                deviceOs = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
+                    .sanitized(MAX_DEVICE_FIELD_LENGTH),
+                appVersion = BuildConfig.VERSION_NAME,
+                requestSigningAlgorithm = deviceIdentity.requestSigningAlgorithm(),
+                profileEncryptionAlgorithm = deviceIdentity.profileEncryptionAlgorithm(),
+            )
+        }
+        val response = apiClient.claimDevicePairing(request)
+        val accessToken = requireNotNull(response.accessToken)
+        require(accessToken.length in 32..MAX_ACCESS_TOKEN_LENGTH) { "Invalid access token" }
+        withContext(Dispatchers.IO) {
+            secureStore.put(SecureFileStore.SESSION_TOKEN, accessToken.encodeToByteArray())
+        }
+        _session.value = SessionStatus.Authenticated
+    }
 
     suspend fun activateDeviceTrial(): MobileAccountResponse = authMutex.withLock {
         check(readToken() == null) { "A signed-in session cannot be replaced by a device trial" }

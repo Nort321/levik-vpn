@@ -16,12 +16,13 @@ import com.leviknet.vpn.core.network.DeviceItem
 import com.leviknet.vpn.core.network.DeviceSummary
 import com.leviknet.vpn.core.network.SubscriptionSummary
 
-enum class ProblemAction { RETRY, DEVICES, SUBSCRIPTIONS, PLANS, LOGIN, SUPPORT, SETTINGS, CLOCK, SERVERS, DIAGNOSTICS }
+enum class ProblemAction { SCAN_QR, RETRY, DEVICES, SUBSCRIPTIONS, PLANS, LOGIN, SUPPORT, SETTINGS, CLOCK, SERVERS, DIAGNOSTICS }
 
 internal fun problemActions(problem: AppProblem, subscription: SubscriptionSummary?): List<ProblemAction> {
     val primary = when (problem.reason) {
         ProblemReason.DEVICE_LIMIT -> if (subscription?.actions?.revokeDevice == true) ProblemAction.DEVICES else ProblemAction.SUBSCRIPTIONS
         ProblemReason.SUBSCRIPTION, ProblemReason.TRAFFIC, ProblemReason.TRIAL -> ProblemAction.SUBSCRIPTIONS
+        ProblemReason.PAIRING -> ProblemAction.SCAN_QR
         ProblemReason.SESSION, ProblemReason.LOGIN -> ProblemAction.LOGIN
         ProblemReason.CLOCK -> ProblemAction.CLOCK
         ProblemReason.PERMISSION, ProblemReason.NOTIFICATIONS, ProblemReason.LOCATION -> ProblemAction.SETTINGS
@@ -110,6 +111,7 @@ internal fun ProblemDialog(
 @Composable
 private fun ProblemActionLabel(action: ProblemAction) {
     val (label, icon) = when (action) {
+        ProblemAction.SCAN_QR -> R.string.activation_scan_title to R.drawable.ic_login
         ProblemAction.RETRY -> R.string.problem_action_retry to R.drawable.ic_refresh
         ProblemAction.DEVICES -> R.string.problem_action_devices to R.drawable.ic_profile
         ProblemAction.SUBSCRIPTIONS -> R.string.problem_action_subscriptions to R.drawable.ic_home
@@ -164,6 +166,7 @@ private fun ProblemReason.titleResource(): Int = when (this) {
     ProblemReason.SUBSCRIPTION -> R.string.problem_subscription_title
     ProblemReason.TRAFFIC -> R.string.problem_traffic_title
     ProblemReason.SESSION -> R.string.problem_session_title
+    ProblemReason.PAIRING -> R.string.problem_pairing_title
     ProblemReason.LOGIN -> R.string.problem_login_title
     ProblemReason.ATTESTATION -> R.string.problem_attestation_title
     ProblemReason.CLOCK -> R.string.problem_clock_title
@@ -192,6 +195,7 @@ private fun ProblemReason.bodyResource(): Int = when (this) {
     ProblemReason.SUBSCRIPTION -> R.string.problem_subscription_body
     ProblemReason.TRAFFIC -> R.string.problem_traffic_body
     ProblemReason.SESSION -> R.string.problem_session_body
+    ProblemReason.PAIRING -> R.string.problem_pairing_body
     ProblemReason.LOGIN -> R.string.problem_login_body
     ProblemReason.ATTESTATION -> R.string.problem_attestation_body
     ProblemReason.CLOCK -> R.string.problem_clock_body

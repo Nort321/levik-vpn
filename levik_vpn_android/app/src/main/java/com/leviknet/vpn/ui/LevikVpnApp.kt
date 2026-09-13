@@ -142,6 +142,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.leviknet.vpn.BuildConfig
 import com.leviknet.vpn.R
 import com.leviknet.vpn.core.auth.ChallengeAuthorization
+import com.leviknet.vpn.core.auth.DeepLinkRouter
 import com.leviknet.vpn.core.auth.ActivationCodeParser
 import com.leviknet.vpn.core.logger.LogEntry
 import com.leviknet.vpn.core.logger.AppLogger
@@ -240,7 +241,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     snackbarHostState = snackbarHostState,
                     onTelegramLogin = viewModel::beginTelegramLogin,
                     onWebsiteLogin = viewModel::beginWebsiteLogin,
-                    onQrLogin = viewModel::beginQrLogin,
+                    onQrLogin = { showActivationScanner = true },
                     onDeviceTrial = viewModel::activateDeviceTrial,
                     onLteTrial = viewModel::activateLteTrial,
                     onFreeProxy = viewModel::openFreeProxyBot,
@@ -660,7 +661,11 @@ fun LevikVpnApp(viewModel: AppViewModel) {
         ActivationScannerDialog(
             onCodeScanned = { code ->
                 showActivationScanner = false
-                pendingActivationCode = code
+                if (DeepLinkRouter.pairingToken(code) != null) {
+                    viewModel.claimPairingUri(code)
+                } else {
+                    pendingActivationCode = code
+                }
             },
             onDismiss = { showActivationScanner = false },
         )
@@ -697,6 +702,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
             onAction = { action ->
                 viewModel.dismissProblem()
                 when (action) {
+                    ProblemAction.SCAN_QR -> { showActivationScanner = true }
                     ProblemAction.RETRY -> viewModel.retryProblem(problem)
                     ProblemAction.DEVICES -> {
                         selectedSubscriptionForDevices = subscription
@@ -6303,7 +6309,7 @@ private fun QrCameraPreview(
                         analysis.setAnalyzer(analyzerExecutor) { image ->
                             try {
                                 if (!disposed.get() && !delivered.get()) {
-                                    decodeQrCode(image)?.let(ActivationCodeParser::parse)?.let { code ->
+                                    decodeQrCode(image)?.let(ActivationCodeParser::parseQr)?.let { code ->
                                         if (delivered.compareAndSet(false, true)) {
                                             ContextCompat.getMainExecutor(context).execute {
                                                 if (!disposed.get()) onCodeScanned(code)
@@ -6463,6 +6469,7 @@ internal fun formatDate(iso: String): String = runCatching {
 @Composable
 private fun UiMessage.localized(): String = stringResource(
     when (this) {
+        UiMessage.PAIRING_ALREADY_SIGNED_IN -> R.string.pairing_already_signed_in
         UiMessage.GENERIC_ERROR -> R.string.generic_error
         UiMessage.SESSION_EXPIRED -> R.string.session_expired
         UiMessage.SUBSCRIPTION_REQUIRED -> R.string.subscription_required

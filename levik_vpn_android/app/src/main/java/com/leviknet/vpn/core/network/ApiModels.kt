@@ -16,6 +16,18 @@ data class AuthChallengeRequest(
 )
 
 @Serializable
+data class DevicePairingRequest(
+    val pairingToken: String,
+    val publicKeySpki: String,
+    val deviceLabel: String,
+    val deviceModel: String,
+    val deviceOs: String,
+    val appVersion: String,
+    val requestSigningAlgorithm: String,
+    val profileEncryptionAlgorithm: String,
+)
+
+@Serializable
 data class AuthChallengeResponse(
     val ok: Boolean,
     val loginToken: String,

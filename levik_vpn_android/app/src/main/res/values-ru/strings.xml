@@ -539,4 +539,7 @@
     <string name="relay_guide_alternative">Не хотите входить в ВКонтакте? Отмените выбор и попробуйте другой сервер без такой пометки, если он доступен в вашей подписке. Работа при ограничениях зависит от оператора.</string>
     <string name="relay_guide_continue">Понятно, продолжить</string>
     <string name="relay_guide_done">Закрыть</string>
+    <string name="problem_pairing_title">QR-код больше не действует</string>
+    <string name="problem_pairing_body">Создайте новый код на странице «Устройства» в кабинете Levik и отсканируйте его здесь.</string>
+    <string name="pairing_already_signed_in">Вы уже вошли. Чтобы подключить другой аккаунт, сначала выйдите в разделе «Профиль».</string>
 </resources>

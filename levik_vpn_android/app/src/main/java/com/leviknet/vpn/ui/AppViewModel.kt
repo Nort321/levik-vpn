@@ -70,6 +70,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
@@ -100,6 +101,7 @@ class AppViewModel(
     private var loginPollJob: Job? = null
     private var activationAuthorizationJob: Job? = null
     private var updateCheckJob: Job? = null
+    private var pendingPairingToken: String? = null
     private var pendingOnboardingAction: OnboardingAction? = null
     private var connectionPending = false
     private var searchDebounceJob: Job? = null
@@ -457,7 +459,47 @@ class AppViewModel(
 
     fun beginWebsiteLogin() = beginOnboarding(OnboardingAction.WEBSITE_LOGIN)
 
-    fun beginQrLogin() = beginOnboarding(OnboardingAction.QR_LOGIN)
+    fun claimPairingUri(rawUri: String) {
+        val token = DeepLinkRouter.pairingToken(rawUri) ?: return
+        if (mutableState.value.login is LoginUiState.Loading) return
+        pendingPairingToken = token
+        beginOnboarding(OnboardingAction.DEVICE_PAIRING)
+    }
+
+    private fun startDevicePairing() {
+        val token = pendingPairingToken ?: return
+        loginPollJob?.cancel()
+        loginPollJob = viewModelScope.launch {
+            mutableState.update { it.copy(login = LoginUiState.Loading, message = null, problem = null) }
+            try {
+                // Cold-start App Links wait for local session restoration before claiming.
+                repository.session.first { it != SessionStatus.Loading }
+                repository.claimDevicePairing(token)
+                pendingPairingToken = null
+                pendingOnboardingAction = null
+                val account = repository.refreshAccount()
+                reconcileAuthenticatedProfile(
+                    account = account,
+                    hadCachedProfile = mutableState.value.profile != null,
+                    forceProfileRefresh = true,
+                )
+                mutableState.update { it.copy(login = LoginUiState.Idle) }
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                if (error is ApiException.Rejected && error.code == "pairing_requires_sign_out") {
+                    pendingPairingToken = null
+                    pendingOnboardingAction = null
+                    mutableState.update { it.copy(login = LoginUiState.Idle, message = UiMessage.PAIRING_ALREADY_SIGNED_IN) }
+                    return@launch
+                }
+                mutableState.update {
+                    it.copy(login = LoginUiState.Idle, problem = error.toAppProblem(
+                        if (pendingPairingToken == null) ProblemOperation.ACCOUNT else ProblemOperation.LOGIN,
+                    ))
+                }
+            }
+        }
+    }
 
     fun activateDeviceTrial() = beginOnboarding(OnboardingAction.DEVICE_TRIAL)
 
@@ -521,11 +563,7 @@ class AppViewModel(
                 activateLteTrialAfterLogin = false,
                 showQr = false,
             )
-            OnboardingAction.QR_LOGIN -> startLogin(
-                accountActivationSupported = true,
-                activateLteTrialAfterLogin = false,
-                showQr = true,
-            )
+            OnboardingAction.DEVICE_PAIRING -> startDevicePairing()
         }
     }
 
@@ -631,6 +669,7 @@ class AppViewModel(
 
     fun declineAppDataDisclosure() {
         pendingOnboardingAction = null
+        pendingPairingToken = null
         mutableState.update { it.copy(showAppDataDisclosure = false) }
     }
 
@@ -2115,6 +2154,7 @@ class AppViewModel(
 
     fun handleDeepLink(uri: android.net.Uri) {
         when (DeepLinkRouter.route(uri.toString())) {
+            DeepLinkDestination.PAIRING -> claimPairingUri(uri.toString())
             DeepLinkDestination.ACTIVATION -> {
                 // Login completion continues through the already-running challenge poll.
                 AppLogger.i("AppViewModel", "Accepted activation callback")
@@ -2375,7 +2415,7 @@ private enum class OnboardingAction {
     TELEGRAM_LOGIN,
     TELEGRAM_LTE_TRIAL,
     WEBSITE_LOGIN,
-    QR_LOGIN,
+    DEVICE_PAIRING,
 }
 
 private sealed interface PendingLteAction {
@@ -2400,6 +2440,7 @@ sealed interface LoginUiState {
 }
 
 enum class UiMessage {
+    PAIRING_ALREADY_SIGNED_IN,
     GENERIC_ERROR,
     SESSION_EXPIRED,
     SUBSCRIPTION_REQUIRED,

@@ -6,25 +6,33 @@ import java.nio.charset.StandardCharsets
 
 internal enum class DeepLinkDestination {
     ACTIVATION,
+    PAIRING,
 }
 
 internal object DeepLinkRouter {
     private const val ACTIVATION_HOST = "leviknet.com"
     private const val ACTIVATION_PATH = "/activate"
-    private const val ACTIVATION_CODE_PARAMETER = "code"
     private const val MAX_URI_LENGTH = 2_048
     private const val MAX_RAW_QUERY_LENGTH = 1_024
     private val ACTIVATION_CODE = Regex("[A-Za-z0-9._~-]{8,256}")
 
     fun route(rawUri: String): DeepLinkDestination? {
-        return if (activationCode(rawUri) != null) {
+        return if (pairingToken(rawUri) != null) {
+            DeepLinkDestination.PAIRING
+        } else if (activationCode(rawUri) != null) {
             DeepLinkDestination.ACTIVATION
         } else {
             null
         }
     }
 
-    fun activationCode(rawUri: String): String? {
+    fun activationCode(rawUri: String): String? =
+        parameter(rawUri, "code", ACTIVATION_CODE)
+
+    fun pairingToken(rawUri: String): String? =
+        parameter(rawUri, "pair", Regex("[A-Za-z0-9_-]{43}"))
+
+    private fun parameter(rawUri: String, expectedName: String, pattern: Regex): String? {
         if (rawUri.length > MAX_URI_LENGTH) return null
         val uri = runCatching { URI(rawUri) }.getOrNull() ?: return null
         if (!uri.scheme.equals("https", ignoreCase = true)) return null
@@ -41,7 +49,7 @@ internal object DeepLinkRouter {
 
         val name = decode(parameter[0]) ?: return null
         val code = decode(parameter[1]) ?: return null
-        if (name != ACTIVATION_CODE_PARAMETER || !ACTIVATION_CODE.matches(code)) return null
+        if (name != expectedName || !pattern.matches(code)) return null
 
         return code
     }
