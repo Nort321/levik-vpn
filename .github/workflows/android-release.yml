@@ -561,9 +561,7 @@ jobs:
             printf '## Levik VPN %s\n\n' "${VERSION_NAME}"
             printf '### Что нового\n\n%s\n\n' "${CHANGELOG_RU}"
             printf '### Установка\n\n'
-            printf 'Скачайте файл `LevikVPN-direct-%s.apk` и откройте его на Android-устройстве.\n\n' "${VERSION_NAME}"
-            printf '### Важно для пользователей ранней версии 1.9.0\n\n'
-            printf 'Ранняя тестовая сборка 1.9.0 была подписана другим ключом. Если Android не позволяет установить обновление поверх неё, удалите старую версию и установите %s заново. При удалении могут сброситься локальные настройки приложения.\n' "${VERSION_NAME}"
+            printf 'Скачайте файл `LevikVPN-direct-%s.apk` и откройте его на Android-устройстве.\n' "${VERSION_NAME}"
           } >"${release_notes}"
           gh release create \
             "${release_tag}" \
