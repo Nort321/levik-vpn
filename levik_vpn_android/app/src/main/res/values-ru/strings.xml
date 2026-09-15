@@ -542,4 +542,7 @@
     <string name="problem_pairing_title">QR-код больше не действует</string>
     <string name="problem_pairing_body">Создайте новый код на странице «Устройства» в кабинете Levik и отсканируйте его здесь.</string>
     <string name="pairing_already_signed_in">Вы уже вошли. Чтобы подключить другой аккаунт, сначала выйдите в разделе «Профиль».</string>
+    <string name="activation_sign_in_title">Войдите, чтобы авторизовать устройство</string>
+    <string name="activation_sign_in_body">Этот QR-код предназначен для входа на другом устройстве. Сначала войдите в аккаунт на этом телефоне, затем отсканируйте код ещё раз. Для входа на телефоне по QR отсканируйте код из раздела «Устройства» в личном кабинете на сайте.</string>
+    <string name="activation_sign_in_button">Войти</string>
 </resources>

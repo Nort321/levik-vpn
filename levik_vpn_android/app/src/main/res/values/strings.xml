@@ -542,4 +542,7 @@
     <string name="problem_pairing_title">This QR code is no longer valid</string>
     <string name="problem_pairing_body">Create a new code on the Devices page in your Levik account, then scan it here.</string>
     <string name="pairing_already_signed_in">You are already signed in. To connect another account, sign out in Profile first.</string>
+    <string name="activation_sign_in_title">Sign in to authorize a device</string>
+    <string name="activation_sign_in_body">This QR code signs in another device. First sign in to your account on this phone, then scan the code again. To sign in on this phone with QR, scan a code from Devices in your website account.</string>
+    <string name="activation_sign_in_button">Sign in</string>
 </resources>

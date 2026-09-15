@@ -214,7 +214,6 @@ fun LevikVpnApp(viewModel: AppViewModel) {
     var showLogsDialog by remember { mutableStateOf(false) }
     var showDevicesDialog by remember { mutableStateOf(false) }
     var showActivationScanner by remember { mutableStateOf(false) }
-    var pendingActivationCode by remember { mutableStateOf<String?>(null) }
     var selectedSubscriptionForDevices by remember { mutableStateOf<SubscriptionSummary?>(null) }
     var showClearTrafficHistoryDialog by remember { mutableStateOf(false) }
 
@@ -297,6 +296,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                             trafficHistoryShareTitle,
                         )
                     },
+                    onScanActivation = { showActivationScanner = true },
                     onOpenDevices = { sub ->
                         selectedSubscriptionForDevices = sub
                         showDevicesDialog = true
@@ -664,28 +664,33 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                 if (DeepLinkRouter.pairingToken(code) != null) {
                     viewModel.claimPairingUri(code)
                 } else {
-                    pendingActivationCode = code
+                    viewModel.requestActivation(code)
                 }
             },
             onDismiss = { showActivationScanner = false },
         )
     }
 
-    pendingActivationCode?.let { code ->
+    state.pendingActivationCode?.takeIf { state.session != SessionStatus.Loading }?.let { code ->
+        val signedIn = state.session == SessionStatus.Authenticated
         AlertDialog(
-            onDismissRequest = { pendingActivationCode = null },
-            title = { Text(stringResource(R.string.activation_confirm_title)) },
-            text = { Text(stringResource(R.string.activation_confirm_body, code)) },
+            onDismissRequest = viewModel::dismissActivation,
+            title = { Text(stringResource(if (signedIn) R.string.activation_confirm_title else R.string.activation_sign_in_title)) },
+            text = {
+                Text(if (signedIn) stringResource(R.string.activation_confirm_body, code)
+                    else stringResource(R.string.activation_sign_in_body))
+            },
             confirmButton = {
                 Button(onClick = {
-                    pendingActivationCode = null
-                    viewModel.authorizeActivation(code)
+                    viewModel.dismissActivation()
+                    if (signedIn) viewModel.authorizeActivation(code)
+                    else viewModel.beginWebsiteLogin()
                 }) {
-                    Text(stringResource(R.string.activation_confirm_button))
+                    Text(stringResource(if (signedIn) R.string.activation_confirm_button else R.string.activation_sign_in_button))
                 }
             },
             dismissButton = {
-                TextButton(onClick = { pendingActivationCode = null }) {
+                TextButton(onClick = viewModel::dismissActivation) {
                     Text(stringResource(R.string.cancel))
                 }
             },
@@ -1196,6 +1201,7 @@ private fun MainContent(
     onClearTrafficHistory: () -> Unit,
     onExportTrafficHistory: () -> Unit,
     onOpenDevices: (SubscriptionSummary) -> Unit,
+    onScanActivation: () -> Unit,
     onOpenLogs: () -> Unit,
     onOpenSplitTunneling: () -> Unit,
     onOpenDns: () -> Unit,
@@ -1325,6 +1331,7 @@ private fun MainContent(
                 onSubscriptionSelected = onSubscriptionSelected,
                 onSubscriptionShieldChanged = onSubscriptionShieldChanged,
                 onOpenDevices = onOpenDevices,
+                onScanActivation = onScanActivation,
                 splitTunnelMode = state.splitTunnelMode,
                 splitTunnelSelectedCount = state.splitTunnelPackages.size,
                 onOpenSplitTunneling = onOpenSplitTunneling,
@@ -3488,6 +3495,7 @@ private fun ProfileScreen(
     onSubscriptionSelected: (String) -> Unit,
     onSubscriptionShieldChanged: (String, Boolean) -> Unit,
     onOpenDevices: (SubscriptionSummary) -> Unit,
+    onScanActivation: () -> Unit,
     splitTunnelMode: SplitTunnelMode,
     splitTunnelSelectedCount: Int,
     onOpenSplitTunneling: () -> Unit,
@@ -3595,6 +3603,14 @@ private fun ProfileScreen(
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     }
+                }
+            }
+            if (session == SessionStatus.Authenticated) {
+                OutlinedButton(
+                    onClick = onScanActivation,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.activation_scan_button))
                 }
             }
             SubscriptionCard(

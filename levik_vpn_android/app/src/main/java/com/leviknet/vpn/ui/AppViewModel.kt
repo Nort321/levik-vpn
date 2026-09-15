@@ -1970,7 +1970,20 @@ class AppViewModel(
         }
     }
 
+    fun requestActivation(rawValue: String) {
+        val code = com.leviknet.vpn.core.auth.ActivationCodeParser.parse(rawValue) ?: return
+        mutableState.update { it.copy(pendingActivationCode = code) }
+    }
+
+    fun dismissActivation() {
+        mutableState.update { it.copy(pendingActivationCode = null) }
+    }
+
     fun authorizeActivation(code: String) {
+        if (repository.session.value != SessionStatus.Authenticated) {
+            requestActivation(code)
+            return
+        }
         if (activationAuthorizationJob?.isActive == true) return
         activationAuthorizationJob = viewModelScope.launch {
             try {
@@ -2156,8 +2169,7 @@ class AppViewModel(
         when (DeepLinkRouter.route(uri.toString())) {
             DeepLinkDestination.PAIRING -> claimPairingUri(uri.toString())
             DeepLinkDestination.ACTIVATION -> {
-                // Login completion continues through the already-running challenge poll.
-                AppLogger.i("AppViewModel", "Accepted activation callback")
+                requestActivation(uri.toString())
             }
             null -> AppLogger.w("AppViewModel", "Rejected unsupported deep link")
         }
@@ -2341,6 +2353,7 @@ data class AppUiState(
     val serverPings: Map<String, Long?> = emptyMap(),
     val pingingServers: Boolean = false,
     val login: LoginUiState = LoginUiState.Idle,
+    val pendingActivationCode: String? = null,
     val tab: AppTab = AppTab.HOME,
     val refreshing: Boolean = false,
     val showAppDataDisclosure: Boolean = false,
