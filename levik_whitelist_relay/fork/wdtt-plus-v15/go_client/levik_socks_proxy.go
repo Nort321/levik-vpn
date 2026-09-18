@@ -47,7 +47,7 @@ type levikSocksServer struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 	listener *net.TCPListener
-	network  *netstack.Net
+	network  socksUDPDialer
 	username string
 	password string
 	close    sync.Once
@@ -146,7 +146,7 @@ func waitForProtectedWireGuardSocket(ctx context.Context) error {
 
 func newLevikSocksServer(
 	parent context.Context,
-	network *netstack.Net,
+	network socksUDPDialer,
 	username, password string,
 ) (*levikSocksServer, error) {
 	if !validProxyCredential(username, 16, 64) || !validProxyCredential(password, 32, 128) {
@@ -323,8 +323,7 @@ type socksUDPRelay struct {
 	writeLock sync.Mutex
 }
 
-// Xray can send from several UDP source ports under one TCP association.
-// Include the source in the flow identity so replies cannot cross clients.
+// Include the pinned client in the flow identity so replies return to its endpoint.
 type socksUDPRelayKey struct {
 	client netip.AddrPort
 	target string
@@ -335,12 +334,13 @@ type socksUDPDialer interface {
 }
 
 type socksUDPAssociation struct {
-	ctx     context.Context
-	cancel  context.CancelFunc
-	socket  *net.UDPConn
-	network socksUDPDialer
-	mu      sync.Mutex
-	relays  map[socksUDPRelayKey]*socksUDPRelay
+	ctx        context.Context
+	cancel     context.CancelFunc
+	socket     *net.UDPConn
+	clientAddr *net.UDPAddr
+	network    socksUDPDialer
+	mu         sync.Mutex
+	relays     map[socksUDPRelayKey]*socksUDPRelay
 }
 
 func (server *levikSocksServer) handleUDPAssociate(client *net.TCPConn) {
@@ -391,6 +391,12 @@ func (association *socksUDPAssociation) run() {
 		}
 		target, payloadOffset, replyHeader, err := parseSocksUDPPacket(buffer[:count])
 		if err != nil {
+			continue
+		}
+		if association.clientAddr == nil {
+			association.clientAddr = client
+		}
+		if !association.clientAddr.IP.Equal(client.IP) || association.clientAddr.Port != client.Port {
 			continue
 		}
 		key := socksUDPRelayKey{client: client.AddrPort(), target: target}
