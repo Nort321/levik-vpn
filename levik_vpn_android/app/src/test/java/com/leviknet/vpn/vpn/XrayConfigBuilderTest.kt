@@ -529,6 +529,69 @@ class XrayConfigBuilderTest {
     }
 
     @Test
+    fun `mobile and allowlist Xray servers apply each routing preset after switching`() {
+        for (category in listOf(TunnelServerCategory.MOBILE, TunnelServerCategory.MOBILE_ALLOWLIST)) {
+            val selected = server("b".repeat(64), "server-b").copy(category = category)
+            val profile = PreparedTunnelProfile(
+                version = 1, profileId = "profile", subscriptionId = "subscription",
+                issuedAt = "2026-07-29T11:59:00Z", servers = listOf(selected),
+            )
+            for (preset in listOf(RoutingPreset.BYPASS_RU, RoutingPreset.GLOBAL, RoutingPreset.BLOCKED_ONLY, RoutingPreset.BYPASS_RU)) {
+                val usesLteBypass = preset == RoutingPreset.BYPASS_RU
+                val config = builder.build(
+                    profile, selected.id, 42,
+                    routingPreset = preset,
+                    effectiveRoutingProfile = selected.effectiveRoutingProfile(preset),
+                    lteDirectCidrs = if (usesLteBypass) listOf("203.0.113.0/24") else emptyList(),
+                    lteDirectDomains = if (usesLteBypass) listOf("domain:allowed.example") else emptyList(),
+                )
+                assertMobilePreset(config, preset, selected.tag)
+            }
+        }
+    }
+
+    @Test
+    fun `relay allowlist connection applies Global and Anti-Block instead of forcing LTE`() {
+        val profile = PreparedTunnelProfile(
+            version = 1, profileId = "profile", subscriptionId = "subscription",
+            issuedAt = "2026-07-29T11:59:00Z", servers = emptyList(),
+        )
+        for (preset in RoutingPreset.entries) {
+            val usesLteBypass = preset == RoutingPreset.BYPASS_RU
+            val config = builder.buildRelayProxy(
+                profile = profile, tunFileDescriptor = 42,
+                proxy = LocalProxyEndpoint("127.0.0.1", 32123, "u".repeat(24), "p".repeat(48)),
+                primaryDnsIp = "1.1.1.1", secondaryDnsIp = "1.0.0.1",
+                routingPreset = preset,
+                lteDirectCidrs = if (usesLteBypass) listOf("203.0.113.0/24") else emptyList(),
+                lteDirectDomains = if (usesLteBypass) listOf("domain:allowed.example") else emptyList(),
+                customProxyDomains = setOf("custom-proxy.example"),
+            )
+            val proxyTag = json.parseToJsonElement(config).jsonObject.getValue("outbounds")
+                .jsonArray.first().jsonObject.getValue("tag").jsonPrimitive.content
+            assertMobilePreset(config, preset, proxyTag)
+            if (!usesLteBypass) assertTrue(config.contains("domain:custom-proxy.example"))
+        }
+    }
+
+    private fun assertMobilePreset(config: String, preset: RoutingPreset, proxyTag: String) {
+        val parsed = json.parseToJsonElement(config).jsonObject
+        val rules = parsed.getValue("routing").jsonObject.getValue("rules").jsonArray.map { it.jsonObject }
+        val usesLteBypass = preset == RoutingPreset.BYPASS_RU
+        assertEquals(usesLteBypass, rules.toString().contains("domain:allowed.example"))
+        assertEquals(usesLteBypass, rules.toString().contains("203.0.113.0/24"))
+        if (preset == RoutingPreset.BLOCKED_ONLY) {
+            val proxyRule = rules.first { it["outboundTag"]?.jsonPrimitive?.content == proxyTag }
+            assertTrue(proxyRule.getValue("domain").jsonArray.any { it.jsonPrimitive.content == "domain:instagram.com" })
+            assertEquals("tcp,udp", rules.last().getValue("network").jsonPrimitive.content)
+            assertEquals("levik-direct", rules.last().getValue("outboundTag").jsonPrimitive.content)
+        } else {
+            assertTrue(rules.none { it["network"]?.jsonPrimitive?.content == "tcp,udp" })
+            assertEquals(proxyTag, parsed.getValue("outbounds").jsonArray.first().jsonObject.getValue("tag").jsonPrimitive.content)
+        }
+    }
+
+    @Test
     fun `anti DPI preserves Hysteria UDP transport and explicit dialer`() {
         for ((protocol, transport) in listOf("hysteria" to "hysteria", "hysteria2" to "hysteria2", "vless" to "hysteria")) {
             val selected = server("a".repeat(64), "server-a").copy(outbound = buildJsonObject {

@@ -1,5 +1,6 @@
 package com.leviknet.vpn.vpn
 
+import com.leviknet.vpn.data.RoutingPreset
 import java.util.Locale
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -161,14 +162,20 @@ fun TunnelServer.isStandardMobileServer(): Boolean =
 fun TunnelServer.isAllowlistMobileServer(): Boolean =
     effectiveCategory() == TunnelServerCategory.MOBILE_ALLOWLIST
 
-/** Runtime-only routing policy. LTE is deliberately absent from user settings and UI. */
+/** LTE supplies the pinned bypass rules for the mobile BYPASS_RU preset only. */
 enum class EffectiveRoutingProfile {
     USER_SELECTED,
     LTE,
 }
 
-fun TunnelServer.effectiveRoutingProfile(): EffectiveRoutingProfile =
-    if (isMobileServer()) EffectiveRoutingProfile.LTE else EffectiveRoutingProfile.USER_SELECTED
+fun TunnelServer.effectiveRoutingProfile(
+    routingPreset: RoutingPreset = RoutingPreset.BYPASS_RU,
+): EffectiveRoutingProfile =
+    if (isMobileServer() && routingPreset == RoutingPreset.BYPASS_RU) {
+        EffectiveRoutingProfile.LTE
+    } else {
+        EffectiveRoutingProfile.USER_SELECTED
+    }
 
 fun TunnelServer.hasUnlimitedTraffic(): Boolean =
     !isStandardMobileServer()

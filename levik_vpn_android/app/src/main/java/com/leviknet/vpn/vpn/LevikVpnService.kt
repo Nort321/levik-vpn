@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.Network
@@ -27,7 +28,7 @@ import com.leviknet.vpn.core.notification.AppIconArtwork
 import com.leviknet.vpn.core.network.WhitelistMode
 import com.leviknet.vpn.core.security.SecureFileStore
 import com.leviknet.vpn.data.DnsProvider
-import com.leviknet.vpn.data.SplitTunnelMode
+import com.leviknet.vpn.data.RoutingPreset
 import com.leviknet.vpn.data.isActiveAt
 import java.net.DatagramSocket
 import java.net.HttpURLConnection
@@ -231,7 +232,7 @@ class LevikVpnService : VpnService() {
                             serverId = currentServer?.id,
                             serverName = currentServerName,
                             serverCountryCode = currentServer?.countryCode,
-                            effectiveRoutingProfile = currentServer?.effectiveRoutingProfile()
+                            effectiveRoutingProfile = currentServer?.effectiveRoutingProfile(container.settings.routingPreset.value)
                                 ?: EffectiveRoutingProfile.USER_SELECTED,
                             failure = null,
                         )
@@ -409,6 +410,7 @@ class LevikVpnService : VpnService() {
             val secondaryDns = if (dnsProvider == DnsProvider.CUSTOM) "8.8.8.8" else dnsProvider.secondaryIpv4
 
             val routingPreset = container.settings.routingPreset.value
+            val routingProfile = selected.effectiveRoutingProfile(routingPreset)
             val antiDpi = container.settings.antiDpiEnabled.value
             val useDoh = container.settings.useDoh.value
             val dohUrl = if (useDoh) {
@@ -438,13 +440,13 @@ class LevikVpnService : VpnService() {
                             antiDpiInterval = container.settings.antiDpiInterval.value,
                             customDirectDomains = container.settings.customDirectDomains.value,
                             customProxyDomains = container.settings.customProxyDomains.value,
-                            effectiveRoutingProfile = selected.effectiveRoutingProfile(),
-                            lteDirectCidrs = if (selected.isMobileServer()) {
+                            effectiveRoutingProfile = routingProfile,
+                            lteDirectCidrs = if (routingProfile == EffectiveRoutingProfile.LTE) {
                                 container.lteRoutingData.cidrs
                             } else {
                                 emptyList()
                             },
-                            lteDirectDomains = if (selected.isMobileServer()) {
+                            lteDirectDomains = if (routingProfile == EffectiveRoutingProfile.LTE) {
                                 container.lteRoutingData.domains
                             } else {
                                 emptyList()
@@ -467,8 +469,15 @@ class LevikVpnService : VpnService() {
                             proxy = proxy,
                             primaryDnsIp = primaryDns,
                             secondaryDnsIp = secondaryDns,
-                            lteDirectCidrs = container.lteRoutingData.cidrs,
-                            lteDirectDomains = container.lteRoutingData.domains,
+                            routingPreset = routingPreset,
+                            customDirectDomains = container.settings.customDirectDomains.value,
+                            customProxyDomains = container.settings.customProxyDomains.value,
+                            lteDirectCidrs = if (routingPreset == RoutingPreset.BYPASS_RU) {
+                                container.lteRoutingData.cidrs
+                            } else emptyList(),
+                            lteDirectDomains = if (routingPreset == RoutingPreset.BYPASS_RU) {
+                                container.lteRoutingData.domains
+                            } else emptyList(),
                         )
                     },
                     tunPlan = xrayTunPlan(
@@ -561,7 +570,7 @@ class LevikVpnService : VpnService() {
                         serverId = selected.id,
                         serverName = selected.name,
                         serverCountryCode = selected.countryCode,
-                        effectiveRoutingProfile = selected.effectiveRoutingProfile(),
+                        effectiveRoutingProfile = routingProfile,
                     ),
                 )
                 showForeground(VpnConnectionState.CONNECTED, selected.name)
@@ -763,14 +772,6 @@ class LevikVpnService : VpnService() {
         )
         val splitMode = container.settings.splitTunnelMode.value
         val splitPackages = container.settings.splitTunnelPackages.value
-        val allowPerAppBypass = currentServer?.effectiveRoutingProfile() !=
-            EffectiveRoutingProfile.LTE
-        val effectiveSplitMode = splitMode.takeIf { allowPerAppBypass } ?: SplitTunnelMode.OFF
-        val effectiveSplitPackages = splitTunnelPackagesForBuilder(
-            mode = effectiveSplitMode,
-            configuredPackages = splitPackages,
-            vpnPackageName = packageName,
-        )
 
         return Builder()
             .setSession(getString(R.string.vpn_session_name, serverName))
@@ -788,21 +789,26 @@ class LevikVpnService : VpnService() {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     setMetered(false)
                 }
-                when (effectiveSplitMode) {
-                    SplitTunnelMode.DISALLOWED -> {
-                        effectiveSplitPackages.forEach { pkg ->
-                            runCatching { addDisallowedApplication(pkg) }
+                // Android excludes the app UID before IP/domain routing, on every server.
+                applySplitTunnelApplications(
+                    mode = splitMode,
+                    configuredPackages = splitPackages,
+                    vpnPackageName = packageName,
+                    addAllowed = { pkg ->
+                        try {
+                            addAllowedApplication(pkg)
+                        } catch (_: PackageManager.NameNotFoundException) {
+                            // Saved selections may include apps that were uninstalled.
                         }
-                    }
-                    SplitTunnelMode.ALLOWED -> {
-                        if (effectiveSplitPackages.isNotEmpty()) {
-                            effectiveSplitPackages.forEach { pkg ->
-                                runCatching { addAllowedApplication(pkg) }
-                            }
+                    },
+                    addDisallowed = { pkg ->
+                        try {
+                            addDisallowedApplication(pkg)
+                        } catch (_: PackageManager.NameNotFoundException) {
+                            // Do not swallow other failures and silently tunnel excluded apps.
                         }
-                    }
-                    SplitTunnelMode.OFF -> Unit
-                }
+                    },
+                )
             }
             .establish()
             ?: throw NetworkSetupException("Android denied the VPN interface")
@@ -1307,7 +1313,7 @@ class LevikVpnService : VpnService() {
                         serverId = currentServer?.id,
                         serverName = currentServerName,
                         serverCountryCode = currentServer?.countryCode,
-                        effectiveRoutingProfile = currentServer?.effectiveRoutingProfile()
+                        effectiveRoutingProfile = currentServer?.effectiveRoutingProfile(container.settings.routingPreset.value)
                             ?: EffectiveRoutingProfile.USER_SELECTED,
                         failure = failure,
                         failureDetail = detail.take(MAX_FAILURE_DETAIL_LENGTH),
@@ -1598,7 +1604,7 @@ class LevikVpnService : VpnService() {
                 serverId = serverBeforePause?.id,
                 serverName = serverNameBeforePause,
                 serverCountryCode = serverBeforePause?.countryCode,
-                effectiveRoutingProfile = serverBeforePause?.effectiveRoutingProfile()
+                effectiveRoutingProfile = serverBeforePause?.effectiveRoutingProfile(container.settings.routingPreset.value)
                     ?: EffectiveRoutingProfile.USER_SELECTED,
                 pausedRemainingSeconds = initialRemaining,
             ),

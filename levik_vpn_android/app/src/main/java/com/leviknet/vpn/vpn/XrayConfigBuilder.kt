@@ -24,6 +24,9 @@ class XrayConfigBuilder(
         secondaryDnsIp: String,
         lteDirectCidrs: List<String>,
         lteDirectDomains: List<String>,
+        routingPreset: RoutingPreset = RoutingPreset.BYPASS_RU,
+        customDirectDomains: Set<String> = emptySet(),
+        customProxyDomains: Set<String> = emptySet(),
     ): String {
         val proxyOutbound = buildJsonObject {
             put("tag", RELAY_PROXY_TAG)
@@ -55,8 +58,9 @@ class XrayConfigBuilder(
             profile = syntheticProfile,
             selectedServerId = RELAY_PROXY_TAG,
             tunFileDescriptor = tunFileDescriptor,
-            routingPreset = RoutingPreset.GLOBAL,
-            bypassRussianTraffic = false,
+            routingPreset = routingPreset,
+            customDirectDomains = customDirectDomains,
+            customProxyDomains = customProxyDomains,
             primaryDnsIp = primaryDnsIp,
             secondaryDnsIp = secondaryDnsIp,
             effectiveRoutingProfile = EffectiveRoutingProfile.LTE,
@@ -109,7 +113,9 @@ class XrayConfigBuilder(
             }
         orderedServers.forEach(::requireRealityServerNames)
 
-        val isLte = effectiveRoutingProfile == EffectiveRoutingProfile.LTE
+        // Mobile bypass keeps its curated rules; Global and Anti-Block remain user choices.
+        val isLte = effectiveRoutingProfile == EffectiveRoutingProfile.LTE &&
+            routingPreset == RoutingPreset.BYPASS_RU
         if (isLte) {
             require(lteDirectCidrs.isNotEmpty()) { "LTE CIDR routing data is unavailable" }
             require(lteDirectDomains.isNotEmpty()) { "LTE domain routing data is unavailable" }

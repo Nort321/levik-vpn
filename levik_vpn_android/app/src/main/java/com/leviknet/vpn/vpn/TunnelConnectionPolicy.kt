@@ -28,6 +28,22 @@ internal fun splitTunnelPackagesForBuilder(
     }
 }
 
+/** Apply UID-level routing independently of the server, transport, and destination rules. */
+internal fun applySplitTunnelApplications(
+    mode: SplitTunnelMode,
+    configuredPackages: Set<String>,
+    vpnPackageName: String,
+    addAllowed: (String) -> Unit,
+    addDisallowed: (String) -> Unit,
+) {
+    val packages = splitTunnelPackagesForBuilder(mode, configuredPackages, vpnPackageName)
+    when (mode) {
+        SplitTunnelMode.ALLOWED -> packages.forEach(addAllowed)
+        SplitTunnelMode.DISALLOWED -> packages.forEach(addDisallowed)
+        SplitTunnelMode.OFF -> Unit
+    }
+}
+
 class TunnelNetworkRequirementException(
     val violation: TunnelNetworkRequirementViolation,
 ) : Exception(

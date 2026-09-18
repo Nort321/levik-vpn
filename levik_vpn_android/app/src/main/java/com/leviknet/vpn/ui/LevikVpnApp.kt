@@ -164,7 +164,6 @@ import com.leviknet.vpn.data.ThemeMode
 import com.leviknet.vpn.data.isActiveAt
 import com.leviknet.vpn.ui.theme.*
 import com.leviknet.vpn.vpn.PreparedTunnelProfile
-import com.leviknet.vpn.vpn.EffectiveRoutingProfile
 import com.leviknet.vpn.vpn.TunnelServer
 import com.leviknet.vpn.vpn.TunnelServerCategory
 import com.leviknet.vpn.vpn.VpnConnectionState
@@ -1313,7 +1312,6 @@ private fun MainContent(
                 onRelinkAccount = onRelinkAccount,
                 onLogout = onLogout,
                 routingPreset = state.routingPreset,
-                lteRoutingActive = state.vpn.effectiveRoutingProfile == EffectiveRoutingProfile.LTE,
                 onOpenRoutingPreset = onOpenRoutingPreset,
                 antiDpiPreset = state.antiDpiPreset,
                 antiDpiEnabled = state.antiDpiEnabled,
@@ -1540,7 +1538,6 @@ private fun HomeScreen(
     val isConnected = state.vpn.state == VpnConnectionState.CONNECTED
     val account = state.account
     val trialAvailable = account?.trial?.eligible == true
-    val lteRoutingActive = state.vpn.effectiveRoutingProfile == EffectiveRoutingProfile.LTE
 
     Column(
         modifier = modifier
@@ -1615,7 +1612,6 @@ private fun HomeScreen(
         ) {
             Surface(
                 onClick = onOpenRoutingPreset,
-                enabled = !lteRoutingActive,
                 shape = RoundedCornerShape(12.dp),
                 color = MaterialTheme.colorScheme.surface,
                 border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
@@ -1632,14 +1628,10 @@ private fun HomeScreen(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        text = if (lteRoutingActive) {
-                            "LTE"
-                        } else {
-                            when (state.routingPreset) {
-                                RoutingPreset.GLOBAL -> "Global"
-                                RoutingPreset.BYPASS_RU -> "Обход РФ"
-                                RoutingPreset.BLOCKED_ONLY -> "Anti-Block"
-                            }
+                        text = when (state.routingPreset) {
+                            RoutingPreset.GLOBAL -> "Global"
+                            RoutingPreset.BYPASS_RU -> "Обход РФ"
+                            RoutingPreset.BLOCKED_ONLY -> "Anti-Block"
                         },
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Medium,
@@ -3480,7 +3472,6 @@ private fun ProfileScreen(
     onRelinkAccount: () -> Unit,
     onLogout: () -> Unit,
     routingPreset: RoutingPreset,
-    lteRoutingActive: Boolean,
     onOpenRoutingPreset: () -> Unit,
     antiDpiPreset: AntiDpiPreset,
     antiDpiEnabled: Boolean,
@@ -3949,7 +3940,7 @@ private fun ProfileScreen(
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(enabled = !lteRoutingActive, onClick = onOpenRoutingPreset),
+                    .clickable(onClick = onOpenRoutingPreset),
                 shape = RoundedCornerShape(18.dp),
                 color = MaterialTheme.colorScheme.surface,
                 border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
@@ -3967,7 +3958,7 @@ private fun ProfileScreen(
                         )
                         Spacer(Modifier.height(2.dp))
                         Text(
-                            text = if (lteRoutingActive) "LTE" else routingPreset.titleRu,
+                            text = routingPreset.titleRu,
                             color = LevikBlue,
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
