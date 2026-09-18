@@ -4,8 +4,13 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/binary"
+	"net"
+	"net/netip"
 	"testing"
+	"time"
 )
 
 func TestParseSocksUDPPacketDomain(t *testing.T) {
@@ -28,6 +33,129 @@ func TestParseSocksUDPPacketDomain(t *testing.T) {
 	}
 	if len(header) != offset {
 		t.Fatalf("unexpected response header length %d", len(header))
+	}
+}
+
+func listenTestUDP(t *testing.T) *net.UDPConn {
+	t.Helper()
+	socket, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = socket.Close() })
+	return socket
+}
+
+func readTestUDP(t *testing.T, socket *net.UDPConn) ([]byte, *net.UDPAddr) {
+	t.Helper()
+	if err := socket.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	buffer := make([]byte, 1024)
+	n, source, err := socket.ReadFromUDP(buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return buffer[:n], source
+}
+
+func writeTestUDP(t *testing.T, socket *net.UDPConn, packet []byte, target *net.UDPAddr) {
+	t.Helper()
+	if _, err := socket.WriteToUDP(packet, target); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func testUDPHeader(target *net.UDPAddr) []byte {
+	header := []byte{0, 0, 0, socksAddressIPv4, 127, 0, 0, 1, 0, 0}
+	binary.BigEndian.PutUint16(header[8:], uint16(target.Port))
+	return header
+}
+
+func TestSocksUDPAssociationMultipleClientsAndTargets(t *testing.T) {
+	socket := listenTestUDP(t)
+	clients := []*net.UDPConn{listenTestUDP(t), listenTestUDP(t)}
+	targets := []*net.UDPConn{listenTestUDP(t), listenTestUDP(t)}
+	ctx, cancel := context.WithCancel(context.Background())
+	association := &socksUDPAssociation{
+		ctx: ctx, cancel: cancel, socket: socket, network: &net.Dialer{},
+		relays: make(map[socksUDPRelayKey]*socksUDPRelay),
+	}
+	done := make(chan struct{})
+	go func() { association.run(); close(done) }()
+	t.Cleanup(func() {
+		cancel()
+		_ = socket.Close()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("association did not stop")
+		}
+	})
+	proxyAddress := socket.LocalAddr().(*net.UDPAddr)
+	// Reuse each flow and return replies in reverse order. Both local ports
+	// must work even when they query the same DNS endpoint concurrently.
+	for round := 0; round < 2; round++ {
+		for _, target := range targets {
+			header := testUDPHeader(target.LocalAddr().(*net.UDPAddr))
+			packets := make([][]byte, len(clients))
+			for i, client := range clients {
+				packets[i] = append(append([]byte(nil), header...), byte(round), byte(i))
+				writeTestUDP(t, client, packets[i], proxyAddress)
+			}
+			payloads := make([][]byte, len(clients))
+			sources := make([]*net.UDPAddr, len(clients))
+			for i := range clients {
+				payloads[i], sources[i] = readTestUDP(t, target)
+			}
+			if sources[0].String() == sources[1].String() {
+				t.Fatal("clients unexpectedly share an upstream flow")
+			}
+			for i := len(clients) - 1; i >= 0; i-- {
+				writeTestUDP(t, target, payloads[i], sources[i])
+			}
+			for i, client := range clients {
+				response, _ := readTestUDP(t, client)
+				if !bytes.Equal(response, packets[i]) {
+					t.Fatalf("client %d received another flow's response: %v", i, response)
+				}
+			}
+		}
+	}
+	association.mu.Lock()
+	count := len(association.relays)
+	association.mu.Unlock()
+	if count != len(clients)*len(targets) {
+		t.Fatalf("got %d flows; expected one per client and target", count)
+	}
+}
+
+func TestSocksUDPAssociationPrunesAtCapacityDuringTraffic(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	association := &socksUDPAssociation{
+		ctx: ctx, cancel: cancel, socket: listenTestUDP(t), network: &net.Dialer{},
+		relays: make(map[socksUDPRelayKey]*socksUDPRelay),
+	}
+	t.Cleanup(association.close)
+	for i := 0; i < socksUDPMaxTargets; i++ {
+		key := socksUDPRelayKey{
+			client: netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), uint16(10000+i)),
+			target: "127.0.0.1:53",
+		}
+		connection, peer := net.Pipe()
+		_ = peer.Close()
+		association.relays[key] = &socksUDPRelay{key: key, conn: connection, lastUsed: time.Now()}
+	}
+	target := listenTestUDP(t).LocalAddr().(*net.UDPAddr)
+	key := socksUDPRelayKey{client: netip.MustParseAddrPort("127.0.0.1:20000"), target: target.String()}
+	if association.relayFor(key, testUDPHeader(target)) != nil {
+		t.Fatal("active flow limit must be enforced")
+	}
+	for _, relay := range association.relays {
+		relay.lastUsed = time.Now().Add(-socksUDPIdleTimeout - time.Second)
+	}
+	if association.relayFor(key, testUDPHeader(target)) == nil {
+		t.Fatal("idle flows must be reclaimed even without a socket read timeout")
 	}
 }
 

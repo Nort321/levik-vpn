@@ -1667,9 +1667,14 @@ class LevikVpnService : VpnService() {
             TunnelProbeObservation("vpn", success = false, failure = "network_unavailable"),
         ))
         val observations = mutableListOf<TunnelProbeObservation>()
-        for (endpoint in HEALTH_CHECK_ENDPOINTS.shuffled()) {
+        val relay = currentServer?.engine == TunnelEngineKind.LEVIK_RELAY
+        // Probe the IP endpoint first on relay, avoiding a DNS lookup on the
+        // common path while still retaining independent endpoint fallbacks.
+        val endpoints = if (relay) HEALTH_CHECK_ENDPOINTS else HEALTH_CHECK_ENDPOINTS.shuffled()
+        val timeoutMs = if (relay) RELAY_HEALTH_CHECK_TIMEOUT_MS else HEALTH_CHECK_TIMEOUT_MS
+        for (endpoint in endpoints) {
             coroutineContext.ensureActive()
-            val observation = probeEndpoint(vpnNetwork, endpoint)
+            val observation = probeEndpoint(vpnNetwork, endpoint, timeoutMs)
             coroutineContext.ensureActive()
             observations += observation
             if (observation.success) break
@@ -1677,12 +1682,16 @@ class LevikVpnService : VpnService() {
         TunnelProbeResult(observations)
     }
 
-    private fun probeEndpoint(network: Network, endpoint: HealthCheckEndpoint): TunnelProbeObservation {
+    private fun probeEndpoint(
+        network: Network,
+        endpoint: HealthCheckEndpoint,
+        timeoutMs: Int,
+    ): TunnelProbeObservation {
         var connection: HttpURLConnection? = null
         return try {
             connection = (network.openConnection(URL(endpoint.url)) as HttpURLConnection).apply {
-                connectTimeout = HEALTH_CHECK_TIMEOUT_MS
-                readTimeout = HEALTH_CHECK_TIMEOUT_MS
+                connectTimeout = timeoutMs
+                readTimeout = timeoutMs
                 useCaches = false
                 instanceFollowRedirects = false
                 requestMethod = "GET"
@@ -1974,6 +1983,7 @@ class LevikVpnService : VpnService() {
         private const val AUTO_HEALING_RECOVERY_COOLDOWN_MS = 5 * 60_000L
         private const val AUTO_HEALING_CANDIDATE_BACKOFF_MS = 15 * 60_000L
         private const val HEALTH_CHECK_TIMEOUT_MS = 4_000
+        private const val RELAY_HEALTH_CHECK_TIMEOUT_MS = 12_000
         private const val MAX_HEALTH_FAILURE_SUMMARY_LENGTH = 220
         private const val RELAY_ENTITLEMENT_WATCHDOG_INTERVAL_MS = 120_000L
         private const val WAKELOCK_TIMEOUT_MS = 24 * 60 * 60 * 1000L

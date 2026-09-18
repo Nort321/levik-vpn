@@ -159,7 +159,7 @@ class XrayRuntime(
         owner: Long,
         configJson: String,
         controller: DialerController,
-        dnsServer: String,
+        dnsServer: String?,
     ): Long = lifecycleLock.withLock {
         check(ownership.isCurrent(owner)) { "VPN core owner is stale" }
         if (activeLease != null) {
@@ -185,7 +185,13 @@ class XrayRuntime(
                 LibXray.registerListenerController(processController)
                 listenerControllerRegistered = true
             }
-            LibXray.setDNS(processController, dnsServer)
+            // Relay connects to an IP-literal loopback proxy. Its DNS queries use
+            // Xray's routed DNS configuration, never a protected physical resolver.
+            if (dnsServer == null) {
+                LibXray.resetDNS()
+            } else {
+                LibXray.setDNS(processController, dnsServer)
+            }
             invokeForData(request)
             if (!ownership.isCurrent(owner)) {
                 stopUnownedCore()

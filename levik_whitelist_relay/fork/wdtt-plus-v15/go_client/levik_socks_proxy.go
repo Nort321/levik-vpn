@@ -316,21 +316,31 @@ func (server *levikSocksServer) handleConnect(
 }
 
 type socksUDPRelay struct {
-	target    string
+	key       socksUDPRelayKey
 	header    []byte
 	conn      net.Conn
 	lastUsed  time.Time
 	writeLock sync.Mutex
 }
 
+// Xray can send from several UDP source ports under one TCP association.
+// Include the source in the flow identity so replies cannot cross clients.
+type socksUDPRelayKey struct {
+	client netip.AddrPort
+	target string
+}
+
+type socksUDPDialer interface {
+	DialContext(context.Context, string, string) (net.Conn, error)
+}
+
 type socksUDPAssociation struct {
-	ctx        context.Context
-	cancel     context.CancelFunc
-	socket     *net.UDPConn
-	network    *netstack.Net
-	mu         sync.Mutex
-	clientAddr *net.UDPAddr
-	relays     map[string]*socksUDPRelay
+	ctx     context.Context
+	cancel  context.CancelFunc
+	socket  *net.UDPConn
+	network socksUDPDialer
+	mu      sync.Mutex
+	relays  map[socksUDPRelayKey]*socksUDPRelay
 }
 
 func (server *levikSocksServer) handleUDPAssociate(client *net.TCPConn) {
@@ -350,7 +360,7 @@ func (server *levikSocksServer) handleUDPAssociate(client *net.TCPConn) {
 		cancel:  cancel,
 		socket:  socket,
 		network: server.network,
-		relays:  make(map[string]*socksUDPRelay),
+		relays:  make(map[socksUDPRelayKey]*socksUDPRelay),
 	}
 	go func() {
 		_, _ = io.Copy(io.Discard, client)
@@ -379,21 +389,12 @@ func (association *socksUDPAssociation) run() {
 		if !client.IP.IsLoopback() || count < 7 {
 			continue
 		}
-		association.mu.Lock()
-		if association.clientAddr == nil {
-			association.clientAddr = client
-		}
-		acceptedClient := association.clientAddr.IP.Equal(client.IP) &&
-			association.clientAddr.Port == client.Port
-		association.mu.Unlock()
-		if !acceptedClient {
-			continue
-		}
 		target, payloadOffset, replyHeader, err := parseSocksUDPPacket(buffer[:count])
 		if err != nil {
 			continue
 		}
-		relay := association.relayFor(target, replyHeader)
+		key := socksUDPRelayKey{client: client.AddrPort(), target: target}
+		relay := association.relayFor(key, replyHeader)
 		if relay == nil {
 			continue
 		}
@@ -401,43 +402,49 @@ func (association *socksUDPAssociation) run() {
 		_, err = relay.conn.Write(buffer[payloadOffset:count])
 		relay.writeLock.Unlock()
 		if err != nil {
-			association.removeRelay(target, relay)
+			association.removeRelay(key, relay)
 		}
 	}
 }
 
-func (association *socksUDPAssociation) relayFor(target string, header []byte) *socksUDPRelay {
+func (association *socksUDPAssociation) relayFor(key socksUDPRelayKey, header []byte) *socksUDPRelay {
 	association.mu.Lock()
-	if relay := association.relays[target]; relay != nil {
+	if relay := association.relays[key]; relay != nil {
 		relay.lastUsed = time.Now()
 		association.mu.Unlock()
 		return relay
 	}
 	if len(association.relays) >= socksUDPMaxTargets {
 		association.mu.Unlock()
-		return nil
+		// A busy association may never hit the read timeout that normally prunes.
+		association.pruneIdle()
+		association.mu.Lock()
+		if len(association.relays) >= socksUDPMaxTargets {
+			association.mu.Unlock()
+			return nil
+		}
 	}
 	association.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(association.ctx, socksDialTimeout)
-	connection, err := association.network.DialContext(ctx, "udp", target)
+	connection, err := association.network.DialContext(ctx, "udp", key.target)
 	cancel()
 	if err != nil {
 		return nil
 	}
 	relay := &socksUDPRelay{
-		target:   target,
+		key:      key,
 		header:   append([]byte(nil), header...),
 		conn:     connection,
 		lastUsed: time.Now(),
 	}
 	association.mu.Lock()
-	if existing := association.relays[target]; existing != nil {
+	if existing := association.relays[key]; existing != nil {
 		association.mu.Unlock()
 		_ = connection.Close()
 		return existing
 	}
-	association.relays[target] = relay
+	association.relays[key] = relay
 	association.mu.Unlock()
 	go association.readResponses(relay)
 	return relay
@@ -454,20 +461,16 @@ func (association *socksUDPAssociation) readResponses(relay *socksUDPRelay) {
 					continue
 				}
 			}
-			association.removeRelay(relay.target, relay)
+			association.removeRelay(relay.key, relay)
 			return
 		}
 		association.mu.Lock()
-		client := association.clientAddr
 		relay.lastUsed = time.Now()
 		association.mu.Unlock()
-		if client == nil {
-			continue
-		}
 		packet := make([]byte, len(relay.header)+count)
 		copy(packet, relay.header)
 		copy(packet[len(relay.header):], buffer[:count])
-		_, _ = association.socket.WriteToUDP(packet, client)
+		_, _ = association.socket.WriteToUDPAddrPort(packet, relay.key.client)
 	}
 }
 
@@ -487,10 +490,10 @@ func (association *socksUDPAssociation) pruneIdle() {
 	}
 }
 
-func (association *socksUDPAssociation) removeRelay(target string, expected *socksUDPRelay) {
+func (association *socksUDPAssociation) removeRelay(key socksUDPRelayKey, expected *socksUDPRelay) {
 	association.mu.Lock()
-	if association.relays[target] == expected {
-		delete(association.relays, target)
+	if association.relays[key] == expected {
+		delete(association.relays, key)
 	}
 	association.mu.Unlock()
 	_ = expected.conn.Close()
@@ -501,7 +504,7 @@ func (association *socksUDPAssociation) close() {
 	_ = association.socket.Close()
 	association.mu.Lock()
 	relays := association.relays
-	association.relays = make(map[string]*socksUDPRelay)
+	association.relays = make(map[socksUDPRelayKey]*socksUDPRelay)
 	association.mu.Unlock()
 	for _, relay := range relays {
 		_ = relay.conn.Close()
