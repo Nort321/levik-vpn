@@ -289,7 +289,7 @@ class XrayConfigBuilder(
                             put("inboundTag", buildJsonArray { add(JsonPrimitive(TUN_INBOUND_TAG)) })
                             put("port", "53")
                             put("network", "udp,tcp")
-                            put("outboundTag", selectedServerTag)
+                            put("outboundTag", selected.tag)
                         })
                         // In Blocked Only mode, unrouted traffic defaults to direct
                         add(buildJsonObject {
