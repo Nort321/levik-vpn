@@ -82,6 +82,9 @@ func (f *fakeWDTT) SetExpiry(_ context.Context, password string, expiresAt int64
 		if retention > 0 {
 			value.PurgeAfter = expiresAt + retention
 		}
+		if !value.IsDeactivated {
+			value.Status = "active"
+		}
 	})
 }
 
@@ -98,7 +101,10 @@ func (f *fakeWDTT) SetPassword(_ context.Context, password, replacement string) 
 }
 
 func (f *fakeWDTT) Activate(_ context.Context, password string) (wdtt.Password, error) {
-	updated, err := f.mutate(password, func(value *wdtt.Password) { value.Status = "active" })
+	updated, err := f.mutate(password, func(value *wdtt.Password) {
+		value.Status = "active"
+		value.IsDeactivated = false
+	})
 	if err == nil {
 		f.events = append(f.events, "activate")
 	}
@@ -106,7 +112,10 @@ func (f *fakeWDTT) Activate(_ context.Context, password string) (wdtt.Password, 
 }
 
 func (f *fakeWDTT) Deactivate(_ context.Context, password string) (wdtt.Password, error) {
-	return f.mutate(password, func(value *wdtt.Password) { value.Status = "deactivated" })
+	return f.mutate(password, func(value *wdtt.Password) {
+		value.Status = "deactivated"
+		value.IsDeactivated = true
+	})
 }
 
 func testRequest(revision uint64, idempotency string) Request {
@@ -148,6 +157,73 @@ func TestNormalizeEnforcesTwentyFourHourLeaseBoundary(t *testing.T) {
 	}
 }
 
+func TestStateOfNormalizesRetainedExpiryAndPreservesRevocation(t *testing.T) {
+	tests := []struct {
+		name     string
+		password wdtt.Password
+		want     string
+	}{
+		{name: "retained expiry", password: wdtt.Password{Status: "expired_retained"}, want: "expired"},
+		{name: "retained revoked expiry", password: wdtt.Password{Status: "expired_retained", IsDeactivated: true}, want: "revoked"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := stateOf(test.password); got != test.want {
+				t.Fatalf("state mismatch: got %q want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestStatusPreservesDurableRevokeForLegacyRetainedExpiry(t *testing.T) {
+	service, backend, _ := newTestService(t)
+	ctx := context.Background()
+	if _, err := service.Apply(ctx, testRequest(1, "create-operation-0001")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Revoke(ctx, testRequest(2, "revoke-operation-0002")); err != nil {
+		t.Fatal(err)
+	}
+	backend.passwords[0].Status = "expired_retained"
+	backend.passwords[0].IsDeactivated = false // Legacy WDTT omitted this field.
+
+	status, err := service.Status(ctx, testRequest(2, "status-operation-0002"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.State != "revoked" {
+		t.Fatalf("durable revoke was lost: %#v", status)
+	}
+}
+
+func TestApplyRenewsRetainedExpiredLeaseWithoutRotatingCredential(t *testing.T) {
+	service, backend, state := newTestService(t)
+	ctx := context.Background()
+	created, err := service.Apply(ctx, testRequest(1, "create-operation-0001"))
+	if err != nil || created.Credential == nil {
+		t.Fatalf("create failed: %#v err=%v", created, err)
+	}
+	originalCredential := created.Credential.Password
+	backend.passwords[0].Status = "expired_retained"
+
+	renew := testRequest(2, "renew-operation-0002")
+	renew.ExpiresAt++
+	renewed, err := service.Apply(ctx, renew)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renewed.State != "active" || renewed.Credential == nil || renewed.Credential.Password != originalCredential {
+		t.Fatalf("unexpected renewal result: %#v", renewed)
+	}
+	if backend.passwords[0].Password != originalCredential {
+		t.Fatal("retained-expired renewal rotated the credential")
+	}
+	record, ok := state.Get(leaseRef(renew))
+	if !ok || record.Revision != 2 || record.CredentialRevision != 1 {
+		t.Fatalf("renewal state mismatch: %#v ok=%v", record, ok)
+	}
+}
+
 func TestLeaseLifecycleIsIdempotentAndLabelSurvivesWDTTLimit(t *testing.T) {
 	service, backend, _ := newTestService(t)
 	ctx := context.Background()
@@ -172,8 +248,16 @@ func TestLeaseLifecycleIsIdempotentAndLabelSurvivesWDTTLimit(t *testing.T) {
 	renew := testRequest(2, "renew-operation-0002")
 	renew.ExpiresAt++
 	renewed, err := service.Apply(ctx, renew)
-	if err != nil || renewed.Credential != nil || renewed.Revision != 2 {
+	if err != nil || renewed.Credential == nil || renewed.Credential.Password != first.Credential.Password || renewed.Revision != 2 || renewed.Created || renewed.Rotated {
 		t.Fatalf("unexpected renewal: %#v err=%v", renewed, err)
+	}
+	renewRetry, err := service.Apply(ctx, renew)
+	if err != nil || renewRetry.Credential == nil || renewRetry.Credential.Password != first.Credential.Password || renewRetry.Revision != 2 || renewRetry.Created || renewRetry.Rotated || len(backend.passwords) != 1 {
+		t.Fatalf("renewal retry changed credential: %#v err=%v", renewRetry, err)
+	}
+	activeStatus, err := service.Status(ctx, renew)
+	if err != nil || activeStatus.Credential != nil || activeStatus.State != "active" {
+		t.Fatalf("active status leaked or failed: %#v err=%v", activeStatus, err)
 	}
 	rotate := testRequest(3, "rotate-operation-0003")
 	rotated, err := service.Rotate(ctx, rotate)
@@ -238,7 +322,7 @@ func TestApplyReconcilesMissingUpstreamWithoutRotatingCredential(t *testing.T) {
 	if err != nil {
 		t.Fatalf("missing upstream reconciliation failed: %v", err)
 	}
-	if reconciled.Credential != nil || len(backend.passwords) != 1 || backend.passwords[0].Password != originalCredential {
+	if reconciled.Credential == nil || reconciled.Credential.Password != originalCredential || len(backend.passwords) != 1 || backend.passwords[0].Password != originalCredential {
 		t.Fatalf("reconciliation unexpectedly rotated credential: %#v upstream=%#v", reconciled, backend.passwords)
 	}
 	if got, want := backend.passwords[0].PurgeAfter, renew.ExpiresAt+int64(DefaultRetentionGrace/time.Second); got != want {
@@ -251,7 +335,7 @@ func TestApplyReconcilesMissingUpstreamWithoutRotatingCredential(t *testing.T) {
 
 	backend.passwords = nil
 	retry, err := service.Apply(ctx, renew)
-	if err != nil || retry.Credential != nil || len(backend.passwords) != 1 || backend.passwords[0].Password != originalCredential {
+	if err != nil || retry.Credential == nil || retry.Credential.Password != originalCredential || len(backend.passwords) != 1 || backend.passwords[0].Password != originalCredential {
 		t.Fatalf("exact renewal retry did not reconcile: %#v upstream=%#v err=%v", retry, backend.passwords, err)
 	}
 }

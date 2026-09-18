@@ -34,7 +34,7 @@ paths:
   /internal/v1/leases/apply:
     post:
       summary: Create or renew exactly one subscription/device lease
-      description: Credential is returned for create/fresh reissue and exact idempotent retries only. Renewal never returns a credential; if a non-revoked upstream record is missing, the node reconstructs the same credential from durable state. Applying revision+1 to a revoked tombstone issues a fresh credential.
+      description: Credential is returned for create, renewal, fresh reissue and their exact idempotent retries. Renewal returns the existing credential without rotating it so the control plane can deliver bootstrap without persisting passwords; if a non-revoked upstream record is missing, the node reconstructs the same credential from durable state. Applying revision+1 to a revoked tombstone issues a fresh credential.
       operationId: applyLease
       parameters:
         - { $ref: "#/components/parameters/KeyId" }

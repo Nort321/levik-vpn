@@ -2,7 +2,8 @@
 Description=Levik whitelist relay data plane
 Documentation=file:///opt/levik-relay/README.md
 Wants=network-online.target
-After=network-online.target nftables.service
+Requires=chrony-wait.service
+After=network-online.target chrony-wait.service nftables.service
 Before=levik-relay-agent.service
 
 [Service]

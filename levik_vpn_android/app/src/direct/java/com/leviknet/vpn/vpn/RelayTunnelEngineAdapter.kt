@@ -154,7 +154,7 @@ internal class RelayTunnelEngineAdapter(
                 owner = owner,
                 configJson = relay.request.configFactory.build(tun.borrowedFd, relay.proxy),
                 controller = controller,
-                dnsServer = null,
+                dnsServer = relay.environment.dnsServer,
             )
             startedXrayLease = lease
             synchronized(lock) {

@@ -27,6 +27,19 @@ The current checked-in layer is not deployed. Run `scripts/verify-upstream.sh`,
 release. Runtime secrets must be supplied by root-only files, never argv or
 environment variables.
 
+## Host clock invariant
+
+The relay host clock is part of both the HMAC authentication boundary and the
+authoritative WDTT hard-expiry check. The checked-in units target Debian's
+`chrony-wait.service` and require its bounded synchronization gate before both
+relay services. Chrony must also be allowed to step a clock that becomes more
+than one second wrong after a VM pause. Replace the distro's bounded
+`makestep 1 3` directive in `/etc/chrony/chrony.conf` with `makestep 1 -1`,
+validate the file with `chronyd -p -f /etc/chrony/chrony.conf`, restart chrony,
+and require `chronyc tracking` plus `timedatectl show -p NTPSynchronized` to
+report a synchronized clock before enabling provisioning. Do not widen the
+node-agent HMAC clock-skew window as a substitute for clock correction.
+
 ## Current v1 boundaries
 
 - A node has a fixed `10.66.66.0/24` WireGuard pool (`.2` through `.250`), so
@@ -43,7 +56,10 @@ environment variables.
 - Agent state schema v2 stores the non-secret credential revision separately
   from request idempotency metadata. If a WDTT record disappears while durable
   state remains, apply/rotate reconstructs the same HMAC-derived credential and
-  retention deadline; renewal never silently rotates it. A monotonic apply
+  retention deadline; renewal never silently rotates it. Apply returns the
+  current credential on renewal and exact replay, allowing bootstrap delivery
+  without control-plane password storage or a disruptive repair rotation.
+  Status and revoke never return credential material. A monotonic apply
   after a revoked tombstone performs a fresh deterministic credential reissue
   and replaces the old password before activation. Missing-record revoke still
   advances the durable tombstone revision. Responses with `state=absent` omit

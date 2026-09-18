@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"errors"
 	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -39,6 +41,103 @@ func TestVerifierAcceptsSignatureAndRejectsReplay(t *testing.T) {
 	replay := signedRequest(t, key, "1788172800", "MDEyMzQ1Njc4OWFiY2RlZg", body)
 	if _, _, err := verifier.Verify(replay); !errors.Is(err, ErrReplay) {
 		t.Fatalf("expected replay rejection, got %v", err)
+	}
+}
+
+func TestVerifierClockSkewBoundaryAndRecovery(t *testing.T) {
+	key := bytes.Repeat([]byte{0x42}, 32)
+	now := time.Unix(1788172800, 0)
+	verifier, err := NewVerifier(map[string][]byte{"test-v1": key}, 2*time.Minute, 4096, NewReplayCache(5*time.Minute, 100), NewLimiter(10, 10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier.now = func() time.Time { return now }
+	body := []byte(`{"revision":1}`)
+
+	for _, test := range []struct {
+		name      string
+		timestamp time.Time
+		nonce     string
+		wantError bool
+	}{
+		{name: "past boundary", timestamp: now.Add(-2 * time.Minute), nonce: "cGFzdC1ib3VuZGFyeS0wMDE", wantError: false},
+		{name: "past outside", timestamp: now.Add(-2*time.Minute - time.Second), nonce: "cGFzdC1vdXRzaWRlLTAwMQ", wantError: true},
+		{name: "future boundary", timestamp: now.Add(2 * time.Minute), nonce: "ZnV0dXJlLWJvdW5kYXJ5LTE", wantError: false},
+		{name: "future outside", timestamp: now.Add(2*time.Minute + time.Second), nonce: "ZnV0dXJlLW91dHNpZGUtMDE", wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			timestamp := strconv.FormatInt(test.timestamp.Unix(), 10)
+			request := signedRequest(t, key, timestamp, test.nonce, body)
+			_, _, verifyErr := verifier.Verify(request)
+			if test.wantError && !errors.Is(verifyErr, ErrClockSkew) {
+				t.Fatalf("expected clock skew, got %v", verifyErr)
+			}
+			if !test.wantError && verifyErr != nil {
+				t.Fatalf("boundary request rejected: %v", verifyErr)
+			}
+		})
+	}
+
+	staleTimestamp := strconv.FormatInt(now.Add(-10*time.Minute).Unix(), 10)
+	stale := signedRequest(t, key, staleTimestamp, "c3RhbGUtYmVmb3JlLWZpeDA", body)
+	if _, _, err := verifier.Verify(stale); !errors.Is(err, ErrClockSkew) {
+		t.Fatalf("expected stale request rejection, got %v", err)
+	}
+	freshTimestamp := strconv.FormatInt(now.Unix(), 10)
+	fresh := signedRequest(t, key, freshTimestamp, "ZnJlc2gtYWZ0ZXItZml4MDA", body)
+	if _, _, err := verifier.Verify(fresh); err != nil {
+		t.Fatalf("fresh request after correction rejected: %v", err)
+	}
+}
+
+func TestMiddlewareKeepsAuthenticationReasonPrivate(t *testing.T) {
+	key := bytes.Repeat([]byte{0x42}, 32)
+	now := time.Unix(1788172800, 0)
+	verifier, err := NewVerifier(map[string][]byte{"test-v1": key}, 2*time.Minute, 4096, NewReplayCache(5*time.Minute, 100), NewLimiter(10, 10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier.now = func() time.Time { return now }
+	timestamp := strconv.FormatInt(now.Add(-10*time.Minute).Unix(), 10)
+	request := signedRequest(t, key, timestamp, "c3RhbGUtZ2VuZXJpYy00MDE", []byte(`{}`))
+	recorder := httptest.NewRecorder()
+	verifier.Middleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("protected handler was called")
+	})).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnauthorized || recorder.Body.String() != "{\"error\":\"unauthorized\"}\n" {
+		t.Fatalf("authentication detail leaked: status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestVerifierRejectsReplayWindowShorterThanTimestampLifetime(t *testing.T) {
+	key := bytes.Repeat([]byte{0x42}, 32)
+	if _, err := NewVerifier(map[string][]byte{"test-v1": key}, 2*time.Minute, 4096, NewReplayCache(4*time.Minute-time.Nanosecond, 100), NewLimiter(10, 10)); !errors.Is(err, ErrInvalidKey) {
+		t.Fatalf("unsafe replay window accepted: %v", err)
+	}
+	if _, err := NewVerifier(map[string][]byte{"test-v1": key}, 2*time.Minute, 4096, NewReplayCache(4*time.Minute, 100), NewLimiter(10, 10)); err != nil {
+		t.Fatalf("exact safe replay window rejected: %v", err)
+	}
+}
+
+func TestReplayCacheRetainsNonceAtInclusiveTimestampBoundary(t *testing.T) {
+	key := bytes.Repeat([]byte{0x42}, 32)
+	timestamp := time.Unix(1788172800, 0)
+	firstSeen := timestamp.Add(-2 * time.Minute)
+	verifier, err := NewVerifier(map[string][]byte{"test-v1": key}, 2*time.Minute, 4096, NewReplayCache(4*time.Minute, 100), NewLimiter(10, 10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := firstSeen
+	verifier.now = func() time.Time { return now }
+	timestampText := strconv.FormatInt(timestamp.Unix(), 10)
+	nonce := "aW5jbHVzaXZlLWJvdW5kYXJ5"
+	body := []byte(`{"revision":1}`)
+	if _, _, err := verifier.Verify(signedRequest(t, key, timestampText, nonce, body)); err != nil {
+		t.Fatalf("first boundary request rejected: %v", err)
+	}
+	now = timestamp.Add(2 * time.Minute)
+	if _, _, err := verifier.Verify(signedRequest(t, key, timestampText, nonce, body)); !errors.Is(err, ErrReplay) {
+		t.Fatalf("nonce replayed at inclusive boundary: %v", err)
 	}
 }
 

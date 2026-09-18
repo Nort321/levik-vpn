@@ -184,6 +184,7 @@ type adminPasswordInfo struct {
 	VkHash          string             `json:"vk_hash,omitempty"`
 	Ports           string             `json:"ports"`
 	Status          string             `json:"status"`
+	IsDeactivated   bool               `json:"is_deactivated,omitempty"`
 	ExpiresAt       int64              `json:"expires_at,omitempty"`
 	PurgeAfter      int64              `json:"purge_after,omitempty"`
 	DownBytes       int64              `json:"down_bytes,omitempty"`
@@ -1228,6 +1229,7 @@ func buildAdminPasswordInfo(loaded *Database, password string, entry *PasswordEn
 	}
 	info.Label = entry.Label
 	info.VkHash = entry.VkHash
+	info.IsDeactivated = entry.IsDeactivated
 	info.ExpiresAt = entry.ExpiresAt
 	info.PurgeAfter = entry.PurgeAfter
 	info.DownBytes = entry.DownBytes

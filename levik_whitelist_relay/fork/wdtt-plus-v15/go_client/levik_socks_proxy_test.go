@@ -122,38 +122,61 @@ func authenticatedTestUDPAssociation(t *testing.T, server *levikSocksServer, udp
 	return &net.UDPAddr{IP: net.IP(address[:4]), Port: int(binary.BigEndian.Uint16(address[4:]))}
 }
 
-func TestSocksUDPAssociationRejectsUnrelatedSender(t *testing.T) {
-	server := newTestSocksServer(t)
-	client, unrelated := listenTestUDP(t), listenTestUDP(t)
-	proxyAddress := authenticatedTestUDPAssociation(t, server, client)
-	target, otherTarget := listenTestUDP(t), listenTestUDP(t)
-	header := testUDPHeader(target.LocalAddr().(*net.UDPAddr))
-	packet := append(header, []byte("authenticated-client")...)
-	writeTestUDP(t, client, packet, proxyAddress)
-	payload, source := readTestUDP(t, target)
-	writeTestUDP(t, target, payload, source)
-	if response, _ := readTestUDP(t, client); !bytes.Equal(response, packet) {
-		t.Fatal("authenticated client did not receive its response")
+func TestSocksUDPAssociationMultipleClientsAndTargets(t *testing.T) {
+	socket := listenTestUDP(t)
+	clients := []*net.UDPConn{listenTestUDP(t), listenTestUDP(t)}
+	targets := []*net.UDPConn{listenTestUDP(t), listenTestUDP(t)}
+	ctx, cancel := context.WithCancel(context.Background())
+	association := &socksUDPAssociation{
+		ctx: ctx, cancel: cancel, socket: socket, network: &net.Dialer{},
+		relays: make(map[socksUDPRelayKey]*socksUDPRelay),
 	}
-
-	// An unrelated socket must neither reuse a target nor open another flow.
-	for _, destination := range []*net.UDPConn{target, otherTarget} {
-		attack := append(testUDPHeader(destination.LocalAddr().(*net.UDPAddr)), []byte("unrelated")...)
-		writeTestUDP(t, unrelated, attack, proxyAddress)
-		if err := destination.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
-			t.Fatal(err)
+	done := make(chan struct{})
+	go func() { association.run(); close(done) }()
+	t.Cleanup(func() {
+		cancel()
+		_ = socket.Close()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("association did not stop")
 		}
-		_, _, err := destination.ReadFromUDP(make([]byte, 1024))
-		if netError, ok := err.(net.Error); !ok || !netError.Timeout() {
-			t.Fatalf("unrelated sender reached upstream: %v", err)
+	})
+	proxyAddress := socket.LocalAddr().(*net.UDPAddr)
+	// Reuse each flow and return replies in reverse order. Both local ports
+	// must work even when they query the same DNS endpoint concurrently.
+	for round := 0; round < 2; round++ {
+		for _, target := range targets {
+			header := testUDPHeader(target.LocalAddr().(*net.UDPAddr))
+			packets := make([][]byte, len(clients))
+			for i, client := range clients {
+				packets[i] = append(append([]byte(nil), header...), byte(round), byte(i))
+				writeTestUDP(t, client, packets[i], proxyAddress)
+			}
+			payloads := make([][]byte, len(clients))
+			sources := make([]*net.UDPAddr, len(clients))
+			for i := range clients {
+				payloads[i], sources[i] = readTestUDP(t, target)
+			}
+			if sources[0].String() == sources[1].String() {
+				t.Fatal("clients unexpectedly share an upstream flow")
+			}
+			for i := len(clients) - 1; i >= 0; i-- {
+				writeTestUDP(t, target, payloads[i], sources[i])
+			}
+			for i, client := range clients {
+				response, _ := readTestUDP(t, client)
+				if !bytes.Equal(response, packets[i]) {
+					t.Fatalf("client %d received another flow's response: %v", i, response)
+				}
+			}
 		}
 	}
-	// Rejected traffic must not replace the pinned endpoint.
-	writeTestUDP(t, client, packet, proxyAddress)
-	payload, source = readTestUDP(t, target)
-	writeTestUDP(t, target, payload, source)
-	if response, _ := readTestUDP(t, client); !bytes.Equal(response, packet) {
-		t.Fatal("pinned client lost its association")
+	association.mu.Lock()
+	count := len(association.relays)
+	association.mu.Unlock()
+	if count != len(clients)*len(targets) {
+		t.Fatalf("got %d flows; expected one per client and target", count)
 	}
 }
 

@@ -334,13 +334,12 @@ type socksUDPDialer interface {
 }
 
 type socksUDPAssociation struct {
-	ctx        context.Context
-	cancel     context.CancelFunc
-	socket     *net.UDPConn
-	clientAddr *net.UDPAddr
-	network    socksUDPDialer
-	mu         sync.Mutex
-	relays     map[socksUDPRelayKey]*socksUDPRelay
+	ctx     context.Context
+	cancel  context.CancelFunc
+	socket  *net.UDPConn
+	network socksUDPDialer
+	mu      sync.Mutex
+	relays  map[socksUDPRelayKey]*socksUDPRelay
 }
 
 func (server *levikSocksServer) handleUDPAssociate(client *net.TCPConn) {
@@ -391,12 +390,6 @@ func (association *socksUDPAssociation) run() {
 		}
 		target, payloadOffset, replyHeader, err := parseSocksUDPPacket(buffer[:count])
 		if err != nil {
-			continue
-		}
-		if association.clientAddr == nil {
-			association.clientAddr = client
-		}
-		if !association.clientAddr.IP.Equal(client.IP) || association.clientAddr.Port != client.Port {
 			continue
 		}
 		key := socksUDPRelayKey{client: client.AddrPort(), target: target}

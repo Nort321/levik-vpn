@@ -164,6 +164,7 @@ import com.leviknet.vpn.data.ThemeMode
 import com.leviknet.vpn.data.isActiveAt
 import com.leviknet.vpn.ui.theme.*
 import com.leviknet.vpn.vpn.PreparedTunnelProfile
+import com.leviknet.vpn.vpn.EffectiveRoutingProfile
 import com.leviknet.vpn.vpn.TunnelServer
 import com.leviknet.vpn.vpn.TunnelServerCategory
 import com.leviknet.vpn.vpn.VpnConnectionState
@@ -473,9 +474,14 @@ fun LevikVpnApp(viewModel: AppViewModel) {
         )
     }
 
+    val isMobileServer = (state.vpn.state == VpnConnectionState.CONNECTED &&
+        state.vpn.effectiveRoutingProfile == EffectiveRoutingProfile.LTE) ||
+        state.profile?.servers?.firstOrNull { it.id == displayedServerId(state) }?.isMobileServer() == true
+
     if (showRoutingPresetDialog) {
         RoutingPresetDialog(
             currentPreset = state.routingPreset,
+            isMobileServer = isMobileServer,
             onPresetSelected = {
                 viewModel.setRoutingPreset(it)
                 showRoutingPresetDialog = false
@@ -1312,6 +1318,9 @@ private fun MainContent(
                 onRelinkAccount = onRelinkAccount,
                 onLogout = onLogout,
                 routingPreset = state.routingPreset,
+                isMobileServer = (state.vpn.state == VpnConnectionState.CONNECTED &&
+                    state.vpn.effectiveRoutingProfile == EffectiveRoutingProfile.LTE) ||
+                    state.profile?.servers?.firstOrNull { it.id == displayedServerId(state) }?.isMobileServer() == true,
                 onOpenRoutingPreset = onOpenRoutingPreset,
                 antiDpiPreset = state.antiDpiPreset,
                 antiDpiEnabled = state.antiDpiEnabled,
@@ -1536,6 +1545,8 @@ private fun HomeScreen(
         it.id == displayedServerId(state)
     }
     val isConnected = state.vpn.state == VpnConnectionState.CONNECTED
+    val isMobileServer = (isConnected && state.vpn.effectiveRoutingProfile == EffectiveRoutingProfile.LTE) ||
+        selectedServer?.isMobileServer() == true
     val account = state.account
     val trialAvailable = account?.trial?.eligible == true
 
@@ -1628,10 +1639,14 @@ private fun HomeScreen(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        text = when (state.routingPreset) {
-                            RoutingPreset.GLOBAL -> "Global"
-                            RoutingPreset.BYPASS_RU -> "Обход РФ"
-                            RoutingPreset.BLOCKED_ONLY -> "Anti-Block"
+                        text = if (isMobileServer && state.routingPreset == RoutingPreset.BYPASS_RU) {
+                            "LTE"
+                        } else {
+                            when (state.routingPreset) {
+                                RoutingPreset.GLOBAL -> "Global"
+                                RoutingPreset.BYPASS_RU -> "Обход РФ"
+                                RoutingPreset.BLOCKED_ONLY -> "Anti-Block"
+                            }
                         },
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Medium,
@@ -3472,6 +3487,7 @@ private fun ProfileScreen(
     onRelinkAccount: () -> Unit,
     onLogout: () -> Unit,
     routingPreset: RoutingPreset,
+    isMobileServer: Boolean = false,
     onOpenRoutingPreset: () -> Unit,
     antiDpiPreset: AntiDpiPreset,
     antiDpiEnabled: Boolean,
@@ -3958,7 +3974,11 @@ private fun ProfileScreen(
                         )
                         Spacer(Modifier.height(2.dp))
                         Text(
-                            text = routingPreset.titleRu,
+                            text = if (isMobileServer && routingPreset == RoutingPreset.BYPASS_RU) {
+                                "LTE (${routingPreset.titleRu})"
+                            } else {
+                                routingPreset.titleRu
+                            },
                             color = LevikBlue,
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
@@ -4663,6 +4683,7 @@ private fun AntiDpiDialog(
 @Composable
 private fun RoutingPresetDialog(
     currentPreset: RoutingPreset,
+    isMobileServer: Boolean = false,
     onPresetSelected: (RoutingPreset) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -4673,6 +4694,16 @@ private fun RoutingPresetDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 RoutingPreset.entries.forEach { preset ->
+                    val title = if (isMobileServer && preset == RoutingPreset.BYPASS_RU) {
+                        "LTE (${preset.titleRu})"
+                    } else {
+                        preset.titleRu
+                    }
+                    val description = if (isMobileServer && preset == RoutingPreset.BYPASS_RU) {
+                        "Белый список мобильных операторов РФ (LTE)"
+                    } else {
+                        preset.descriptionRu
+                    }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -4686,9 +4717,9 @@ private fun RoutingPresetDialog(
                         RadioButton(selected = currentPreset == preset, onClick = null)
                         Spacer(Modifier.width(10.dp))
                         Column {
-                            Text(preset.titleRu, fontWeight = FontWeight.SemiBold)
+                            Text(title, fontWeight = FontWeight.SemiBold)
                             Text(
-                                preset.descriptionRu,
+                                description,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )

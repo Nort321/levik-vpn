@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -68,7 +69,7 @@ func (c *ReplayCache) Use(keyID, nonce string, now time.Time) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for key, entry := range c.entries {
-		if !entry.expires.After(now) {
+		if entry.expires.Before(now) {
 			delete(c.entries, key)
 		}
 	}
@@ -126,12 +127,15 @@ func (l *Limiter) Allow(key string, now time.Time) bool {
 }
 
 type Verifier struct {
-	keys    map[string][]byte
-	maxSkew time.Duration
-	maxBody int64
-	replay  *ReplayCache
-	limiter *Limiter
-	now     func() time.Time
+	keys             map[string][]byte
+	maxSkew          time.Duration
+	maxBody          int64
+	replay           *ReplayCache
+	limiter          *Limiter
+	now              func() time.Time
+	rejectionMu      sync.Mutex
+	rejectionNext    map[string]time.Time
+	rejectionSkipped map[string]uint64
 }
 
 func NewVerifier(keys map[string][]byte, maxSkew time.Duration, maxBody int64, replay *ReplayCache, limiter *Limiter) (*Verifier, error) {
@@ -145,7 +149,22 @@ func NewVerifier(keys map[string][]byte, maxSkew time.Duration, maxBody int64, r
 	if len(copyKeys) == 0 || maxSkew <= 0 || maxBody <= 0 || replay == nil || limiter == nil {
 		return nil, ErrInvalidKey
 	}
-	return &Verifier{keys: copyKeys, maxSkew: maxSkew, maxBody: maxBody, replay: replay, limiter: limiter, now: time.Now}, nil
+	// A request timestamp may be maxSkew in the future on first use and stay
+	// valid until maxSkew after that timestamp. Retain its nonce across that
+	// complete acceptance lifetime so it cannot be replayed after eviction.
+	if replay.ttl <= 0 || maxSkew > replay.ttl/2 {
+		return nil, ErrInvalidKey
+	}
+	return &Verifier{
+		keys:             copyKeys,
+		maxSkew:          maxSkew,
+		maxBody:          maxBody,
+		replay:           replay,
+		limiter:          limiter,
+		now:              time.Now,
+		rejectionNext:    make(map[string]time.Time),
+		rejectionSkipped: make(map[string]uint64),
+	}, nil
 }
 
 func Canonical(method, requestURI, timestamp, nonce string, body []byte) []byte {
@@ -229,10 +248,56 @@ func KeyID(ctx context.Context) string {
 	return keyID
 }
 
+func rejectionCode(err error) string {
+	switch {
+	case errors.Is(err, ErrMissing):
+		return "missing_headers"
+	case errors.Is(err, ErrUnknownKey):
+		return "unknown_key"
+	case errors.Is(err, ErrClockSkew):
+		return "clock_skew"
+	case errors.Is(err, ErrBadNonce):
+		return "bad_nonce"
+	case errors.Is(err, ErrBadSignature):
+		return "bad_signature"
+	case errors.Is(err, ErrReplay):
+		return "replay"
+	case errors.Is(err, ErrBodyTooLarge):
+		return "body_too_large"
+	case errors.Is(err, ErrRateLimited):
+		return "rate_limited"
+	default:
+		return "verification_error"
+	}
+}
+
+func (v *Verifier) logRejection(err error) {
+	const interval = time.Minute
+	code := rejectionCode(err)
+	now := v.now().UTC()
+	v.rejectionMu.Lock()
+	if now.Before(v.rejectionNext[code]) {
+		v.rejectionSkipped[code]++
+		v.rejectionMu.Unlock()
+		return
+	}
+	skipped := v.rejectionSkipped[code]
+	v.rejectionSkipped[code] = 0
+	v.rejectionNext[code] = now.Add(interval)
+	v.rejectionMu.Unlock()
+	// Reasons detected before signature verification are intentionally marked
+	// untrusted. The fixed code set and one-per-minute sampling prevent request
+	// data or unbounded attacker-controlled journal volume.
+	log.Printf("relay authentication rejected untrusted_reason=%s suppressed=%d", code, skipped)
+}
+
 func (v *Verifier) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, keyID, err := v.Verify(r)
 		if err != nil {
+			// The external response stays deliberately generic. This sampled,
+			// secret-free reason makes clock failures diagnosable in journald.
+			v.logRejection(err)
 			status := http.StatusUnauthorized
 			code := "unauthorized"
 			if errors.Is(err, ErrBodyTooLarge) {

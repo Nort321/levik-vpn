@@ -366,6 +366,13 @@ class XrayConfigBuilderTest {
         assertTrue(proxyRule!!.jsonObject["domain"]?.jsonArray?.any {
             it.jsonPrimitive.content.contains("instagram.com")
         } == true)
+
+        val dnsRule = rules.firstOrNull {
+            it.jsonObject["port"]?.jsonPrimitive?.content == "53"
+        }
+        assertTrue(dnsRule != null)
+        assertEquals("server-b", dnsRule!!.jsonObject["outboundTag"]?.jsonPrimitive?.content)
+        assertEquals("udp,tcp", dnsRule.jsonObject["network"]?.jsonPrimitive?.content)
     }
 
     @Test

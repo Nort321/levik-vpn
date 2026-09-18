@@ -1,8 +1,8 @@
 [Unit]
 Description=Levik whitelist relay entitlement agent
 Documentation=file:///opt/levik-relay/README.md
-Requires=levik-relay-server.service
-After=levik-relay-server.service
+Requires=chrony-wait.service levik-relay-server.service
+After=chrony-wait.service levik-relay-server.service
 
 [Service]
 Type=simple

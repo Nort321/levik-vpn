@@ -31,7 +31,7 @@ type Password struct {
 	Status        string `json:"status,omitempty"`
 	ExpiresAt     int64  `json:"expires_at,omitempty"`
 	PurgeAfter    int64  `json:"purge_after,omitempty"`
-	IsDeactivated bool   `json:"-"`
+	IsDeactivated bool   `json:"is_deactivated,omitempty"`
 }
 
 type adminRequest struct {

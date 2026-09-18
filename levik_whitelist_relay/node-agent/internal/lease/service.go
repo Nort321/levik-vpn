@@ -142,10 +142,13 @@ func formatLabel(ref string) string {
 }
 
 func stateOf(password wdtt.Password) string {
+	if password.IsDeactivated {
+		return "revoked"
+	}
 	switch strings.ToLower(strings.TrimSpace(password.Status)) {
 	case "deactivated":
 		return "revoked"
-	case "expired":
+	case "expired", "expired_retained":
 		return "expired"
 	case "active":
 		return "active"
@@ -324,10 +327,9 @@ func (s *Service) Apply(ctx context.Context, input Request) (Result, error) {
 				return Result{}, err
 			}
 		}
-		result := Result{LeaseRef: ref, State: stateOf(created), ExpiresAt: created.ExpiresAt, Revision: record.Revision}
+		result := Result{LeaseRef: ref, State: stateOf(created), ExpiresAt: created.ExpiresAt, Revision: record.Revision, Credential: &Credential{Password: credential}}
 		if record.Operation == operationCreate {
 			result.Created = true
-			result.Credential = &Credential{Password: credential}
 		}
 		return result, nil
 	}
@@ -361,6 +363,7 @@ func (s *Service) Apply(ctx context.Context, input Request) (Result, error) {
 			result.Created = true
 			result.Credential = &Credential{Password: existing.Password}
 		case operationRenew:
+			result.Credential = &Credential{Password: existing.Password}
 		default:
 			return Result{}, ErrConflict
 		}
@@ -387,7 +390,9 @@ func (s *Service) Apply(ctx context.Context, input Request) (Result, error) {
 	if err := s.state.Put(record); err != nil {
 		return Result{}, err
 	}
-	return Result{LeaseRef: ref, State: stateOf(updated), ExpiresAt: updated.ExpiresAt, Revision: input.Revision}, nil
+	// Bootstrap delivery must also work after renewal without making the
+	// control plane persist passwords or rotate an active client's credential.
+	return Result{LeaseRef: ref, State: stateOf(updated), ExpiresAt: updated.ExpiresAt, Revision: input.Revision, Credential: &Credential{Password: updated.Password}}, nil
 }
 
 func (s *Service) Rotate(ctx context.Context, input Request) (Result, error) {
@@ -555,7 +560,14 @@ func (s *Service) Status(ctx context.Context, input Request) (Result, error) {
 	if !hasRecord {
 		return Result{}, ErrConflict
 	}
-	return Result{LeaseRef: ref, State: stateOf(*existing), ExpiresAt: existing.ExpiresAt, Revision: record.Revision}, nil
+	observedState := stateOf(*existing)
+	// Older WDTT servers did not expose is_deactivated separately and
+	// represented a retained, expired tombstone as expired_retained. Preserve
+	// the durable revoke state across a rolling server/agent deployment.
+	if record.Operation == operationRevoke && observedState == "expired" {
+		observedState = "revoked"
+	}
+	return Result{LeaseRef: ref, State: observedState, ExpiresAt: existing.ExpiresAt, Revision: record.Revision}, nil
 }
 
 func (s *Service) Ready(ctx context.Context) error {

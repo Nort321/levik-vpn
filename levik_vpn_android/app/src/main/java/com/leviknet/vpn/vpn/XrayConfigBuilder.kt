@@ -283,6 +283,14 @@ class XrayConfigBuilder(
                         put("outboundTag", DIRECT_TAG)
                     })
                     if (isBlockedOnly) {
+                        // In Blocked Only mode, DNS queries route through proxy so they are not hijacked by local ISPs
+                        add(buildJsonObject {
+                            put("type", "field")
+                            put("inboundTag", buildJsonArray { add(JsonPrimitive(TUN_INBOUND_TAG)) })
+                            put("port", "53")
+                            put("network", "udp,tcp")
+                            put("outboundTag", selectedServerTag)
+                        })
                         // In Blocked Only mode, unrouted traffic defaults to direct
                         add(buildJsonObject {
                             put("type", "field")
