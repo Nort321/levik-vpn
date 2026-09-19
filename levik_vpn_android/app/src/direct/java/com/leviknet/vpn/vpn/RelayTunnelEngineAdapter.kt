@@ -154,7 +154,9 @@ internal class RelayTunnelEngineAdapter(
                 owner = owner,
                 configJson = relay.request.configFactory.build(tun.borrowedFd, relay.proxy),
                 controller = controller,
-                dnsServer = relay.environment.dnsServer,
+                // The relay proxy is an IP literal. Resolve through Xray's routed DNS;
+                // a protected resolver would bypass the relay on restricted mobile networks.
+                dnsServer = null,
             )
             startedXrayLease = lease
             synchronized(lock) {

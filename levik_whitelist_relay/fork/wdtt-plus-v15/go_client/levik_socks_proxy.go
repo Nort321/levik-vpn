@@ -417,13 +417,9 @@ func (association *socksUDPAssociation) relayFor(key socksUDPRelayKey, header []
 		association.mu.Unlock()
 		// A busy association may never hit the read timeout that normally prunes.
 		association.pruneIdle()
-		association.mu.Lock()
-		if len(association.relays) >= socksUDPMaxTargets {
-			association.mu.Unlock()
-			return nil
-		}
+	} else {
+		association.mu.Unlock()
 	}
-	association.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(association.ctx, socksDialTimeout)
 	connection, err := association.network.DialContext(ctx, "udp", key.target)
@@ -438,13 +434,34 @@ func (association *socksUDPAssociation) relayFor(key socksUDPRelayKey, header []
 		lastUsed: time.Now(),
 	}
 	association.mu.Lock()
+	if association.ctx.Err() != nil {
+		association.mu.Unlock()
+		_ = connection.Close()
+		return nil
+	}
 	if existing := association.relays[key]; existing != nil {
+		existing.lastUsed = time.Now()
 		association.mu.Unlock()
 		_ = connection.Close()
 		return existing
 	}
+	// DNS queries often arrive from fresh local ports. Keep the memory/socket
+	// bound, but let new flows displace the least recently used flow instead of
+	// dropping every new query until the two-minute idle timeout expires.
+	var evicted *socksUDPRelay
+	if len(association.relays) >= socksUDPMaxTargets {
+		for _, candidate := range association.relays {
+			if evicted == nil || candidate.lastUsed.Before(evicted.lastUsed) {
+				evicted = candidate
+			}
+		}
+		delete(association.relays, evicted.key)
+	}
 	association.relays[key] = relay
 	association.mu.Unlock()
+	if evicted != nil {
+		_ = evicted.conn.Close()
+	}
 	go association.readResponses(relay)
 	return relay
 }

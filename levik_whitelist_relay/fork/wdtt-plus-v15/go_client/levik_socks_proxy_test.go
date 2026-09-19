@@ -229,32 +229,111 @@ func TestSocksUDPAuthenticatedAssociationsConcurrentDNS(t *testing.T) {
 	}
 }
 
-func TestSocksUDPAssociationPrunesAtCapacityDuringTraffic(t *testing.T) {
+func fullTestUDPAssociation(t *testing.T) (*socksUDPAssociation, []*socksUDPRelay, []net.Conn) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	association := &socksUDPAssociation{
 		ctx: ctx, cancel: cancel, socket: listenTestUDP(t), network: &net.Dialer{},
 		relays: make(map[socksUDPRelayKey]*socksUDPRelay),
 	}
 	t.Cleanup(association.close)
-	for i := 0; i < socksUDPMaxTargets; i++ {
+	relays := make([]*socksUDPRelay, socksUDPMaxTargets)
+	peers := make([]net.Conn, socksUDPMaxTargets)
+	base := time.Now().Add(-time.Minute)
+	for i := range relays {
 		key := socksUDPRelayKey{
 			client: netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), uint16(10000+i)),
 			target: "127.0.0.1:53",
 		}
 		connection, peer := net.Pipe()
-		_ = peer.Close()
-		association.relays[key] = &socksUDPRelay{key: key, conn: connection, lastUsed: time.Now()}
+		t.Cleanup(func() { _ = peer.Close() })
+		relays[i] = &socksUDPRelay{key: key, conn: connection, lastUsed: base.Add(time.Duration(i) * time.Millisecond)}
+		peers[i] = peer
+		association.relays[key] = relays[i]
+	}
+	return association, relays, peers
+}
+
+func TestSocksUDPAssociationEvictsLeastRecentlyUsedAtCapacity(t *testing.T) {
+	association, relays, peers := fullTestUDPAssociation(t)
+	// Refresh the oldest flow. The next oldest must be evicted, even though
+	// none are idle, while the refreshed flow keeps its upstream socket.
+	if association.relayFor(relays[0].key, nil) != relays[0] {
+		t.Fatal("existing flow was not reused at capacity")
+	}
+	client := listenTestUDP(t)
+	targetSocket := listenTestUDP(t)
+	target := targetSocket.LocalAddr().(*net.UDPAddr)
+	key := socksUDPRelayKey{client: client.LocalAddr().(*net.UDPAddr).AddrPort(), target: target.String()}
+	header := testUDPHeader(target)
+	relay := association.relayFor(key, header)
+	if relay == nil {
+		t.Fatal("new DNS flow was dropped at capacity")
+	}
+	association.mu.Lock()
+	count := len(association.relays)
+	oldest := association.relays[relays[1].key]
+	refreshed := association.relays[relays[0].key]
+	association.mu.Unlock()
+	if count != socksUDPMaxTargets || oldest != nil || refreshed != relays[0] {
+		t.Fatal("eviction must preserve the bound and recently active flow")
+	}
+	_ = peers[1].SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := peers[1].Read(make([]byte, 1)); err != io.EOF {
+		t.Fatalf("evicted upstream socket was not closed: %v", err)
+	}
+	query := []byte{0x12, 0x34, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0}
+	if _, err := relay.conn.Write(query); err != nil {
+		t.Fatal(err)
+	}
+	payload, source := readTestUDP(t, targetSocket)
+	payload[2] |= 0x80
+	writeTestUDP(t, targetSocket, payload, source)
+	response, _ := readTestUDP(t, client)
+	if !bytes.Equal(response, append(header, payload...)) {
+		t.Fatal("new flow failed to forward the DNS reply after eviction")
+	}
+}
+
+func TestSocksUDPAssociationPrunesAtCapacityDuringTraffic(t *testing.T) {
+	association, relays, _ := fullTestUDPAssociation(t)
+	for _, relay := range relays {
+		relay.lastUsed = time.Now().Add(-socksUDPIdleTimeout - time.Second)
 	}
 	target := listenTestUDP(t).LocalAddr().(*net.UDPAddr)
 	key := socksUDPRelayKey{client: netip.MustParseAddrPort("127.0.0.1:20000"), target: target.String()}
-	if association.relayFor(key, testUDPHeader(target)) != nil {
-		t.Fatal("active flow limit must be enforced")
-	}
-	for _, relay := range association.relays {
-		relay.lastUsed = time.Now().Add(-socksUDPIdleTimeout - time.Second)
-	}
 	if association.relayFor(key, testUDPHeader(target)) == nil {
 		t.Fatal("idle flows must be reclaimed even without a socket read timeout")
+	}
+	association.mu.Lock()
+	count := len(association.relays)
+	association.mu.Unlock()
+	if count != 1 {
+		t.Fatalf("idle flows were not pruned: got %d flows", count)
+	}
+}
+
+func TestSocksUDPAssociationFailedDialPreservesActiveFlows(t *testing.T) {
+	association, _, _ := fullTestUDPAssociation(t)
+	key := socksUDPRelayKey{client: netip.MustParseAddrPort("127.0.0.1:20000"), target: "invalid target"}
+	if association.relayFor(key, nil) != nil {
+		t.Fatal("expected invalid target to fail")
+	}
+	if len(association.relays) != socksUDPMaxTargets {
+		t.Fatal("failed dial evicted an active flow")
+	}
+}
+
+func TestSocksUDPAssociationOldReaderCannotRemoveReplacement(t *testing.T) {
+	association, relays, _ := fullTestUDPAssociation(t)
+	old := relays[0]
+	connection, peer := net.Pipe()
+	defer peer.Close()
+	replacement := &socksUDPRelay{key: old.key, conn: connection, lastUsed: time.Now()}
+	association.relays[old.key] = replacement
+	association.removeRelay(old.key, old)
+	if association.relays[old.key] != replacement {
+		t.Fatal("evicted reader removed the replacement flow")
 	}
 }
 
