@@ -2253,7 +2253,8 @@ private fun ServerSummaryCard(
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = subtitleColor,
-                        maxLines = 2,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                     Spacer(Modifier.height(2.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2262,8 +2263,27 @@ private fun ServerSummaryCard(
                             fontSize = 19.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.weight(1f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
                         )
+                        if (!automaticServer && server?.isMobileServer() == true) {
+                            val badgeColor = if (isDark) Color(0xFF60A5FA) else LevikBlue
+                            val badgeBg = badgeColor.copy(alpha = 0.15f)
+                            Spacer(Modifier.width(6.dp))
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = badgeBg,
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.server_badge_mobile_allowlist),
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = badgeColor,
+                                )
+                            }
+                        }
                         Spacer(Modifier.width(6.dp))
                         Icon(
                             painter = painterResource(R.drawable.ic_chevron_down),
@@ -2272,45 +2292,40 @@ private fun ServerSummaryCard(
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    if (!automaticServer && server?.isMobileServer() == true) {
-                        val badgeColor = if (isDark) Color(0xFF60A5FA) else LevikBlue
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = badgeColor.copy(alpha = 0.15f),
-                        ) {
-                            Text(
-                                text = stringResource(R.string.server_badge_mobile_allowlist),
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = badgeColor,
-                            )
-                        }
+                }
+                Spacer(Modifier.width(12.dp))
+                Box(
+                    modifier = Modifier
+                        .width(1.dp)
+                        .height(54.dp)
+                        .background(MaterialTheme.colorScheme.outline),
+                )
+                Spacer(Modifier.width(14.dp))
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = stringResource(R.string.ping),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(3.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = pingMs?.let { stringResource(R.string.ping_ms, it.toInt()) }
+                                ?: stringResource(R.string.not_available),
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = pingMs?.let { ping ->
+                                when {
+                                    ping < 100 -> if (isDark) Color(0xFF4ADE80) else Color(0xFF16A34A)
+                                    ping < 250 -> if (isDark) Color(0xFF38BDF8) else Color(0xFF2563EB)
+                                    else -> MaterialTheme.colorScheme.error
+                                }
+                            } ?: MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        SignalBarsIndicator(pingMs = pingMs)
                     }
                 }
-            }
-
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = stringResource(R.string.ping),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = pingMs?.let { stringResource(R.string.ping_ms, it.toInt()) }
-                        ?: stringResource(R.string.not_available),
-                    fontWeight = FontWeight.Bold,
-                    color = pingMs?.let { ping ->
-                        when {
-                            ping < 100 -> if (isDark) Color(0xFF4ADE80) else Color(0xFF16A34A)
-                            ping < 250 -> if (isDark) Color(0xFF38BDF8) else Color(0xFF2563EB)
-                            else -> MaterialTheme.colorScheme.error
-                        }
-                    } ?: MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.width(6.dp))
-                SignalBarsIndicator(pingMs = pingMs)
             }
 
             HorizontalDivider(
@@ -2318,12 +2333,11 @@ private fun ServerSummaryCard(
                 color = MaterialTheme.colorScheme.outline,
             )
 
-            FlowRow(
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(20.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Column {
+                Column(Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             painter = painterResource(R.drawable.ic_usage),
@@ -2354,7 +2368,15 @@ private fun ServerSummaryCard(
                         },
                     )
                 }
-                Column {
+                Spacer(Modifier.width(14.dp))
+                Box(
+                    modifier = Modifier
+                        .width(1.dp)
+                        .height(58.dp)
+                        .background(MaterialTheme.colorScheme.outline),
+                )
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1.2f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             painter = painterResource(R.drawable.ic_speed),
