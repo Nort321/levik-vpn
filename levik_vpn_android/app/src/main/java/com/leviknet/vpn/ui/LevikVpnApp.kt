@@ -3556,6 +3556,7 @@ private fun ProfileScreen(
         ?: activeSubscriptions.firstOrNull()
         ?: account?.subscriptions?.firstOrNull()
     val context = LocalContext.current
+    var guardBridgeEnabled by remember { mutableStateOf(com.leviknet.vpn.guard.GuardBridgeAccess.isEnabled(context)) }
     val whitelistMapTitle = stringResource(R.string.whitelist_map_title)
 
     Column(
@@ -4341,6 +4342,49 @@ private fun ProfileScreen(
                 }
             }
 
+            OutlinedButton(
+                onClick = {
+                    val guardIntent = context.packageManager.getLaunchIntentForPackage("com.leviknet.guard")
+                        ?: Intent(Intent.ACTION_VIEW, android.net.Uri.parse(
+                            "https://play.google.com/store/apps/details?id=com.leviknet.guard"
+                        ))
+                    runCatching { context.startActivity(guardIntent) }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = LevikDimensions.ButtonHeight),
+                shape = RoundedCornerShape(14.dp),
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_shield),
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.open_levik_guard), fontWeight = FontWeight.SemiBold)
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(stringResource(R.string.guard_bridge_title), fontWeight = FontWeight.SemiBold)
+                    Text(
+                        stringResource(R.string.guard_bridge_description),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Switch(
+                    checked = guardBridgeEnabled,
+                    onCheckedChange = { enabled ->
+                        com.leviknet.vpn.guard.GuardBridgeAccess.setEnabled(context, enabled)
+                        guardBridgeEnabled = enabled
+                    },
+                )
+            }
             OutlinedButton(
                 onClick = onFreeProxy,
                 modifier = Modifier

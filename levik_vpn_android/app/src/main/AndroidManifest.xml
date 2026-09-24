@@ -50,6 +50,12 @@
         android:theme="@style/Theme.LevikVpn"
         android:usesCleartextTraffic="false">
 
+        <provider
+            android:name=".guard.GuardStatusProvider"
+            android:authorities="${applicationId}.guard"
+            android:exported="true"
+            android:grantUriPermissions="false" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

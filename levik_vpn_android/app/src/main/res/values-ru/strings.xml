@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="open_levik_guard">Открыть Levik Guard</string>
+    <string name="guard_bridge_title">Передавать состояние VPN в Levik Guard</string>
+    <string name="guard_bridge_description">Локальный доступ к состоянию подключения и общему расходу. По умолчанию выключен.</string>
     <string name="app_name">Levik VPN</string>
     <string name="nav_home">Главная</string>
     <string name="nav_servers">Серверы</string>

@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="open_levik_guard">Open Levik Guard</string>
+    <string name="guard_bridge_title">Share VPN status with Levik Guard</string>
+    <string name="guard_bridge_description">Local access to connection status and aggregate traffic. Off by default.</string>
     <string name="app_name">Levik VPN</string>
     <string name="nav_home">Home</string>
     <string name="nav_servers">Servers</string>
