@@ -39,7 +39,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.leviknet.vpn.R
 import com.leviknet.vpn.core.network.CatalogPaymentMethod
@@ -448,7 +448,10 @@ private fun TariffPurchaseCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium,
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
                 Text(
                     text = stringResource(
                         R.string.subscription_management_traffic_limit,
@@ -507,8 +510,7 @@ private fun TariffPurchaseCard(
                     text = selectedPeriod?.let {
                         stringResource(R.string.subscription_management_buy_for, it.amountRub)
                     } ?: stringResource(R.string.purchase_continue),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center,
                 )
             }
         }
@@ -569,15 +571,13 @@ private fun OrderCard(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Row(verticalAlignment = Alignment.Top) {
-                Column(Modifier.weight(1f)) {
-                    Text(orderKindLabel(order.kind), fontWeight = FontWeight.Bold)
-                    Text(
-                        text = formatDate(order.createdAt),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(orderKindLabel(order.kind), fontWeight = FontWeight.Bold)
+                Text(
+                    text = formatDate(order.createdAt),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 Text(
                     text = stringResource(
                         R.string.subscription_management_amount,
@@ -614,11 +614,14 @@ private fun OrderCard(
 
 @Composable
 private fun ManagementMetric(label: String, value: String) {
-    Row(Modifier.fillMaxWidth()) {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
         Text(
             text = label,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f),
         )
         Text(text = value, fontWeight = FontWeight.SemiBold)
     }

@@ -27,7 +27,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
@@ -71,9 +73,6 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.NavigationRailItemDefaults
@@ -845,7 +844,10 @@ private fun LoginScreen(
             onDismissRequest = { showTrialChoice = false },
             title = { Text(stringResource(R.string.trial_choice_title)) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(
+                    modifier = Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
                     Text(
                         text = stringResource(R.string.trial_choice_description),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -995,7 +997,9 @@ private fun LoginScreen(
                         bitmap = qrBitmap.asImageBitmap(),
                         contentDescription = stringResource(R.string.login_qr_code_description),
                         modifier = Modifier
-                            .size(240.dp)
+                            .widthIn(max = 240.dp)
+                            .fillMaxWidth()
+                            .aspectRatio(1f)
                             .clip(RoundedCornerShape(16.dp)),
                     )
                     Spacer(Modifier.height(12.dp))
@@ -1031,7 +1035,7 @@ private fun LoginScreen(
                     onClick = onOpenAgain,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(LevikDimensions.ButtonHeight),
+                        .heightIn(min = LevikDimensions.ButtonHeight),
                     shape = RoundedCornerShape(14.dp),
                 ) {
                     Text(
@@ -1050,7 +1054,7 @@ private fun LoginScreen(
                     onClick = onRetry,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(LevikDimensions.ButtonHeight),
+                        .heightIn(min = LevikDimensions.ButtonHeight),
                     shape = RoundedCornerShape(14.dp),
                 ) {
                     Text(stringResource(R.string.login_retry), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
@@ -1060,7 +1064,7 @@ private fun LoginScreen(
                         onClick = { showTrialChoice = true },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(LevikDimensions.ButtonHeight),
+                            .heightIn(min = LevikDimensions.ButtonHeight),
                         shape = RoundedCornerShape(14.dp),
                     ) {
                         Icon(
@@ -1080,7 +1084,7 @@ private fun LoginScreen(
                         onClick = onTelegramLogin,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(LevikDimensions.ButtonHeight),
+                            .heightIn(min = LevikDimensions.ButtonHeight),
                         shape = RoundedCornerShape(14.dp),
                     ) {
                         Icon(
@@ -1107,7 +1111,7 @@ private fun LoginScreen(
                         onClick = onWebsiteLogin,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(LevikDimensions.ButtonHeight),
+                            .heightIn(min = LevikDimensions.ButtonHeight),
                         shape = RoundedCornerShape(14.dp),
                     ) {
                         Icon(
@@ -1127,7 +1131,7 @@ private fun LoginScreen(
                         onClick = onQrLogin,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(LevikDimensions.ButtonHeight),
+                            .heightIn(min = LevikDimensions.ButtonHeight),
                         shape = RoundedCornerShape(14.dp),
                     ) {
                         Icon(
@@ -1156,7 +1160,7 @@ private fun LoginScreen(
             }
             TextButton(
                 onClick = onPrivacyPolicy,
-                modifier = Modifier.height(LevikDimensions.ButtonHeight),
+                modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
             ) {
                 Icon(
                     painter = painterResource(R.drawable.ic_privacy),
@@ -1445,9 +1449,9 @@ private fun TvNavigationRail(
                         Text(
                             text = stringResource(destination.label),
                             fontSize = 12.sp,
-                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 2,
+                            textAlign = TextAlign.Center,
                         )
                     },
                     alwaysShowLabel = true,
@@ -1487,41 +1491,45 @@ private fun AppNavigationBar(
                 MaterialTheme.colorScheme.outline,
             ),
         ) {
-            NavigationBar(
-                containerColor = Color.Transparent,
-                tonalElevation = 0.dp,
-                windowInsets = WindowInsets(0, 0, 0, 0),
-                modifier = Modifier.heightIn(min = 72.dp),
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 72.dp)
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 NavigationDestination.entries.forEach { destination ->
                     val isSelected = selected == destination.tab
-                    NavigationBarItem(
-                        selected = isSelected,
-                        onClick = { onSelected(destination.tab) },
-                        icon = {
-                            Icon(
-                                painter = painterResource(destination.icon),
-                                contentDescription = null,
-                                modifier = Modifier.size(24.dp),
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 56.dp)
+                            .selectable(
+                                selected = isSelected,
+                                role = Role.Tab,
+                                onClick = { onSelected(destination.tab) },
                             )
-                        },
-                        label = {
-                            Text(
-                                text = stringResource(destination.label),
-                                fontSize = 12.sp,
-                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = LevikBlue,
-                            selectedTextColor = LevikBlue,
-                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
-                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
-                            indicatorColor = Color.Transparent,
-                        ),
-                    )
+                            .padding(horizontal = 2.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        val color = if (isSelected) LevikBlue else MaterialTheme.colorScheme.onSurfaceVariant
+                        Icon(
+                            painter = painterResource(destination.icon),
+                            contentDescription = null,
+                            modifier = Modifier.size(24.dp),
+                            tint = color,
+                        )
+                        Text(
+                            text = stringResource(destination.label),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 3,
+                            textAlign = TextAlign.Center,
+                            color = color,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                 }
             }
         }
@@ -1748,7 +1756,7 @@ private fun HomeScreen(
                         enabled = !state.refreshing && state.login !is LoginUiState.Loading,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(LevikDimensions.ButtonHeight),
+                            .heightIn(min = LevikDimensions.ButtonHeight),
                         shape = RoundedCornerShape(14.dp),
                     ) {
                         Icon(
@@ -1820,7 +1828,7 @@ private fun HomeScreen(
                         onClick = onResumeVpn,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(LevikDimensions.ButtonHeight),
+                            .heightIn(min = LevikDimensions.ButtonHeight),
                         shape = RoundedCornerShape(14.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (isDark) LevikGreen else Color(0xFF16A34A),
@@ -1841,14 +1849,16 @@ private fun HomeScreen(
                 onClick = onOpenPauseVpn,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(LevikDimensions.ButtonHeight),
+                    .heightIn(min = LevikDimensions.ButtonHeight),
                 shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surface,
                 border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                 shadowElevation = 1.dp,
             ) {
                 Row(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -1864,6 +1874,7 @@ private fun HomeScreen(
                         fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface,
+                        textAlign = TextAlign.Center,
                     )
                 }
             }
@@ -1994,10 +2005,14 @@ private fun PowerButton(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Box(
-            modifier = Modifier.size(240.dp),
+        BoxWithConstraints(
+            modifier = Modifier
+                .widthIn(max = 240.dp)
+                .fillMaxWidth()
+                .aspectRatio(1f),
             contentAlignment = Alignment.Center,
         ) {
+            val sizeScale = maxWidth.value / 240f
             // Ambient outer glow
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val radius = size.minDimension / 2
@@ -2019,7 +2034,7 @@ private fun PowerButton(
             // Outer circular ring with neon/vibrant stroke
             Box(
                 modifier = Modifier
-                    .size(200.dp)
+                    .size(200.dp * sizeScale)
                     .clip(CircleShape)
                     .background(
                         if (isConnected) {
@@ -2073,7 +2088,7 @@ private fun PowerButton(
             ) {
                 // Inner button surface
                 Surface(
-                    modifier = Modifier.size(150.dp),
+                    modifier = Modifier.size(150.dp * sizeScale),
                     shape = CircleShape,
                     color = if (isConnected) {
                         if (isDark) Color(0xFF0F172A) else Color.White
@@ -2096,7 +2111,7 @@ private fun PowerButton(
                     ) {
                         if (isTransitioning) {
                             CircularProgressIndicator(
-                                modifier = Modifier.size(54.dp),
+                                modifier = Modifier.size(54.dp * sizeScale),
                                 color = LevikBlue,
                                 strokeWidth = 4.dp,
                             )
@@ -2104,7 +2119,7 @@ private fun PowerButton(
                             Icon(
                                 painter = painterResource(R.drawable.ic_power),
                                 contentDescription = stringResource(R.string.content_power_button),
-                                modifier = Modifier.size(54.dp),
+                                modifier = Modifier.size(54.dp * sizeScale),
                                 tint = if (isConnected) {
                                     if (isDark) Color(0xFF38BDF8) else Color(0xFF2563EB)
                                 } else {
@@ -2121,7 +2136,7 @@ private fun PowerButton(
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .size(30.dp)
+                        .size(30.dp * sizeScale)
                         .clip(CircleShape)
                         .background(Color(0xFF2563EB))
                         .border(2.dp, if (isDark) Color(0xFF0B0F19) else Color.White, CircleShape),
@@ -2130,7 +2145,7 @@ private fun PowerButton(
                     Icon(
                         painter = painterResource(R.drawable.ic_shield_check),
                         contentDescription = null,
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(16.dp * sizeScale),
                         tint = Color.White,
                     )
                 }
@@ -2228,8 +2243,7 @@ private fun ServerSummaryCard(
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = subtitleColor,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        maxLines = 2,
                     )
                     Spacer(Modifier.height(2.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2238,27 +2252,8 @@ private fun ServerSummaryCard(
                             fontSize = 19.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false),
+                            modifier = Modifier.weight(1f),
                         )
-                        if (!automaticServer && server?.isMobileServer() == true) {
-                            val badgeColor = if (isDark) Color(0xFF60A5FA) else LevikBlue
-                            val badgeBg = badgeColor.copy(alpha = 0.15f)
-                            Spacer(Modifier.width(6.dp))
-                            Surface(
-                                shape = RoundedCornerShape(6.dp),
-                                color = badgeBg,
-                            ) {
-                                Text(
-                                    text = stringResource(R.string.server_badge_mobile_allowlist),
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = badgeColor,
-                                )
-                            }
-                        }
                         Spacer(Modifier.width(6.dp))
                         Icon(
                             painter = painterResource(R.drawable.ic_chevron_down),
@@ -2267,40 +2262,45 @@ private fun ServerSummaryCard(
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                }
-                Spacer(Modifier.width(12.dp))
-                Box(
-                    modifier = Modifier
-                        .width(1.dp)
-                        .height(54.dp)
-                        .background(MaterialTheme.colorScheme.outline),
-                )
-                Spacer(Modifier.width(14.dp))
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(
-                        text = stringResource(R.string.ping),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(3.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = pingMs?.let { stringResource(R.string.ping_ms, it.toInt()) }
-                                ?: stringResource(R.string.not_available),
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = pingMs?.let { ping ->
-                                when {
-                                    ping < 100 -> if (isDark) Color(0xFF4ADE80) else Color(0xFF16A34A)
-                                    ping < 250 -> if (isDark) Color(0xFF38BDF8) else Color(0xFF2563EB)
-                                    else -> MaterialTheme.colorScheme.error
-                                }
-                            } ?: MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        SignalBarsIndicator(pingMs = pingMs)
+                    if (!automaticServer && server?.isMobileServer() == true) {
+                        val badgeColor = if (isDark) Color(0xFF60A5FA) else LevikBlue
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = badgeColor.copy(alpha = 0.15f),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.server_badge_mobile_allowlist),
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = badgeColor,
+                            )
+                        }
                     }
                 }
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = stringResource(R.string.ping),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = pingMs?.let { stringResource(R.string.ping_ms, it.toInt()) }
+                        ?: stringResource(R.string.not_available),
+                    fontWeight = FontWeight.Bold,
+                    color = pingMs?.let { ping ->
+                        when {
+                            ping < 100 -> if (isDark) Color(0xFF4ADE80) else Color(0xFF16A34A)
+                            ping < 250 -> if (isDark) Color(0xFF38BDF8) else Color(0xFF2563EB)
+                            else -> MaterialTheme.colorScheme.error
+                        }
+                    } ?: MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.width(6.dp))
+                SignalBarsIndicator(pingMs = pingMs)
             }
 
             HorizontalDivider(
@@ -2308,11 +2308,12 @@ private fun ServerSummaryCard(
                 color = MaterialTheme.colorScheme.outline,
             )
 
-            Row(
+            FlowRow(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Column(Modifier.weight(1f)) {
+                Column {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             painter = painterResource(R.drawable.ic_usage),
@@ -2343,15 +2344,7 @@ private fun ServerSummaryCard(
                         },
                     )
                 }
-                Spacer(Modifier.width(14.dp))
-                Box(
-                    modifier = Modifier
-                        .width(1.dp)
-                        .height(58.dp)
-                        .background(MaterialTheme.colorScheme.outline),
-                )
-                Spacer(Modifier.width(14.dp))
-                Column(Modifier.weight(1.2f)) {
+                Column {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             painter = painterResource(R.drawable.ic_speed),
@@ -2933,31 +2926,26 @@ private fun ServerItemCard(
                 )
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = server.name.displayName(),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false),
-                        )
-                        if (server.isMobileServer()) {
-                            val badgeColor = if (isDark) Color(0xFF60A5FA) else LevikBlue
-                            val badgeBg = badgeColor.copy(alpha = 0.15f)
-                            Spacer(Modifier.width(6.dp))
-                            Surface(
-                                shape = RoundedCornerShape(6.dp),
-                                color = badgeBg,
-                            ) {
-                                Text(
-                                    text = stringResource(R.string.server_badge_mobile_allowlist),
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = badgeColor,
-                                )
-                            }
+                    Text(
+                        text = server.name.displayName(),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (server.isMobileServer()) {
+                        val badgeColor = if (isDark) Color(0xFF60A5FA) else LevikBlue
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = badgeColor.copy(alpha = 0.15f),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.server_badge_mobile_allowlist),
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = badgeColor,
+                            )
                         }
                     }
                 }
@@ -3078,12 +3066,11 @@ private fun StatsScreen(
             )
 
             // Per-App Network Activity Breakdown
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Column(Modifier.weight(1f)) {
+                Column {
                     Text(
                         text = stringResource(R.string.per_app_traffic_title),
                         style = MaterialTheme.typography.titleMedium,
@@ -3131,7 +3118,7 @@ private fun StatsScreen(
                                 onClick = onAnalyzeAppTraffic,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(LevikDimensions.ButtonHeight),
+                                    .heightIn(min = LevikDimensions.ButtonHeight),
                                 shape = RoundedCornerShape(12.dp),
                             ) {
                                 Text(stringResource(R.string.per_app_load_btn), fontWeight = FontWeight.SemiBold)
@@ -3165,7 +3152,7 @@ private fun StatsScreen(
                                         text = app.label,
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = FontWeight.SemiBold,
-                                        maxLines = 1,
+                                        maxLines = 3,
                                         overflow = TextOverflow.Ellipsis,
                                     )
                                 }
@@ -3182,10 +3169,9 @@ private fun StatsScreen(
             }
 
             // Usage History Card (7d / 30d toggle, export, clear)
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
                     text = stringResource(R.string.traffic_history_title),
@@ -3193,7 +3179,7 @@ private fun StatsScreen(
                     fontWeight = FontWeight.Bold,
                 )
                 if (trafficHistory.isNotEmpty()) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         TextButton(
                             onClick = onExportTrafficHistory,
                             shape = RoundedCornerShape(10.dp),
@@ -3233,7 +3219,7 @@ private fun StatsScreen(
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     } else {
-                        Row(
+                        FlowRow(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(bottom = 10.dp),
@@ -3258,12 +3244,11 @@ private fun StatsScreen(
                         }
 
                         displayedHistory.forEach { item ->
-                            Row(
+                            FlowRow(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(vertical = 6.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
                                 Text(
                                     text = item.date,
@@ -3290,11 +3275,11 @@ private fun StatsScreen(
                 border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                 shadowElevation = 1.dp,
             ) {
-                Row(
+                Column(
                     modifier = Modifier.padding(18.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Column(Modifier.weight(1f)) {
+                    Column {
                         Text(
                             text = stringResource(R.string.diagnostics_title),
                             style = MaterialTheme.typography.titleMedium,
@@ -3308,7 +3293,9 @@ private fun StatsScreen(
                     }
                     Button(
                         onClick = onRunDiagnostics,
-                        modifier = Modifier.height(LevikDimensions.ButtonHeight),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = LevikDimensions.ButtonHeight),
                         shape = RoundedCornerShape(12.dp),
                     ) {
                         Text(stringResource(R.string.diagnostics_btn), fontWeight = FontWeight.SemiBold)
@@ -3341,10 +3328,10 @@ private fun LiveSpeedChartCard(
         shadowElevation = 1.dp,
     ) {
         Column(Modifier.padding(18.dp)) {
-            Row(
+            FlowRow(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(10.dp).clip(CircleShape).background(LevikGreen))
@@ -3637,7 +3624,7 @@ private fun ProfileScreen(
                     enabled = !loading && session == SessionStatus.Authenticated,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(LevikDimensions.ButtonHeight),
+                        .heightIn(min = LevikDimensions.ButtonHeight),
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.outlinedButtonColors(
                         containerColor = MaterialTheme.colorScheme.surface,
@@ -3659,16 +3646,15 @@ private fun ProfileScreen(
                     Spacer(Modifier.width(6.dp))
                     Text(
                         stringResource(R.string.profile_refresh_subscription),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
                         fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center,
                     )
                 }
                 DistributionRenewPlanButton(
                     onOpenPlans = onOpenPlans,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(LevikDimensions.ButtonHeight),
+                            .heightIn(min = LevikDimensions.ButtonHeight),
                 )
             }
 
@@ -4327,7 +4313,7 @@ private fun ProfileScreen(
                 onClick = onFreeProxy,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(LevikDimensions.ButtonHeight),
+                    .heightIn(min = LevikDimensions.ButtonHeight),
                 shape = RoundedCornerShape(14.dp),
             ) {
                 Icon(
@@ -4342,7 +4328,7 @@ private fun ProfileScreen(
                 onClick = onSupport,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(LevikDimensions.ButtonHeight),
+                    .heightIn(min = LevikDimensions.ButtonHeight),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.outlinedButtonColors(
                     containerColor = MaterialTheme.colorScheme.surface,
@@ -4356,7 +4342,7 @@ private fun ProfileScreen(
                 onClick = onPrivacyPolicy,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(LevikDimensions.ButtonHeight),
+                    .heightIn(min = LevikDimensions.ButtonHeight),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.outlinedButtonColors(
                     containerColor = MaterialTheme.colorScheme.surface,
@@ -4376,7 +4362,7 @@ private fun ProfileScreen(
                 onClick = onDeleteAccount,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(LevikDimensions.ButtonHeight),
+                    .heightIn(min = LevikDimensions.ButtonHeight),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.outlinedButtonColors(
                     containerColor = MaterialTheme.colorScheme.surface,
@@ -4399,7 +4385,7 @@ private fun ProfileScreen(
                         login !is LoginUiState.Waiting,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(LevikDimensions.ButtonHeight),
+                            .heightIn(min = LevikDimensions.ButtonHeight),
                     shape = RoundedCornerShape(14.dp),
                 ) {
                     Icon(
@@ -4424,7 +4410,7 @@ private fun ProfileScreen(
                 onClick = onLogout,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(LevikDimensions.ButtonHeight),
+                    .heightIn(min = LevikDimensions.ButtonHeight),
                 shape = RoundedCornerShape(14.dp),
             ) {
                 Icon(
@@ -4663,7 +4649,7 @@ private fun AntiDpiDialog(
                     }
                 },
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.height(LevikDimensions.ButtonHeight),
+                modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
             ) {
                 Text(stringResource(R.string.anti_dpi_apply_btn), fontWeight = FontWeight.SemiBold)
             }
@@ -4672,7 +4658,7 @@ private fun AntiDpiDialog(
             TextButton(
                 onClick = onDismiss,
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.height(LevikDimensions.ButtonHeight),
+                modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
             ) {
                 Text(stringResource(R.string.cancel), fontWeight = FontWeight.SemiBold)
             }
@@ -4692,7 +4678,10 @@ private fun RoutingPresetDialog(
         shape = RoundedCornerShape(24.dp),
         title = { Text(stringResource(R.string.routing_preset_title), fontWeight = FontWeight.Bold) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 RoutingPreset.entries.forEach { preset ->
                     val title = if (isMobileServer && preset == RoutingPreset.BYPASS_RU) {
                         "LTE (${preset.titleRu})"
@@ -4732,7 +4721,7 @@ private fun RoutingPresetDialog(
             Button(
                 onClick = onDismiss,
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.height(LevikDimensions.ButtonHeight),
+                modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
             ) {
                 Text(stringResource(R.string.close), fontWeight = FontWeight.SemiBold)
             }
@@ -4756,7 +4745,7 @@ private fun WifiProtectionDialog(
         shape = RoundedCornerShape(24.dp),
         title = { Text(stringResource(R.string.wifi_protection_dialog_title), fontWeight = FontWeight.Bold) },
         text = {
-            Column(modifier = Modifier.height(360.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(modifier = Modifier.heightIn(max = 360.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -4783,19 +4772,18 @@ private fun WifiProtectionDialog(
                     text = stringResource(R.string.trusted_wifi_list_title),
                     fontWeight = FontWeight.SemiBold,
                 )
-                Row(
+                Column(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     OutlinedTextField(
                         value = newSsidText,
                         onValueChange = { newSsidText = it },
                         placeholder = { Text(stringResource(R.string.add_trusted_wifi_hint)) },
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                         shape = RoundedCornerShape(12.dp),
                     )
-                    Spacer(Modifier.width(8.dp))
                     Button(
                         onClick = {
                             if (newSsidText.isNotBlank()) {
@@ -4804,7 +4792,9 @@ private fun WifiProtectionDialog(
                             }
                         },
                         shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.height(LevikDimensions.ButtonHeight),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = LevikDimensions.ButtonHeight),
                     ) {
                         Text(stringResource(R.string.add), fontWeight = FontWeight.SemiBold)
                     }
@@ -4827,7 +4817,11 @@ private fun WifiProtectionDialog(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Text(ssid, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    ssid,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.weight(1f),
+                                )
                                 TextButton(onClick = { onRemoveTrusted(ssid) }) {
                                     Text(
                                         stringResource(R.string.delete),
@@ -4844,7 +4838,7 @@ private fun WifiProtectionDialog(
             Button(
                 onClick = onDismiss,
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.height(LevikDimensions.ButtonHeight),
+                modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
             ) {
                 Text(stringResource(R.string.close), fontWeight = FontWeight.SemiBold)
             }
@@ -4894,7 +4888,7 @@ private fun KillSwitchDialog(
             Button(
                 onClick = onOpenSettings,
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.height(LevikDimensions.ButtonHeight),
+                modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
             ) {
                 Text(stringResource(R.string.open_vpn_settings), fontWeight = FontWeight.SemiBold)
             }
@@ -4903,7 +4897,7 @@ private fun KillSwitchDialog(
             TextButton(
                 onClick = onDismiss,
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.height(LevikDimensions.ButtonHeight),
+                modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
             ) {
                 Text(stringResource(R.string.close), fontWeight = FontWeight.SemiBold)
             }
@@ -4925,7 +4919,7 @@ private fun LogsViewerDialog(
         shape = RoundedCornerShape(24.dp),
         title = { Text(stringResource(R.string.logs_viewer_title), fontWeight = FontWeight.Bold) },
         text = {
-            Column(modifier = Modifier.height(400.dp)) {
+            Column(modifier = Modifier.heightIn(max = 400.dp)) {
                 if (logs.isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text(stringResource(R.string.logs_empty), color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -4951,25 +4945,28 @@ private fun LogsViewerDialog(
             }
         },
         confirmButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
                 TextButton(
                     onClick = onClear,
                     shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.height(LevikDimensions.ButtonHeight),
+                    modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
                 ) {
                     Text(stringResource(R.string.logs_clear_btn), fontWeight = FontWeight.SemiBold)
                 }
                 OutlinedButton(
                     onClick = { onShare(formattedLogs) },
                     shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.height(LevikDimensions.ButtonHeight),
+                    modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
                 ) {
                     Text(stringResource(R.string.logs_share_btn), fontWeight = FontWeight.SemiBold)
                 }
                 Button(
                     onClick = onSendSupport,
                     shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.height(LevikDimensions.ButtonHeight),
+                    modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
                 ) {
                     Text(stringResource(R.string.logs_send_support), fontWeight = FontWeight.SemiBold)
                 }
@@ -4979,7 +4976,7 @@ private fun LogsViewerDialog(
             TextButton(
                 onClick = onDismiss,
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.height(LevikDimensions.ButtonHeight),
+                modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
             ) {
                 Text(stringResource(R.string.close), fontWeight = FontWeight.SemiBold)
             }
@@ -5028,7 +5025,7 @@ private fun SplitTunnelModeDialog(
                         onClick = onSelectApps,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(LevikDimensions.ButtonHeight),
+                            .heightIn(min = LevikDimensions.ButtonHeight),
                         shape = RoundedCornerShape(14.dp),
                     ) {
                         Text(stringResource(R.string.split_tunnel_select_apps, selectedCount), fontWeight = FontWeight.SemiBold)
@@ -5040,7 +5037,7 @@ private fun SplitTunnelModeDialog(
             TextButton(
                 onClick = onDismiss,
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.height(LevikDimensions.ButtonHeight),
+                modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
             ) {
                 Text(stringResource(R.string.close), fontWeight = FontWeight.SemiBold)
             }
@@ -5079,7 +5076,7 @@ private fun AppSelectorDialog(
         shape = RoundedCornerShape(24.dp),
         title = { Text(stringResource(R.string.split_tunnel_select_apps, selectedPackages.size), fontWeight = FontWeight.Bold) },
         text = {
-            Column(modifier = Modifier.height(420.dp)) {
+            Column(modifier = Modifier.heightIn(max = 420.dp)) {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(
                         enabled = selectedPackages.isNotEmpty(),
@@ -5180,14 +5177,14 @@ private fun AppSelectorDialog(
                                         text = app.label,
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = FontWeight.SemiBold,
-                                        maxLines = 1,
+                                        maxLines = 2,
                                         overflow = TextOverflow.Ellipsis,
                                     )
                                     Text(
                                         text = app.packageName,
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
+                                        maxLines = 2,
                                         overflow = TextOverflow.Ellipsis,
                                     )
                                 }
@@ -5206,7 +5203,7 @@ private fun AppSelectorDialog(
             Button(
                 onClick = onDismiss,
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.height(LevikDimensions.ButtonHeight),
+                modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
             ) {
                 Text(stringResource(R.string.close), fontWeight = FontWeight.SemiBold)
             }
@@ -5317,7 +5314,7 @@ private fun DnsProviderDialog(
             Button(
                 onClick = onDismiss,
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.height(LevikDimensions.ButtonHeight),
+                modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
             ) {
                 Text(stringResource(R.string.close), fontWeight = FontWeight.SemiBold)
             }
@@ -5407,7 +5404,7 @@ private fun ThemeDialog(
             Button(
                 onClick = onDismiss,
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.height(LevikDimensions.ButtonHeight),
+                modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
             ) {
                 Text(stringResource(R.string.close), fontWeight = FontWeight.SemiBold)
             }
@@ -5433,8 +5430,8 @@ private fun CustomRoutingDialog(
         shape = RoundedCornerShape(24.dp),
         title = { Text(stringResource(R.string.custom_routing_title), fontWeight = FontWeight.Bold) },
         text = {
-            Column(modifier = Modifier.height(380.dp)) {
-                Row(
+            Column(modifier = Modifier.heightIn(max = 380.dp)) {
+                FlowRow(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
@@ -5457,19 +5454,18 @@ private fun CustomRoutingDialog(
                     }
                 }
                 Spacer(Modifier.height(12.dp))
-                Row(
+                Column(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     OutlinedTextField(
                         value = newDomainText,
                         onValueChange = { newDomainText = it },
                         placeholder = { Text(stringResource(R.string.add_domain_hint)) },
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                         shape = RoundedCornerShape(12.dp),
                     )
-                    Spacer(Modifier.width(8.dp))
                     Button(
                         onClick = {
                             if (newDomainText.isNotBlank()) {
@@ -5479,7 +5475,9 @@ private fun CustomRoutingDialog(
                             }
                         },
                         shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.height(LevikDimensions.ButtonHeight),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = LevikDimensions.ButtonHeight),
                     ) {
                         Text(stringResource(R.string.add), fontWeight = FontWeight.SemiBold)
                     }
@@ -5503,7 +5501,11 @@ private fun CustomRoutingDialog(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Text(domain, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    domain,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.weight(1f),
+                                )
                                 TextButton(
                                     onClick = {
                                         if (selectedTab == 0) onRemoveDirect(domain)
@@ -5525,7 +5527,7 @@ private fun CustomRoutingDialog(
             Button(
                 onClick = onDismiss,
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.height(LevikDimensions.ButtonHeight),
+                modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
             ) {
                 Text(stringResource(R.string.close), fontWeight = FontWeight.SemiBold)
             }
@@ -5603,34 +5605,29 @@ private fun DiagnosticsDialog(
             if (!running && report != null) {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    OutlinedButton(
+                        onClick = { onShare(report.toFormattedString()) },
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = LevikDimensions.ButtonHeight),
                     ) {
-                        OutlinedButton(
-                            onClick = { onShare(report.toFormattedString()) },
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                        .height(LevikDimensions.ButtonHeight),
-                        ) {
-                            Text(stringResource(R.string.diagnostics_share), fontWeight = FontWeight.SemiBold)
-                        }
-                        Button(
-                            onClick = onShareSupportNote,
-                            enabled = !isSharingNote,
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                        .height(LevikDimensions.ButtonHeight),
-                        ) {
-                            if (isSharingNote) {
-                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                            } else {
-                                Text(stringResource(R.string.support_note_export_btn), fontWeight = FontWeight.SemiBold)
-                            }
+                        Text(stringResource(R.string.diagnostics_share), fontWeight = FontWeight.SemiBold)
+                    }
+                    Button(
+                        onClick = onShareSupportNote,
+                        enabled = !isSharingNote,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = LevikDimensions.ButtonHeight),
+                    ) {
+                        if (isSharingNote) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        } else {
+                            Text(stringResource(R.string.support_note_export_btn), fontWeight = FontWeight.SemiBold)
                         }
                     }
                     Button(
@@ -5638,7 +5635,7 @@ private fun DiagnosticsDialog(
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier
                             .fillMaxWidth()
-                        .height(LevikDimensions.ButtonHeight),
+                            .heightIn(min = LevikDimensions.ButtonHeight),
                     ) {
                         Text(stringResource(R.string.diagnostics_send_support), fontWeight = FontWeight.SemiBold)
                     }
@@ -5649,7 +5646,7 @@ private fun DiagnosticsDialog(
             TextButton(
                 onClick = onDismiss,
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.height(LevikDimensions.ButtonHeight),
+                modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
             ) {
                 Text(stringResource(R.string.close), fontWeight = FontWeight.SemiBold)
             }
@@ -5670,7 +5667,10 @@ private fun PauseVpnDialog(
         shape = RoundedCornerShape(24.dp),
         title = { Text(stringResource(R.string.pause_vpn_title), fontWeight = FontWeight.Bold) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                modifier = Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 Text(
                     text = stringResource(R.string.pause_vpn_desc),
                     style = MaterialTheme.typography.bodyMedium,
@@ -5705,7 +5705,7 @@ private fun PauseVpnDialog(
             Button(
                 onClick = { onPause(selectedMinutes) },
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.height(LevikDimensions.ButtonHeight),
+                modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
             ) {
                 Text(stringResource(R.string.pause_vpn_btn), fontWeight = FontWeight.SemiBold)
             }
@@ -5714,7 +5714,7 @@ private fun PauseVpnDialog(
             TextButton(
                 onClick = onDismiss,
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.height(LevikDimensions.ButtonHeight),
+                modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
             ) {
                 Text(stringResource(R.string.cancel), fontWeight = FontWeight.SemiBold)
             }
@@ -5759,7 +5759,7 @@ private fun SupportNoteDialog(
             Button(
                 onClick = onOpenSupport,
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.height(LevikDimensions.ButtonHeight),
+                modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
             ) {
                 Text(stringResource(R.string.support_note_open_support), fontWeight = FontWeight.SemiBold)
             }
@@ -5768,7 +5768,7 @@ private fun SupportNoteDialog(
             OutlinedButton(
                 onClick = { onShare(noteUrl) },
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.height(LevikDimensions.ButtonHeight),
+                modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
             ) {
                 Text(stringResource(R.string.support_note_share), fontWeight = FontWeight.SemiBold)
             }
@@ -5855,9 +5855,10 @@ private fun ReferralCard(
                 border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Row(
+                FlowRow(
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     Text(
                         text = stringResource(R.string.referral_stats_invited, referrals.invited),
@@ -5874,15 +5875,15 @@ private fun ReferralCard(
                 }
             }
 
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Button(
                     onClick = onShare,
                     modifier = Modifier
-                        .weight(1f)
-                        .height(LevikDimensions.ButtonHeight),
+                        .fillMaxWidth()
+                        .heightIn(min = LevikDimensions.ButtonHeight),
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = LevikBlue,
@@ -5894,8 +5895,8 @@ private fun ReferralCard(
                 OutlinedButton(
                     onClick = onCopy,
                     modifier = Modifier
-                        .weight(1f)
-                        .height(LevikDimensions.ButtonHeight),
+                        .fillMaxWidth()
+                        .heightIn(min = LevikDimensions.ButtonHeight),
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.outlinedButtonColors(
                         containerColor = MaterialTheme.colorScheme.surface,
@@ -6031,7 +6032,7 @@ private fun SubscriptionCard(
                     onClick = { onOpenDevices(subscription) },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(44.dp),
+                        .heightIn(min = 44.dp),
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.outlinedButtonColors(
                         containerColor = MaterialTheme.colorScheme.surface,
@@ -6175,44 +6176,40 @@ private fun SubscriptionDevicesDialog(
                             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
                             border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
                         ) {
-                            Row(
+                            Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_shield),
-                                    contentDescription = null,
-                                    modifier = Modifier.size(24.dp),
-                                    tint = LevikBlue,
-                                )
-                                Spacer(Modifier.width(10.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text(
-                                        text = dev.label,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.SemiBold,
-                                        maxLines = 3,
-                                        overflow = TextOverflow.Ellipsis,
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_shield),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(24.dp),
+                                        tint = LevikBlue,
                                     )
-                                    Text(
-                                        text = stringResource(R.string.device_client_format, dev.connectionClient()
-                                            ?: stringResource(R.string.device_client_unknown)),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 3,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
+                                    Spacer(Modifier.width(10.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(
+                                            text = dev.label,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                        )
+                                        Text(
+                                            text = stringResource(R.string.device_client_format, dev.connectionClient()
+                                                ?: stringResource(R.string.device_client_unknown)),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
                                 }
                                 if (subscription.actions.revokeDevice) {
-                                    Spacer(Modifier.width(6.dp))
                                     OutlinedButton(
                                         onClick = { deviceToRevoke = dev },
                                         enabled = !busy,
                                         shape = RoundedCornerShape(10.dp),
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                        modifier = Modifier.height(34.dp),
+                                        modifier = Modifier.fillMaxWidth(),
                                         colors = ButtonDefaults.outlinedButtonColors(
                                             contentColor = MaterialTheme.colorScheme.error,
                                         ),
@@ -6252,7 +6249,7 @@ private fun SubscriptionDevicesDialog(
                 TextButton(
                     onClick = onDismiss,
                     shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.height(LevikDimensions.ButtonHeight),
+                    modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
                 ) {
                     Text(stringResource(R.string.close), fontWeight = FontWeight.SemiBold)
                 }
@@ -6294,7 +6291,7 @@ private fun ActivationScannerDialog(
                     onCameraError = { cameraUnavailable = true },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(320.dp)
+                        .heightIn(min = 180.dp, max = 320.dp)
                         .clip(RoundedCornerShape(16.dp)),
                 )
             } else {
@@ -6434,24 +6431,23 @@ private fun activationQrBitmap(value: String, size: Int = 768): Bitmap {
 
 @Composable
 private fun ProfileLine(label: String, value: String) {
-    Row(
+    FlowRow(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 7.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Text(
             text = label,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.weight(1f),
         )
         Text(
             text = value,
             fontWeight = FontWeight.Bold,
             style = MaterialTheme.typography.bodyMedium,
-            textAlign = TextAlign.End,
-            modifier = Modifier.weight(1.2f),
+            textAlign = TextAlign.Start,
         )
     }
 }
