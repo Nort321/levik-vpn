@@ -106,3 +106,7 @@ pnpm-debug.log*
 # CI obtains and verifies the pinned Android native dependency
 /levik_vpn_android/app/libs/*
 !/levik_vpn_android/app/libs/README.md
+
+# Local iOS project and its convenience symlink
+/levik_vpn_ios/
+/LevikVPN iOS
