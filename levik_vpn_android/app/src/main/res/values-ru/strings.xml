@@ -69,6 +69,7 @@
     <string name="server_ping_checking_short">…</string>
     <string name="server_ping_unavailable">Не удалось измерить пинг серверов. Оставлен предыдущий доступный сервер.</string>
     <string name="whitelist_active_banner">У вас сейчас активны белые списки — выберите сервер в категории «Белые списки».</string>
+    <string name="whitelist_plan_unsupported_banner">На мобильной сети обнаружены белые списки. Ваш текущий тариф не включает их обход, поэтому обычный VPN может не подключиться.</string>
     <string name="lte_whitelist_warning_title">Белые списки не обнаружены</string>
     <string name="lte_whitelist_warning_body">Сейчас у сети есть обычный доступ в интернет. Этот сервер предназначен для обхода белых списков оператора. Всё равно подключиться?</string>
     <string name="lte_whitelist_connect_anyway">Подключиться</string>
@@ -87,6 +88,9 @@
     <string name="profile_offline_description">Зашифрованный профиль доступен до окончания подписки. Войдите, чтобы синхронизировать изменения аккаунта.</string>
     <string name="profile_subscription">Подписка</string>
     <string name="profile_plan">Тариф</string>
+    <string name="profile_whitelist_bypass">Обход белых списков</string>
+    <string name="profile_whitelist_bypass_included">Входит в тариф</string>
+    <string name="profile_whitelist_bypass_not_included">Не входит в тариф</string>
     <string name="profile_status">Статус</string>
     <string name="profile_expires">Действует до</string>
     <string name="profile_local_plan">Зашифрованный профиль на устройстве</string>

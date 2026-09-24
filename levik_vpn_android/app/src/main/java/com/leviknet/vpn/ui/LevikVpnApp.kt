@@ -1557,6 +1557,10 @@ private fun HomeScreen(
         selectedServer?.isMobileServer() == true
     val account = state.account
     val trialAvailable = account?.trial?.eligible == true
+    val activeSubscriptions = account?.subscriptions.orEmpty().filter { it.isActiveAt(Instant.now()) }
+    val currentSubscriptionId = state.profile?.subscriptionId ?: state.selectedSubscriptionId
+    val currentSubscription = activeSubscriptions.firstOrNull { it.uuid == currentSubscriptionId }
+        ?: activeSubscriptions.singleOrNull()
 
     Column(
         modifier = modifier
@@ -1612,7 +1616,13 @@ private fun HomeScreen(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        text = stringResource(R.string.whitelist_active_banner),
+                        text = stringResource(
+                            if (currentSubscription?.capabilities?.whitelistRelay == false) {
+                                R.string.whitelist_plan_unsupported_banner
+                            } else {
+                                R.string.whitelist_active_banner
+                            },
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -5942,6 +5952,18 @@ private fun SubscriptionCard(
                         stringResource(R.string.not_available)
                     },
             )
+            subscription?.let {
+                ProfileLine(
+                    label = stringResource(R.string.profile_whitelist_bypass),
+                    value = stringResource(
+                        if (it.capabilities.whitelistRelay) {
+                            R.string.profile_whitelist_bypass_included
+                        } else {
+                            R.string.profile_whitelist_bypass_not_included
+                        },
+                    ),
+                )
+            }
             ProfileLine(
                 label = stringResource(R.string.profile_status),
                 value = when {

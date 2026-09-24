@@ -69,6 +69,7 @@
     <string name="server_ping_checking_short">…</string>
     <string name="server_ping_unavailable">Could not measure server latency. The previous available server was kept.</string>
     <string name="whitelist_active_banner">Allow-list mode is active — choose a server from the Allow-list category.</string>
+    <string name="whitelist_plan_unsupported_banner">Allow-list restrictions were detected on your mobile network. Your current plan does not include bypassing them, so the regular VPN may not connect.</string>
     <string name="lte_whitelist_warning_title">Allow-list mode not detected</string>
     <string name="lte_whitelist_warning_body">Your network currently has normal internet access. This server is intended for bypassing provider allow-list restrictions. Connect anyway?</string>
     <string name="lte_whitelist_connect_anyway">Connect</string>
@@ -87,6 +88,9 @@
     <string name="profile_offline_description">Your encrypted profile remains available until the subscription expires. Sign in to sync account changes.</string>
     <string name="profile_subscription">Subscription</string>
     <string name="profile_plan">Plan</string>
+    <string name="profile_whitelist_bypass">Allow-list bypass</string>
+    <string name="profile_whitelist_bypass_included">Included in plan</string>
+    <string name="profile_whitelist_bypass_not_included">Not included in plan</string>
     <string name="profile_status">Status</string>
     <string name="profile_expires">Valid until</string>
     <string name="profile_local_plan">Encrypted on-device profile</string>
