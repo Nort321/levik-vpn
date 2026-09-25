@@ -84,7 +84,7 @@ func newTestSocksServer(t *testing.T) *levikSocksServer {
 	return server
 }
 
-func authenticatedTestUDPAssociation(t *testing.T, server *levikSocksServer, udpClient *net.UDPConn) *net.UDPAddr {
+func authenticatedTestUDPAssociation(t *testing.T, server *levikSocksServer) *net.UDPAddr {
 	t.Helper()
 	client, err := net.DialTCP("tcp4", nil, server.listener.Addr().(*net.TCPAddr))
 	if err != nil {
@@ -112,8 +112,8 @@ func authenticatedTestUDPAssociation(t *testing.T, server *levikSocksServer, udp
 	auth = append(auth, byte(len(server.password)))
 	auth = append(auth, server.password...)
 	exchange(auth, []byte{1, 0})
-	request := testUDPHeader(udpClient.LocalAddr().(*net.UDPAddr))
-	request[0], request[1] = socksVersion, socksCommandUDP
+	// Xray requests UDP ASSOCIATE with an unspecified client address and port.
+	request := []byte{socksVersion, socksCommandUDP, 0, socksAddressIPv4, 0, 0, 0, 0, 0, 0}
 	exchange(request, []byte{socksVersion, socksReplyOK, 0, socksAddressIPv4})
 	address := make([]byte, 6)
 	if _, err := io.ReadFull(client, address); err != nil {
@@ -184,8 +184,8 @@ func TestSocksUDPAuthenticatedAssociationsConcurrentDNS(t *testing.T) {
 	server := newTestSocksServer(t)
 	clients := []*net.UDPConn{listenTestUDP(t), listenTestUDP(t)}
 	associations := []*net.UDPAddr{
-		authenticatedTestUDPAssociation(t, server, clients[0]),
-		authenticatedTestUDPAssociation(t, server, clients[1]),
+		authenticatedTestUDPAssociation(t, server),
+		authenticatedTestUDPAssociation(t, server),
 	}
 	if associations[0].String() == associations[1].String() {
 		t.Fatal("authenticated clients unexpectedly share an association")

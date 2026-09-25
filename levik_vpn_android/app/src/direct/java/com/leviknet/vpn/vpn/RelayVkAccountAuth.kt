@@ -7,10 +7,13 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
+import android.net.ConnectivityManager
+import android.net.Network
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.Gravity
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -36,11 +39,17 @@ import org.json.JSONObject
 internal class AndroidRelayVkTurnProvider(
     private val context: Context?,
 ) : RelayVkTurnProvider {
-    override fun obtain(hash: String): RelayTurnCredentials {
+    override fun obtain(hash: String, network: Network): RelayTurnCredentials {
         val appContext = context ?: throw IllegalStateException("VK auth context unavailable")
-        return RelayVkAuthCoordinator.obtain(appContext, hash)
+        return RelayVkAuthCoordinator.obtain(appContext, hash, network)
     }
 }
+
+private data class CachedVkAuth(
+    val hash: String,
+    val credentials: RelayTurnCredentials,
+    val expiresAtElapsedMs: Long,
+)
 
 private data class PendingVkAuth(
     val hash: String,
@@ -54,13 +63,23 @@ internal object RelayVkAuthCoordinator {
     private const val CHANNEL_ID = "relay_vk_auth"
     private const val NOTIFICATION_ID = 0x4c56
     private const val WAIT_SECONDS = 285L
+    private const val CACHE_LIFETIME_MS = 2 * 60_000L
     private val pending = AtomicReference<PendingVkAuth?>(null)
+    private val cached = AtomicReference<CachedVkAuth?>(null)
 
-    fun obtain(context: Context, hash: String): RelayTurnCredentials {
+    fun obtain(context: Context, hash: String, network: Network): RelayTurnCredentials {
         require(hash.matches(Regex("^[A-Za-z0-9_-]{16,256}$")))
+        cached.get()?.takeIf {
+            it.hash == hash && SystemClock.elapsedRealtime() < it.expiresAtElapsedMs
+        }?.let { return it.credentials }
+        val connectivity = context.getSystemService(ConnectivityManager::class.java)
+            ?: throw IllegalStateException("Connectivity service unavailable")
+        val previousNetwork = connectivity.boundNetworkForProcess
         val request = PendingVkAuth(hash)
         check(pending.compareAndSet(null, request)) { "VK auth is already active" }
         try {
+            // Authentication must remain reachable while the VPN core is stopped for handoff.
+            check(connectivity.bindProcessToNetwork(network)) { "Unable to bind VK auth to the underlying network" }
             showNotification(context)
             context.startActivity(
                 Intent(context, RelayVkAuthActivity::class.java).apply {
@@ -71,9 +90,14 @@ internal object RelayVkAuthCoordinator {
                 throw IllegalStateException("VK auth timed out")
             }
             request.failure.get()?.let { throw it }
-            return request.credentials.get()
+            val credentials = request.credentials.get()
                 ?: throw IllegalStateException("VK auth returned no credentials")
+            cached.set(CachedVkAuth(hash, credentials, SystemClock.elapsedRealtime() + CACHE_LIFETIME_MS))
+            return credentials
         } finally {
+            if (!connectivity.bindProcessToNetwork(previousNetwork)) {
+                connectivity.bindProcessToNetwork(null)
+            }
             pending.compareAndSet(request, null)
             context.getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
         }

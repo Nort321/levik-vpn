@@ -205,7 +205,7 @@ func (server *levikSocksServer) handleClient(client *net.TCPConn) {
 		header[0] != socksVersion || header[2] != 0 {
 		return
 	}
-	target, _, err := readSocksAddress(reader, header[3])
+	target, _, err := readSocksAddress(reader, header[3], header[1] == socksCommandUDP)
 	if err != nil {
 		_ = writeSocksReply(client, socksReplyFailure, 0)
 		return
@@ -527,7 +527,7 @@ func (association *socksUDPAssociation) close() {
 	}
 }
 
-func readSocksAddress(reader io.Reader, addressType byte) (string, []byte, error) {
+func readSocksAddress(reader io.Reader, addressType byte, allowZeroPort bool) (string, []byte, error) {
 	address := []byte{addressType}
 	var host string
 	switch addressType {
@@ -561,7 +561,7 @@ func readSocksAddress(reader io.Reader, addressType byte) (string, []byte, error
 		return "", nil, err
 	}
 	port := int(binary.BigEndian.Uint16(portBytes))
-	if port == 0 || host == "" {
+	if (port == 0 && !allowZeroPort) || host == "" {
 		return "", nil, errors.New("invalid SOCKS target")
 	}
 	address = append(address, portBytes...)
@@ -573,7 +573,7 @@ func parseSocksUDPPacket(packet []byte) (string, int, []byte, error) {
 		return "", 0, nil, errors.New("invalid SOCKS UDP packet")
 	}
 	reader := &byteReader{data: packet[4:]}
-	target, address, err := readSocksAddress(reader, packet[3])
+	target, address, err := readSocksAddress(reader, packet[3], false)
 	if err != nil {
 		return "", 0, nil, err
 	}

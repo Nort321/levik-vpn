@@ -971,52 +971,44 @@ class LevikVpnService : VpnService() {
     private fun onNetworkAvailable(network: Network) {
         if (destroyed.get()) return
         scheduleMobilePolicyEvaluation(network)
-        serviceScope.launch {
-            connectionMutex.withLock {
-                if (destroyed.get()) return@withLock
-                if (!coreRunning || currentNetwork == network) return@withLock
-                val server = currentServer ?: return@withLock
-                if (!networkMonitor.isCompatible(network, server.networkRequirement)) {
-                    return@withLock
-                }
-                val previous = currentNetwork
-                if (previous != null &&
-                    networkMonitor.preference(network) <= networkMonitor.preference(previous)
-                ) {
-                    return@withLock
-                }
-                if (!setUnderlyingNetworks(arrayOf(network))) return@withLock
-                currentNetwork = network
-                underlyingNetwork.set(network)
-                tunnelHealthPolicy.onUnderlyingNetworkChanged(SystemClock.elapsedRealtime())
-                AppLogger.i(LOG_TAG, "Underlying network changed, triggering seamless reconnect")
-                scheduleReconnectLocked()
-            }
-        }
+        handleUnderlyingNetworkChange()
     }
 
     private fun onNetworkLost(network: Network) {
         if (destroyed.get()) return
         scheduleMobilePolicyEvaluation(networkMonitor.activeNetwork())
+        handleUnderlyingNetworkChange()
+    }
+
+    private fun handleUnderlyingNetworkChange() {
         serviceScope.launch {
+            val requirement = currentServer?.networkRequirement ?: return@launch
+            val selected = networkMonitor.activeNetwork(requirement)
+            if (selected == currentNetwork && (coreRunning || reconnectJob?.isActive == true)) {
+                return@launch
+            }
+            // Interrupt an in-flight handshake before waiting for the connection lock. Otherwise
+            // a lost Wi-Fi network can leave the old handshake blocking the LTE callback.
+            reconnectJob?.cancel()
+            if (!coreRunning) {
+                currentEngine?.stop(coreOwner, null)
+            }
             connectionMutex.withLock {
                 if (destroyed.get()) return@withLock
-                if (!coreRunning || currentNetwork != network) return@withLock
-                val requirement = currentServer?.networkRequirement ?: TunnelNetworkRequirement.ANY
-                val replacement = networkMonitor.activeNetwork(requirement)?.takeIf { it != network }
-                if (replacement != null && setUnderlyingNetworks(arrayOf(replacement))) {
-                    currentNetwork = replacement
-                    underlyingNetwork.set(replacement)
-                    tunnelHealthPolicy.onUnderlyingNetworkChanged(SystemClock.elapsedRealtime())
-                    AppLogger.i(LOG_TAG, "Underlying network lost, switched to fallback network")
+                val server = currentServer ?: return@withLock
+                val replacement = networkMonitor.activeNetwork(server.networkRequirement)
+                if (replacement == currentNetwork && coreRunning) return@withLock
+                if (replacement != null && !setUnderlyingNetworks(arrayOf(replacement))) {
+                    return@withLock
+                }
+                currentNetwork = replacement
+                underlyingNetwork.set(replacement)
+                tunnelHealthPolicy.onUnderlyingNetworkChanged(SystemClock.elapsedRealtime())
+                if (replacement != null) {
+                    AppLogger.i(LOG_TAG, "Underlying network changed, triggering reconnect")
                     scheduleReconnectLocked()
                     return@withLock
                 }
-                currentNetwork = null
-                underlyingNetwork.set(null)
-                tunnelHealthPolicy.onUnderlyingNetworkChanged(SystemClock.elapsedRealtime())
-                reconnectJob?.cancel()
-                reconnectJob = null
                 VpnStateStore.update(coreOwner) { state ->
                     state.copy(
                         state = VpnConnectionState.RECONNECTING,
@@ -1044,11 +1036,11 @@ class LevikVpnService : VpnService() {
         reconnectJob = serviceScope.launch {
             delay(RECONNECT_DEBOUNCE_MS)
             connectionMutex.withLock {
-                if (!coreRunning) return@withLock
+                if (!coreRunning && tunInterface == null) return@withLock
                 val request = currentEngineRequest ?: return@withLock
                 val engine = currentEngine ?: return@withLock
                 val server = currentServer ?: return@withLock
-                val previousPrepared = currentPreparedSession ?: return@withLock
+                val previousPrepared = currentPreparedSession
                 VpnStateStore.update(coreOwner) {
                     it.copy(state = VpnConnectionState.RECONNECTING)
                 }
@@ -1098,7 +1090,11 @@ class LevikVpnService : VpnService() {
                     }
                     val previousTun = tunInterface
                         ?: throw NetworkSetupException("VPN interface is unavailable")
-                    val activeTun = if (prepared.tunPlan == previousPrepared.tunPlan) {
+                    val previousTunPlan = previousPrepared?.tunPlan ?: when (request) {
+                        is TunnelEngineRequest.Xray -> request.tunPlan
+                        is TunnelEngineRequest.Relay -> request.tunPlan
+                    }
+                    val activeTun = if (prepared.tunPlan == previousTunPlan) {
                         previousTun
                     } else {
                         val replacement = establishTun(
@@ -1145,6 +1141,12 @@ class LevikVpnService : VpnService() {
                         return@withLock
                     }
                     AppLogger.i(LOG_TAG, "VPN successfully reconnected")
+                } catch (error: CancellationException) {
+                    engine.stop(coreOwner, currentPreparedSession, coreLease)
+                    coreRunning = false
+                    coreLease = null
+                    currentPreparedSession = null
+                    throw error
                 } catch (error: Throwable) {
                     coreRunning = false
                     networkMonitor.stop(releaseCellular = false)

@@ -2,6 +2,7 @@ package com.leviknet.vpn.vpn
 
 import android.net.LocalSocket
 import android.net.LocalSocketAddress
+import android.net.Network
 import android.os.Process
 import android.os.SystemClock
 import android.system.ErrnoException
@@ -40,7 +41,7 @@ internal fun interface RelayNativeSessionFactory {
 }
 
 internal fun interface RelayVkTurnProvider {
-    fun obtain(hash: String): RelayTurnCredentials
+    fun obtain(hash: String, network: Network): RelayTurnCredentials
 }
 
 internal interface RelayNativeSession {
@@ -250,6 +251,7 @@ private class AndroidRelayNativeSession(
     private val codec = RelayControlCodec()
     private val stateMachine = RelayControlStateMachine(codec)
     private val stopping = AtomicBoolean(false)
+    private val authenticating = AtomicBoolean(false)
     private val closed = AtomicBoolean(false)
     private val backgroundFailure = AtomicReference<TunnelEngineFailureException?>(null)
     private val controlWriteLock = Any()
@@ -364,6 +366,7 @@ private class AndroidRelayNativeSession(
 
     override fun stop() {
         if (!stopping.compareAndSet(false, true)) return
+        if (authenticating.get()) RelayVkAuthCoordinator.cancel("Relay session stopped")
         val sendStop = runCatching { stateMachine.beginStop() }.getOrDefault(false)
         if (sendStop) {
             runCatching { writeControl(codec.encodeStop()) }
@@ -610,10 +613,16 @@ private class AndroidRelayNativeSession(
     }
 
     private fun provideVkCredentials(request: RelayVkAuthRequest) {
+        authenticating.set(true)
         val credentials = try {
-            vkTurnProvider.obtain(request.hash)
+            vkTurnProvider.obtain(
+                request.hash,
+                environment.network ?: engineFailure("relay_network_required"),
+            )
         } catch (_: Throwable) {
             engineFailure("relay_vk_auth_failed")
+        } finally {
+            authenticating.set(false)
         }
         writeControl(codec.encodeTurnCredentials(request, credentials))
     }
