@@ -65,6 +65,45 @@ class XrayConfigBuilderTest {
     }
 
     @Test
+    fun `enables mux only for the alternate XHTTP domain`() {
+        fun xhttpServer(id: String, tag: String, address: String): TunnelServer =
+            server(id, tag).copy(outbound = buildJsonObject {
+                put("protocol", "vless")
+                put("tag", tag)
+                put("settings", buildJsonObject {
+                    put("vnext", kotlinx.serialization.json.buildJsonArray {
+                        add(buildJsonObject {
+                            put("address", address)
+                            put("port", 443)
+                        })
+                    })
+                })
+                put("streamSettings", buildJsonObject {
+                    put("network", "xhttp")
+                    put("xhttpSettings", buildJsonObject { put("path", "/api/getFile/") })
+                })
+            })
+        val alternate = xhttpServer("a".repeat(64), "alternate", "leva.levikfartik.ru")
+        val yandex = xhttpServer("b".repeat(64), "yandex", "levik.levikfartik.ru")
+        val profile = PreparedTunnelProfile(
+            version = 1, profileId = "profile", subscriptionId = "subscription",
+            issuedAt = "2026-07-29T11:59:00Z", servers = listOf(alternate, yandex),
+        )
+
+        val outbounds = json.parseToJsonElement(builder.build(profile, alternate.id, 42))
+            .jsonObject.getValue("outbounds").jsonArray
+        val alternateOutbound = outbounds[0].jsonObject
+        val yandexOutbound = outbounds[1].jsonObject
+        assertEquals("leva.levikfartik.ru", alternateOutbound.getValue("settings").jsonObject
+            .getValue("vnext").jsonArray.single().jsonObject.getValue("address").jsonPrimitive.content)
+        assertEquals("1", alternateOutbound.getValue("mux").jsonObject
+            .getValue("concurrency").jsonPrimitive.content)
+        assertTrue(alternateOutbound.getValue("mux").jsonObject
+            .getValue("enabled").jsonPrimitive.content.toBoolean())
+        assertFalse("mux" in yandexOutbound)
+    }
+
+    @Test
     fun `routes Russian domains and addresses directly when bypass is enabled`() {
         val selected = server("b".repeat(64), "server-b")
         val profile = PreparedTunnelProfile(

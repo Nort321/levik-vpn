@@ -105,7 +105,7 @@ class XrayConfigBuilder(
 
         val orderedServers = (listOf(selected) + xrayServers.filterNot { it.id == selected.id })
             .map { server ->
-                var repairedOutbound = RealityRepair.repair(server.outbound)
+                var repairedOutbound = enableAlternateXhttpMux(RealityRepair.repair(server.outbound))
                 if (antiDpiEnabled) {
                     repairedOutbound = injectFragmentDialer(repairedOutbound)
                 }
@@ -358,6 +358,32 @@ class XrayConfigBuilder(
             })
         }
         return json.encodeToString(JsonObject.serializer(), config)
+    }
+
+    private fun enableAlternateXhttpMux(outbound: JsonObject): JsonObject {
+        if ("mux" in outbound ||
+            (outbound["protocol"] as? JsonPrimitive)?.contentOrNull != "vless"
+        ) return outbound
+
+        val stream = outbound["streamSettings"] as? JsonObject ?: return outbound
+        val network = (stream["network"] as? JsonPrimitive)?.contentOrNull?.lowercase()
+        if (network != "xhttp" && network != "splithttp") return outbound
+
+        val settings = outbound["settings"] as? JsonObject ?: return outbound
+        val servers = settings["vnext"] as? JsonArray ?: return outbound
+        if (servers.isEmpty() || servers.any { server ->
+                val address = ((server as? JsonObject)?.get("address") as? JsonPrimitive)?.contentOrNull
+                address?.equals("leva.levikfartik.ru", ignoreCase = true) != true
+            }
+        ) return outbound
+
+        return buildJsonObject {
+            outbound.forEach { (key, value) -> put(key, value) }
+            put("mux", buildJsonObject {
+                put("enabled", true)
+                put("concurrency", 1)
+            })
+        }
     }
 
     private fun injectFragmentDialer(outbound: JsonObject): JsonObject {
