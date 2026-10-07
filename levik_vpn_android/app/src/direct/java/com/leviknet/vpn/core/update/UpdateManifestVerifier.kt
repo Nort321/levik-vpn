@@ -203,7 +203,7 @@ internal class UpdateManifestVerifier(
                 .removePrefix(DIRECT_RELEASE_PATH_PREFIX)
                 .split('/')
             val valid = uri.scheme == "https" &&
-                uri.host == DIRECT_RELEASE_HOST &&
+                uri.host in DIRECT_RELEASE_HOSTS &&
                 uri.port in setOf(-1, 443) &&
                 uri.rawUserInfo == null &&
                 uri.rawQuery == null &&
@@ -251,7 +251,7 @@ internal class UpdateManifestVerifier(
                 params.cofactor == expected.cofactor
         }
 
-        private const val DIRECT_RELEASE_HOST = "leviknet.com"
+        private val DIRECT_RELEASE_HOSTS = setOf("leviknet.com", "leviknet.org")
         private const val DIRECT_RELEASE_PATH_PREFIX = "/downloads/android/stable/"
         private val SAFE_RELEASE_PATH_SEGMENT = Regex("^[A-Za-z0-9._+-]+$")
         private val DOT_SEGMENTS = setOf(".", "..")

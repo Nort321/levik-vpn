@@ -28,7 +28,7 @@ class SupportNotificationManagerTest {
         subject = "Help with connection",
         messageSnippet = "Our team has resolved the issue.",
         createdAt = "2026-09-12T12:00:00Z",
-        ticketUrl = "https://leviknet.com/dashboard/support/tick-456",
+        ticketUrl = "https://leviknet.org/dashboard/support/tick-456",
     )
 
     @Test
@@ -88,11 +88,11 @@ class SupportNotificationManagerTest {
     @Test
     fun `resolveSupportUrl returns payload ticketUrl when present and non-blank`() {
         val replyWithCustomUrl = sampleReply.copy(
-            ticketUrl = "https://leviknet.com/dashboard/support/tickets/456",
+            ticketUrl = "https://leviknet.org/dashboard/support/tickets/456",
         )
 
         assertEquals(
-            "https://leviknet.com/dashboard/support/tickets/456",
+            "https://leviknet.org/dashboard/support/tickets/456",
             SupportNotificationManager.resolveSupportUrl(replyWithCustomUrl),
         )
     }
@@ -132,7 +132,7 @@ class SupportNotificationManagerTest {
                         "subject": "DNS leak check",
                         "messageSnippet": "Everything is secured.",
                         "createdAt": "2026-09-12T14:30:00Z",
-                        "ticketUrl": "https://leviknet.com/dashboard/support/t-101"
+                        "ticketUrl": "https://leviknet.org/dashboard/support/t-101"
                     }
                 }
             }
@@ -149,7 +149,7 @@ class SupportNotificationManagerTest {
         assertEquals("REF-101", support?.latestReply?.reference)
         assertEquals("DNS leak check", support?.latestReply?.subject)
         assertEquals("Everything is secured.", support?.latestReply?.messageSnippet)
-        assertEquals("https://leviknet.com/dashboard/support/t-101", support?.latestReply?.ticketUrl)
+        assertEquals("https://leviknet.org/dashboard/support/t-101", support?.latestReply?.ticketUrl)
     }
 
     @Test
@@ -192,6 +192,6 @@ class SupportNotificationManagerTest {
     fun `channel and notification constants match requirements`() {
         assertEquals("levik_support_alerts", SupportNotificationManager.CHANNEL_ID)
         assertEquals(2005, SupportNotificationManager.NOTIFICATION_ID)
-        assertEquals("https://leviknet.com/dashboard/support", SupportNotificationManager.DEFAULT_SUPPORT_URL)
+        assertEquals("https://leviknet.org/dashboard/support", SupportNotificationManager.DEFAULT_SUPPORT_URL)
     }
 }

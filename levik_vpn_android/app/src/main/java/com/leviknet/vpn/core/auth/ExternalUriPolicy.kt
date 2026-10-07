@@ -5,13 +5,12 @@ import java.util.Locale
 
 internal object ExternalUriPolicy {
     private const val TELEGRAM_HOST = "t.me"
-    private const val LEVIKNET_HOST = "leviknet.com"
+    private val LEVIKNET_HOSTS = setOf("leviknet.com", "leviknet.org")
 
     fun isAllowedHttpsHost(host: String): Boolean {
         val normalizedHost = host.lowercase(Locale.ROOT)
         return normalizedHost == TELEGRAM_HOST ||
-            normalizedHost == LEVIKNET_HOST ||
-            normalizedHost.endsWith(".$LEVIKNET_HOST")
+            LEVIKNET_HOSTS.any { normalizedHost == it || normalizedHost.endsWith(".$it") }
     }
 
     // Payment effects are emitted only from authenticated mobile API responses.

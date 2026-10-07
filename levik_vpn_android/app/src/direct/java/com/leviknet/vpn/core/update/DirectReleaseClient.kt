@@ -195,7 +195,7 @@ internal class DirectReleaseClient(
                 url = RELEASE_FEED_URL,
                 headers = mapOf("Accept" to JSON_ACCEPT),
                 maxBytes = MAX_RELEASE_RESPONSE_BYTES,
-                allowedHosts = setOf(RELEASE_HOST),
+                allowedHosts = RELEASE_HOSTS,
                 allowRedirects = false,
             )
             if (response.statusCode != HttpURLConnection.HTTP_OK) {
@@ -210,7 +210,7 @@ internal class DirectReleaseClient(
                 url = RELEASE_FEED_SIGNATURE_URL,
                 headers = mapOf("Accept" to "application/octet-stream"),
                 maxBytes = UpdateManifestVerifier.MAX_SIGNATURE_FILE_BYTES,
-                allowedHosts = setOf(RELEASE_HOST),
+                allowedHosts = RELEASE_HOSTS,
                 allowRedirects = false,
             )
             if (signatureResponse.statusCode != HttpURLConnection.HTTP_OK) {
@@ -252,7 +252,7 @@ internal class DirectReleaseClient(
             url = url,
             headers = mapOf("Accept" to "application/octet-stream"),
             maxBytes = maxBytes,
-            allowedHosts = setOf(RELEASE_HOST),
+            allowedHosts = RELEASE_HOSTS,
             allowRedirects = false,
         )
         if (response.statusCode !in 200..299) {
@@ -272,7 +272,7 @@ internal class DirectReleaseClient(
         onProgress: (downloadedBytes: Long) -> Unit,
     ) {
         UpdateManifestVerifier.requireDirectReleaseAssetUrl(url, expectedSuffix = ".apk")
-        var current = URI(url)
+        var current = mirrorUri(URI(url))
         repeat(MAX_REDIRECTS + 1) { redirectCount ->
             if (!isAllowedApkDownloadUri(current)) {
                 throw IOException("APK download origin is not allowed")
@@ -356,7 +356,7 @@ internal class DirectReleaseClient(
         allowedHosts: Set<String>,
         allowRedirects: Boolean,
     ): HttpResponse {
-        var current = URI(url)
+        var current = mirrorUri(URI(url))
         repeat(MAX_REDIRECTS + 1) { redirectCount ->
             validateHttpsOrigin(current, allowedHosts)
             val connection = (URL(current.toASCIIString()).openConnection() as HttpURLConnection).apply {
@@ -477,13 +477,18 @@ internal class DirectReleaseClient(
 
     companion object {
         const val RELEASE_FEED_URL =
-            "https://leviknet.com/downloads/android/stable/latest.json"
+            "https://leviknet.org/downloads/android/stable/latest.json"
         const val RELEASE_FEED_SIGNATURE_URL =
-            "https://leviknet.com/downloads/android/stable/latest.json.sig"
+            "https://leviknet.org/downloads/android/stable/latest.json.sig"
         const val MANIFEST_ASSET_NAME = "update.json"
         const val SIGNATURE_ASSET_NAME = "update.json.sig"
 
-        private const val RELEASE_HOST = "leviknet.com"
+        private val RELEASE_HOSTS = setOf("leviknet.com", "leviknet.org")
+        internal fun mirrorUri(uri: URI): URI = if (uri.host == "leviknet.com" &&
+            uri.scheme == "https" && uri.port in setOf(-1, 443) && uri.rawUserInfo == null &&
+            uri.rawQuery == null && uri.rawFragment == null && uri.rawPath.startsWith("/downloads/android/stable/")) {
+            URI("https://leviknet.org${uri.rawPath}")
+        } else uri
         internal fun isAllowedApkDownloadUri(uri: URI): Boolean {
             val hasValidOrigin = uri.scheme == "https" &&
                 uri.port in setOf(-1, 443) &&
@@ -492,7 +497,7 @@ internal class DirectReleaseClient(
             if (!hasValidOrigin) return false
 
             return when (uri.host) {
-                RELEASE_HOST -> uri.rawQuery == null &&
+                in RELEASE_HOSTS -> uri.rawQuery == null &&
                     uri.rawPath.startsWith("/downloads/android/stable/") &&
                     uri.rawPath.endsWith(".apk")
                 "github.com" -> uri.rawQuery == null &&

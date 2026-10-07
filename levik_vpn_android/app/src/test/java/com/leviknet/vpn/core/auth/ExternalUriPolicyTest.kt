@@ -9,6 +9,8 @@ class ExternalUriPolicyTest {
     fun `allows only telegram and correctly bounded leviknet hosts`() {
         assertTrue(ExternalUriPolicy.isAllowedHttpsHost("t.me"))
         assertTrue(ExternalUriPolicy.isAllowedHttpsHost("leviknet.com"))
+        assertTrue(ExternalUriPolicy.isAllowedHttpsHost("leviknet.org"))
+        assertFalse(ExternalUriPolicy.isAllowedHttpsHost("leviknet.org.evil.test"))
         assertTrue(ExternalUriPolicy.isAllowedHttpsHost("account.leviknet.com"))
         assertTrue(ExternalUriPolicy.isAllowedHttpsHost("ACCOUNT.LEVIKNET.COM"))
 

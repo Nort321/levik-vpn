@@ -96,7 +96,7 @@ class WhitelistMapReporter(context: Context, private val settings: AppSettings) 
     private suspend fun request(path: String, network: Network?, body: String?): String? {
         currentCoroutineContext().ensureActive()
         if (!settings.whitelistMapEnabled.value) return null
-        val url = URL("https://leviknet.com/api/whitelist/$path")
+        val url = URL("https://leviknet.org/api/whitelist/$path")
         val connection = (network?.openConnection(url, Proxy.NO_PROXY) ?: url.openConnection(Proxy.NO_PROXY)) as HttpURLConnection
         try {
             connection.apply {

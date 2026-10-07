@@ -6,6 +6,12 @@ import org.junit.Test
 
 class DeepLinkRouterTest {
     @Test
+    fun `new domain preserves legacy activation support`() {
+        assertEquals(DeepLinkDestination.ACTIVATION, DeepLinkRouter.route("https://leviknet.org/activate?code=Abc_1234-xyz"))
+        assertNull(DeepLinkRouter.route("https://leviknet.org.evil.test/activate?code=Abc_1234-xyz"))
+    }
+
+    @Test
     fun `accepts only bounded activation code on canonical https route`() {
         assertEquals(
             DeepLinkDestination.ACTIVATION,

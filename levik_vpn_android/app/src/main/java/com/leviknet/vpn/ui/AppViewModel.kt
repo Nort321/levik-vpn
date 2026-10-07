@@ -2092,7 +2092,7 @@ class AppViewModel(
 
     fun openWhitelistMap() {
         viewModelScope.launch {
-            effectChannel.send(AppEffect.OpenExternal("https://leviknet.com/whitelist-map"))
+            effectChannel.send(AppEffect.OpenExternal("https://leviknet.org/whitelist-map"))
         }
     }
 
@@ -2202,8 +2202,8 @@ class AppViewModel(
         )
         private const val SUPPORT_URL = "https://t.me/leviksupportbot"
         private const val FREE_PROXY_BOT_URL = "https://t.me/levikvpnbot"
-        private const val ACCOUNT_DELETION_URL = "https://leviknet.com/account/delete"
-        private const val PRIVACY_POLICY_URL = "https://leviknet.com/legal/privacy"
+        private const val ACCOUNT_DELETION_URL = "https://leviknet.org/account/delete"
+        private const val PRIVACY_POLICY_URL = "https://leviknet.org/legal/privacy"
         private val ACTIVE_TUNNEL_STATES = setOf(
             VpnConnectionState.CONNECTED,
             VpnConnectionState.CONNECTING,

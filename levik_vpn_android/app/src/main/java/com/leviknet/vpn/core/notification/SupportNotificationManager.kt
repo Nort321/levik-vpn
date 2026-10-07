@@ -17,7 +17,7 @@ import com.leviknet.vpn.data.AppSettings
 object SupportNotificationManager {
     const val CHANNEL_ID = "levik_support_alerts"
     const val NOTIFICATION_ID = 2005
-    const val DEFAULT_SUPPORT_URL = "https://leviknet.com/dashboard/support"
+    const val DEFAULT_SUPPORT_URL = "https://leviknet.org/dashboard/support"
     private const val LOG_TAG = "SupportNotifManager"
 
     fun ensureChannel(context: Context) {

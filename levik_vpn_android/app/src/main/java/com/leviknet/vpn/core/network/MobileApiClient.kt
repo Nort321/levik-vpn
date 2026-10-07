@@ -20,13 +20,7 @@ class MobileApiClient(
     private val requireAttestation: Boolean,
     private val json: Json,
 ) {
-    private val origin = URL(baseUrl).also { parsed ->
-        require(parsed.protocol == "https") { "Mobile API requires HTTPS" }
-        require(parsed.host.isNotBlank()) { "Mobile API host is required" }
-        require(parsed.path.isEmpty() || parsed.path == "/") {
-            "Mobile API base URL must not contain a path"
-        }
-    }
+    private val endpoints = ApiEndpoints(baseUrl)
 
     suspend fun createChallenge(request: AuthChallengeRequest): AuthChallengeResponse {
         val response = post<AuthChallengeRequest, AuthChallengeResponse>(
@@ -278,6 +272,7 @@ class MobileApiClient(
         accessToken: String?,
         requiresIntegrity: Boolean,
     ): Response = withContext(Dispatchers.IO) {
+        val origin = try { endpoints.resolve() } catch (error: IOException) { throw ApiException.Network(error) }
         val url = URL(origin, path)
         require(url.protocol == origin.protocol && url.host == origin.host && url.port == origin.port) {
             "Cross-origin mobile API request is not allowed"
@@ -326,6 +321,7 @@ class MobileApiClient(
                 }
             }
         } catch (error: IOException) {
+            endpoints.invalidate()
             throw ApiException.Network(error)
         }
 
@@ -379,6 +375,7 @@ class MobileApiClient(
         } catch (error: ApiException) {
             throw error
         } catch (error: IOException) {
+            endpoints.invalidate()
             throw ApiException.Network(error)
         } finally {
             connection.disconnect()

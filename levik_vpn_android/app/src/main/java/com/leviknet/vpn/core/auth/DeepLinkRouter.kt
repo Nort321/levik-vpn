@@ -10,7 +10,7 @@ internal enum class DeepLinkDestination {
 }
 
 internal object DeepLinkRouter {
-    private const val ACTIVATION_HOST = "leviknet.com"
+    private val ACTIVATION_HOSTS = setOf("leviknet.com", "leviknet.org")
     private const val ACTIVATION_PATH = "/activate"
     private const val MAX_URI_LENGTH = 2_048
     private const val MAX_RAW_QUERY_LENGTH = 1_024
@@ -36,7 +36,7 @@ internal object DeepLinkRouter {
         if (rawUri.length > MAX_URI_LENGTH) return null
         val uri = runCatching { URI(rawUri) }.getOrNull() ?: return null
         if (!uri.scheme.equals("https", ignoreCase = true)) return null
-        if (!uri.host.equals(ACTIVATION_HOST, ignoreCase = true)) return null
+        if (ACTIVATION_HOSTS.none { uri.host.equals(it, ignoreCase = true) }) return null
         if (uri.port != -1 || uri.rawUserInfo != null || uri.rawFragment != null) return null
         if (uri.rawPath != ACTIVATION_PATH) return null
 
