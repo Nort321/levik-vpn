@@ -4,6 +4,10 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application>
+        <!-- Lint inspects this flavor manifest before merging the main VPN declaration. -->
+        <service
+            android:name=".vpn.LevikVpnService"
+            android:foregroundServiceType="specialUse" />
         <service
             android:name=".vpn.YandexGuestRefreshService"
             android:process=":yandex_guest"
