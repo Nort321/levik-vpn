@@ -12,7 +12,7 @@ if [[ "$("${go_bin}" version)" != go\ version\ go1.26.8* ]]; then
   exit 1
 fi
 if [[ -z "${ndk_dir}" || ! -r "${ndk_dir}/source.properties" ]] ||
-  ! rg -q '^Pkg.Revision[[:space:]]*=[[:space:]]*29\.0\.14206865$' "${ndk_dir}/source.properties"; then
+  ! grep -Eq '^Pkg.Revision[[:space:]]*=[[:space:]]*29\.0\.14206865$' "${ndk_dir}/source.properties"; then
   printf 'ANDROID_NDK_HOME must point to Android NDK 29.0.14206865\n' >&2
   exit 1
 fi
@@ -41,13 +41,13 @@ build_abi() {
   elf_header="$("${readelf_bin}" -h "${destination}")"
   program_headers="$("${readelf_bin}" -lW "${destination}")"
   go_metadata="$("${go_bin}" version -m "${destination}")"
-  rg -q 'Type:[[:space:]]+DYN' <<<"${elf_header}"
-  rg -Fq "Requesting program interpreter: ${interpreter}" <<<"${program_headers}"
+  grep -Eq 'Type:[[:space:]]+DYN' <<<"${elf_header}"
+  grep -Fq "Requesting program interpreter: ${interpreter}" <<<"${program_headers}"
   if ! awk '/ LOAD / { seen=1; if ($NF != "0x4000") bad=1 } END { exit (!seen || bad) }' <<<"${program_headers}"; then
     printf 'Android helper does not have 16 KiB LOAD alignment\n' >&2
     exit 1
   fi
-  rg -Fq 'go1.26.8' <<<"${go_metadata}"
+  grep -Fq 'go1.26.8' <<<"${go_metadata}"
   printf 'built %s with Android API 26 compiler\n' "${destination}"
 }
 

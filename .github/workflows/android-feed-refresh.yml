@@ -99,10 +99,10 @@ jobs:
         shell: bash
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
-          DEPLOY_HOST: ${{ secrets.ANDROID_RELEASE_DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.ANDROID_RELEASE_DEPLOY_USER }}
-          DEPLOY_PRIVATE_KEY: ${{ secrets.ANDROID_RELEASE_DEPLOY_PRIVATE_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.ANDROID_RELEASE_DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ secrets.ANDROID_RELEASE_DEPLOY_HOST_V2 || secrets.ANDROID_RELEASE_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.ANDROID_RELEASE_DEPLOY_USER_V2 || secrets.ANDROID_RELEASE_DEPLOY_USER }}
+          DEPLOY_PRIVATE_KEY: ${{ secrets.ANDROID_RELEASE_DEPLOY_PRIVATE_KEY_V2 || secrets.ANDROID_RELEASE_DEPLOY_PRIVATE_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.ANDROID_RELEASE_DEPLOY_KNOWN_HOSTS_V2 || secrets.ANDROID_RELEASE_DEPLOY_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           readonly ssh_directory="${RUNNER_TEMP}/release-ssh"
