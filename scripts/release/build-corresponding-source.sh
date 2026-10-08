@@ -222,6 +222,7 @@ capture_go_module_graph() {
   local module_cache_destination="$3"
   local vendor_destination="$4"
   local inventory_destination="$5"
+  local go_command="${6:-go}"
   local private_module_cache="${TEMPORARY_DIRECTORY}/gomodcache-${graph_name}"
   local private_build_cache="${TEMPORARY_DIRECTORY}/gocache-${graph_name}"
   local raw_inventory="${TEMPORARY_DIRECTORY}/go-modules-${graph_name}.json"
@@ -241,12 +242,12 @@ capture_go_module_graph() {
     export GOCACHE="${private_build_cache}"
     export GOTOOLCHAIN=local
     export GOFLAGS=-mod=readonly
-    go mod download all
-    go mod verify
-    go list -mod=readonly -m -json all >"${raw_inventory}"
+    "${go_command}" mod download all
+    "${go_command}" mod verify
+    "${go_command}" list -mod=readonly -m -json all >"${raw_inventory}"
     # An output outside the module keeps the Git-archived source byte-for-byte exact.
     # Modules with no dependencies legitimately produce no vendor directory.
-    go mod vendor -o "${vendor_destination}"
+    "${go_command}" mod vendor -o "${vendor_destination}"
   )
   python3 - "${raw_inventory}" "${inventory_destination}" <<'PY'
 import json
@@ -339,6 +340,30 @@ capture_go_module_graph \
   "${MODULE_CACHE}/relay-node-agent" \
   "${VENDOR_SOURCE}/relay-node-agent" \
   "${EVIDENCE_DIRECTORY}/go-modules-relay-node-agent.json"
+
+readonly YANDEX_GO_COMMAND="${YANDEX_GO_BIN:?YANDEX_GO_BIN must identify Go 1.26.8}"
+if [[ "$("${YANDEX_GO_COMMAND}" env GOVERSION)" != "go1.26.8" ]]; then
+  printf 'ERROR: Yandex corresponding source requires Go 1.26.8.\n' >&2
+  exit 1
+fi
+capture_go_module_graph \
+  yandex-android-client \
+  "${APPLICATION_SOURCE}/levik_vpn_android/native/yandex/fork/openflux" \
+  "${MODULE_CACHE}/yandex-android-client" \
+  "${VENDOR_SOURCE}/yandex-android-client" \
+  "${EVIDENCE_DIRECTORY}/go-modules-yandex-android-client.json" \
+  "${YANDEX_GO_COMMAND}"
+
+for yandex_abi in arm64-v8a armeabi-v7a x86_64; do
+  yandex_library="${REPOSITORY_ROOT}/levik_vpn_android/native/yandex/build/android/jniLibs/${yandex_abi}/liblevikyandex.so"
+  if [[ ! -f "${yandex_library}" || -L "${yandex_library}" ]]; then
+    printf 'ERROR: verified Yandex binary is missing for %s.\n' "${yandex_abi}" >&2
+    exit 1
+  fi
+  "${YANDEX_GO_COMMAND}" version -m "${yandex_library}" |
+    sed -E "1s#^.*: (go[0-9]+(\\.[0-9]+)+)\$#liblevikyandex-${yandex_abi}.so: \\1#" \
+      >"${EVIDENCE_DIRECTORY}/liblevikyandex-${yandex_abi}-build-info.txt"
+done
 
 unzip -p "${NATIVE_AAR}" jni/arm64-v8a/libgojni.so \
   >"${TEMPORARY_DIRECTORY}/libgojni.so"

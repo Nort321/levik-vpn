@@ -48,7 +48,10 @@ required_literals=(
   'validate-play-bundle-metadata.sh'
   'generate-native-sbom.py'
   '--relay-jni-directory levik_whitelist_relay/build/android/jniLibs'
+  '--yandex-jni-directory levik_vpn_android/native/yandex/build/android/jniLibs'
   'go-version: "1.26.5"'
+  'go-version: "1.26.8"'
+  'YANDEX_GO_BIN='
   'ndk_version="29.0.14206865"'
   'build-corresponding-source.sh'
   'release-provenance.json'
@@ -88,6 +91,8 @@ done
 
 ci_required_literals=(
   'go-version: "1.26.5"'
+  'go-version: "1.26.8"'
+  'YANDEX_GO_BIN='
   'ndk_version="29.0.14206865"'
   'assembleDirectDebug assemblePlayDebug'
 )
@@ -103,6 +108,8 @@ source_bundle_required_literals=(
   'go-modules-relay-server.json'
   'go-modules-relay-android-client.json'
   'go-modules-relay-node-agent.json'
+  'go-modules-yandex-android-client.json'
+  'liblevikyandex-${yandex_abi}-build-info.txt'
   'liblevikrelay-${relay_abi}-build-info.txt'
   'RELAY_ANET_COMMIT'
   'github.com/wlynxg/anet'

@@ -39,6 +39,7 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--aar", required=True, type=pathlib.Path)
     parser.add_argument("--relay-jni-directory", required=True, type=pathlib.Path)
+    parser.add_argument("--yandex-jni-directory", required=True, type=pathlib.Path)
     parser.add_argument("--source-lock", required=True, type=pathlib.Path)
     parser.add_argument("--output-directory", required=True, type=pathlib.Path)
     parser.add_argument("--go", default="go")
@@ -140,6 +141,7 @@ def go_build_info(
 def relay_build_info(
     relay_jni_directory: pathlib.Path,
     go_command: str,
+    library_name: str = RELAY_LIBRARY_NAME,
 ) -> tuple[list[tuple[str, str, str]], list[GoModule]]:
     if not relay_jni_directory.is_dir() or relay_jni_directory.is_symlink():
         raise SystemExit(
@@ -148,7 +150,7 @@ def relay_build_info(
     artifacts: list[tuple[str, str, str]] = []
     common_modules: list[GoModule] | None = None
     for abi in RELAY_ABIS:
-        library_path = relay_jni_directory / abi / RELAY_LIBRARY_NAME
+        library_path = relay_jni_directory / abi / library_name
         go_version, modules = inspect_go_binary(library_path, go_command)
         if common_modules is None:
             common_modules = modules
@@ -175,6 +177,8 @@ def make_inventory(
     modules: list[GoModule],
     relay_artifacts: list[tuple[str, str, str]],
     relay_modules: list[GoModule],
+    yandex_artifacts: list[tuple[str, str, str]],
+    yandex_modules: list[GoModule],
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, list[str]]]:
     native = source_lock["nativeArtifact"]
     if native.get("sha256") != aar_sha256 or not SHA256_PATTERN.fullmatch(aar_sha256):
@@ -319,6 +323,37 @@ def make_inventory(
         component_refs.add(relay_ref)
         dependency_graph[relay_ref] = relay_dependency_refs
 
+    yandex = source_lock.get("yandexArtifact", {})
+    if (yandex.get("embeddedGoVersion") != "go1.26.8" or
+            yandex.get("license") != "GPL-3.0-or-later" or
+            len(yandex_artifacts) != len(RELAY_ABIS) or
+            {abi for abi, _, _ in yandex_artifacts} != set(RELAY_ABIS) or
+            any(version != yandex["embeddedGoVersion"] for _, _, version in yandex_artifacts)):
+        raise SystemExit("Yandex native inventory does not match the pinned source and toolchain")
+    yandex_dependency_refs = add_go_modules(yandex_modules)
+    yandex_component_refs = []
+    for abi, binary_sha256, go_version in yandex_artifacts:
+        if not SHA256_PATTERN.fullmatch(binary_sha256):
+            raise SystemExit("Yandex native inventory contains an invalid artifact digest")
+        name = f"{yandex['name']}:{abi}"
+        ref = component_ref("native", name, yandex["version"])
+        yandex_component_refs.append(ref)
+        components.append({
+            "type": "application", "bom-ref": ref,
+            "group": "com.leviknet.yandex", "name": name, "version": yandex["version"],
+            "hashes": [{"alg": "SHA-256", "content": binary_sha256}],
+            "licenses": [{"license": {"id": yandex["license"]}}],
+            "properties": [
+                {"name": "levik.native.abi", "value": abi},
+                {"name": "levik.native.archivePath", "value": f"lib/{abi}/{yandex['name']}"},
+                {"name": "levik.native.embeddedGoVersion", "value": go_version},
+                {"name": "levik.source.localPath", "value": yandex["sourceDirectory"]},
+                {"name": "levik.source.commit", "value": yandex["upstreamCommit"]},
+            ],
+        })
+        component_refs.add(ref)
+        dependency_graph[ref] = yandex_dependency_refs
+
     for archive in source_lock["sourceArchives"]:
         required = ("name", "version", "url", "sha256", "license")
         if any(not archive.get(field) for field in required):
@@ -350,7 +385,7 @@ def make_inventory(
         "name": "Levik VPN Android native inventory",
         "version": str(native["version"]),
     }
-    dependency_graph[metadata_component["bom-ref"]] = [aar_ref, *relay_component_refs]
+    dependency_graph[metadata_component["bom-ref"]] = [aar_ref, *relay_component_refs, *yandex_component_refs]
     return metadata_component, components, dependency_graph
 
 
@@ -474,6 +509,9 @@ def main() -> None:
         arguments.relay_jni_directory,
         arguments.go,
     )
+    yandex_artifacts, yandex_modules = relay_build_info(
+        arguments.yandex_jni_directory, arguments.go, "liblevikyandex.so",
+    )
     metadata_component, components, dependencies = make_inventory(
         source_lock,
         aar_sha256,
@@ -481,6 +519,8 @@ def main() -> None:
         modules,
         relay_artifacts,
         relay_modules,
+        yandex_artifacts,
+        yandex_modules,
     )
     arguments.output_directory.mkdir(parents=True, exist_ok=True)
     write_json(
@@ -497,7 +537,7 @@ def main() -> None:
     )
     print(
         "Generated native CycloneDX inventory for "
-        f"{len(modules)} libXray and {len(relay_modules)} relay Go modules.",
+        f"{len(modules)} libXray, {len(relay_modules)} relay and {len(yandex_modules)} Yandex Go modules.",
     )
 
 

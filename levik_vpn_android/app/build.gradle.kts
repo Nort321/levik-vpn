@@ -103,7 +103,7 @@ val directUpdateSigningCertificateSha256 =
         ?: ""
 val libXrayAar = layout.projectDirectory.file("libs/libXray.aar").asFile
 val expectedLibXraySha256 = "4708a361a74f7e955635dbe3661cefb459bdc867423c3b1826a2c5a6ea4ac77d"
-val yandexNativeProjectDir = rootProject.file("../levik_yandex_relay")
+val yandexNativeProjectDir = rootProject.file("native/yandex")
 val yandexNativeJniDir = yandexNativeProjectDir.resolve("build/android/jniLibs")
 val relayNativeProjectDir = rootProject.file("../levik_whitelist_relay")
 val relayNativeJniDir = rootProject.file("../levik_whitelist_relay/build/android/jniLibs")
@@ -175,7 +175,7 @@ android {
         applicationId = "com.leviknet.vpn"
         minSdk = 26
         targetSdk = 36
-        versionCode = 69
+        versionCode = 70
         versionName = rootProject.version.toString()
 
         buildConfigField("String", "CABINET_BASE_URL", "\"${cabinetBaseUrl.trimEnd('/')}\"")
@@ -402,7 +402,7 @@ val buildDirectYandexNative by tasks.registering(Exec::class) {
     inputs.property("yandexGoBinary", goBinary)
     commandLine("bash", yandexNativeProjectDir.resolve("scripts/build-android-helper.sh").absolutePath)
     inputs.files(yandexNativeProjectDir.resolve("scripts/build-android-helper.sh"),
-        yandexNativeProjectDir.resolve("source/tools.lock"),
+        yandexNativeProjectDir.resolve("source/upstream.json"),
         fileTree(yandexNativeProjectDir.resolve("fork/openflux")) {
             include("**/*.go", "go.mod", "go.sum")
         })

@@ -25,11 +25,10 @@ CSQTT и его PolyForm Noncommercial-код в приложение не вк�
 - Лицензия: GPL-3.0-or-later
 
 Direct APK содержит отдельный модифицированный нативный клиент из
-`levik_yandex_relay/fork/openflux/`, включая `cmd/levik-yandex-android`.
-Google Play flavor этот бинарник не содержит. Upstream-лицензия и полный fork
-сохранены локально отдельно от Android-репозитория; публичный выпуск требует соответствующего исходного
-кода и материалов сборки для поставляемой версии. Тестовый APK не считается
-проверенным публичным релизом.
+`native/yandex/fork/openflux/`, включая `cmd/levik-yandex-android`.
+Google Play flavor этот бинарник не содержит. Необходимые клиенту исходники,
+лицензия и скрипт сборки включены в Android-репозиторий. Corresponding-source
+bundle релиза содержит также исходники зависимостей и сведения о сборке.
 
 ### anet (Direct relay)
 

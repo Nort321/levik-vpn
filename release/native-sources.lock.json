@@ -69,6 +69,22 @@
       "size": 34140216,
       "sha256": "495be4bc87176ac567392e5b4116abd98466d33d7b49d41e764ccc6976b2dc42",
       "license": "BSD-3-Clause"
+    },
+    {
+      "name": "Go Yandex toolchain source",
+      "version": "go1.26.8",
+      "url": "https://go.dev/dl/go1.26.8.src.tar.gz",
+      "size": 34150120,
+      "sha256": "4e39b98e42f946fa05ac8bc5b71877df97dbdb7cbb1a777b541667ad7117fd2e",
+      "license": "BSD-3-Clause"
     }
-  ]
+  ],
+  "yandexArtifact": {
+    "name": "liblevikyandex.so",
+    "version": "levik-yandex-android-v1",
+    "embeddedGoVersion": "go1.26.8",
+    "license": "GPL-3.0-or-later",
+    "sourceDirectory": "levik_vpn_android/native/yandex/fork/openflux",
+    "upstreamCommit": "74cac6d47bf4c27947348ee957538a2c0728a485"
+  }
 }

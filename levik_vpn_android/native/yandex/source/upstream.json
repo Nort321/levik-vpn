@@ -1,0 +1,21 @@
+{
+  "repository": "https://github.com/p1neappleXpress/OpenFlux",
+  "commit": "74cac6d47bf4c27947348ee957538a2c0728a485",
+  "license": "GPL-3.0-or-later",
+  "goVersion": "1.26.8",
+  "command": "./cmd/levik-yandex-android",
+  "packages": [
+    "github.com/p1neappleXpress/OpenFlux/utils",
+    "github.com/p1neappleXpress/OpenFlux/socks5",
+    "github.com/p1neappleXpress/OpenFlux/netbind",
+    "github.com/p1neappleXpress/OpenFlux/transport/control",
+    "github.com/p1neappleXpress/OpenFlux/transport",
+    "github.com/p1neappleXpress/OpenFlux/transport/egresspolicy",
+    "github.com/p1neappleXpress/OpenFlux/transport/yandex",
+    "github.com/p1neappleXpress/OpenFlux/network",
+    "github.com/p1neappleXpress/OpenFlux/transport/phpbox",
+    "github.com/p1neappleXpress/OpenFlux/tunnel/l3",
+    "github.com/p1neappleXpress/OpenFlux/tunnel",
+    "github.com/p1neappleXpress/OpenFlux/cmd/levik-yandex-android"
+  ]
+}
