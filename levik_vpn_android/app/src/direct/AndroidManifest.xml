@@ -4,6 +4,16 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application>
+        <service
+            android:name=".vpn.YandexGuestRefreshService"
+            android:process=":yandex_guest"
+            android:exported="false" />
+        <activity
+            android:name=".vpn.YandexGuestActivity"
+            android:process=":yandex_guest"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.LevikVpn" />
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

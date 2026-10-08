@@ -140,6 +140,9 @@ class AppContainer(application: Application) {
                             currentEngine = vpnBeforeRefresh.engine,
                             selectedEngine = selectedEngineBeforeRefresh,
                             relayCapabilityEnabled = relayCapabilityEnabled,
+                    yandexCapabilityEnabled = account.subscriptions.any {
+                        it.uuid == relaySubscriptionId && it.isActiveAt(now) && it.capabilities.yandexRelay
+                    },
                             connectionState = vpnBeforeRefresh.state,
                         )
                     ) {

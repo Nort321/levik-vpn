@@ -18,6 +18,19 @@ Direct APK содержит модифицированный нативный к
 
 CSQTT и его PolyForm Noncommercial-код в приложение не включены.
 
+## Levik Yandex relay / OpenFlux (только Direct)
+
+- Проект: <https://github.com/p1neappleXpress/OpenFlux>
+- Зафиксированная ревизия: `74cac6d47bf4c27947348ee957538a2c0728a485`
+- Лицензия: GPL-3.0-or-later
+
+Direct APK содержит отдельный модифицированный нативный клиент из
+`levik_yandex_relay/fork/openflux/`, включая `cmd/levik-yandex-android`.
+Google Play flavor этот бинарник не содержит. Upstream-лицензия и полный fork
+сохранены локально отдельно от Android-репозитория; публичный выпуск требует соответствующего исходного
+кода и материалов сборки для поставляемой версии. Тестовый APK не считается
+проверенным публичным релизом.
+
 ### anet (Direct relay)
 
 - Проект: <https://github.com/wlynxg/anet>

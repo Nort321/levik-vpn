@@ -161,6 +161,8 @@ import com.leviknet.vpn.data.SplitTunnelPackageList
 import com.leviknet.vpn.data.AppIcon
 import com.leviknet.vpn.data.ThemeMode
 import com.leviknet.vpn.data.isActiveAt
+import com.leviknet.vpn.data.hasUsableYandexAuth
+import kotlinx.serialization.json.JsonObject
 import com.leviknet.vpn.ui.theme.*
 import com.leviknet.vpn.vpn.PreparedTunnelProfile
 import com.leviknet.vpn.vpn.EffectiveRoutingProfile
@@ -172,6 +174,7 @@ import com.leviknet.vpn.vpn.VpnSnapshot
 import com.leviknet.vpn.vpn.countryFlag
 import com.leviknet.vpn.vpn.effectiveCategory
 import com.leviknet.vpn.vpn.TunnelEngineKind
+import com.leviknet.vpn.vpn.createYandexGuestIntent
 import com.leviknet.vpn.vpn.isMobileServer
 import java.time.Instant
 import java.time.ZoneId
@@ -193,6 +196,13 @@ fun LevikVpnApp(viewModel: AppViewModel) {
     val problem = state.problem ?: state.message?.asProblem()
     val message = state.message?.takeIf { it.asProblem() == null }?.localized()
     val context = LocalContext.current
+    val yandexGuestLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            val documentUrl = result.data?.getStringExtra("documentUrl")
+            val providerAuth = result.data?.getStringExtra("providerAuth")
+            if (documentUrl != null && providerAuth != null) viewModel.installYandexDocument(documentUrl, providerAuth)
+        }
+    }
     val trafficHistoryShareTitle = stringResource(R.string.traffic_history_export_title)
     val logsShareTitle = stringResource(R.string.logs_viewer_title)
     val supportNoteShareTitle = stringResource(R.string.support_note_title)
@@ -256,6 +266,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     onOpenPauseVpn = { showPauseDialog = true },
                     onResumeVpn = viewModel::resumeVpn,
                     onServerSelected = viewModel::selectServer,
+                    onYandexSetup = viewModel::openYandexSetup,
                     onRefresh = viewModel::refreshAccount,
                     onSupport = viewModel::openSupport,
                     onFreeProxy = viewModel::openFreeProxyBot,
@@ -404,6 +415,22 @@ fun LevikVpnApp(viewModel: AppViewModel) {
         RelayConnectionGuideDialog(
             onDismiss = viewModel::dismissRelayIntroduction,
             onContinue = viewModel::confirmRelayIntroduction,
+        )
+    }
+
+    if (state.showYandexSetup) {
+        YandexSetupDialog(
+            initialUrl = state.yandexDocumentUrl,
+            onDismiss = viewModel::dismissYandexSetup,
+            onOpenGuest = { documentUrl ->
+                val intent = createYandexGuestIntent(context, documentUrl)
+                if (intent != null) {
+                    viewModel.dismissYandexSetup()
+                    yandexGuestLauncher.launch(intent)
+                } else {
+                    viewModel.yandexGuestUnavailable()
+                }
+            },
         )
     }
 
@@ -1184,6 +1211,7 @@ private fun MainContent(
     onOpenPauseVpn: () -> Unit,
     onResumeVpn: () -> Unit,
     onServerSelected: (String) -> Unit,
+    onYandexSetup: () -> Unit,
     onRefresh: () -> Unit,
     onSupport: () -> Unit,
     onFreeProxy: () -> Unit,
@@ -1271,6 +1299,10 @@ private fun MainContent(
                 connectionState = state.vpn.state,
                 loading = state.refreshing,
                 onServerSelected = onServerSelected,
+                onYandexSetup = onYandexSetup,
+                yandexAvailable = state.yandexSupported && state.account?.subscriptions?.any {
+                    it.uuid == (state.selectedSubscriptionId ?: state.profile?.subscriptionId) && it.capabilities.yandexRelay
+                } == true,
                 automaticServer = state.automaticServer,
                 onAutomaticServer = onAutomaticServer,
                 serverPings = state.serverPings,
@@ -2534,6 +2566,8 @@ private fun ServersScreen(
     connectionState: VpnConnectionState,
     loading: Boolean,
     onServerSelected: (String) -> Unit,
+    onYandexSetup: () -> Unit,
+    yandexAvailable: Boolean,
     automaticServer: Boolean,
     onAutomaticServer: () -> Unit,
     serverPings: Map<String, Long?>,
@@ -2546,6 +2580,25 @@ private fun ServersScreen(
     onFilterChanged: (ServerFilterType) -> Unit,
     levikStatus: LevikStatusSnapshot? = null,
 ) {
+    val yandexName = stringResource(R.string.yandex_title)
+    // Setup is a server choice even before its first encrypted profile exists.
+    // This placeholder stays in the UI and is never persisted or connected.
+    val servers = profile?.servers.orEmpty().let { existing ->
+        if (yandexAvailable && existing.none { it.engine == TunnelEngineKind.LEVIK_YANDEX }) {
+            existing + TunnelServer(
+                id = "yandex:document", tag = "yandex:document", name = yandexName,
+                countryCode = "XX", outbound = JsonObject(emptyMap()),
+                engine = TunnelEngineKind.LEVIK_YANDEX,
+                category = TunnelServerCategory.MOBILE_ALLOWLIST,
+            )
+        } else existing
+    }
+    val onServerSelection: (String) -> Unit = { id ->
+        val server = servers.firstOrNull { it.id == id }
+        if (server?.engine == TunnelEngineKind.LEVIK_YANDEX && !server.hasUsableYandexAuth()) {
+            onYandexSetup()
+        } else onServerSelected(id)
+    }
     Column(modifier.fillMaxSize()) {
         ScreenHeader(
             title = stringResource(R.string.servers_title),
@@ -2672,7 +2725,7 @@ private fun ServersScreen(
             loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }
-            profile == null || profile.servers.isEmpty() -> Box(
+            servers.isEmpty() -> Box(
                 Modifier
                     .fillMaxSize()
                     .padding(28.dp),
@@ -2686,7 +2739,7 @@ private fun ServersScreen(
             }
             else -> {
                 val query = searchQuery.trim().lowercase()
-                var filtered = profile.servers.filter { server ->
+                var filtered = servers.filter { server ->
                     val matchesQuery = query.isEmpty() ||
                         server.name.lowercase().contains(query) ||
                         server.countryCode.lowercase().contains(query)
@@ -2811,7 +2864,8 @@ private fun ServersScreen(
                                         pingValue = serverPings[server.id],
                                         pingingServers = pingingServers,
                                         isDark = isDark,
-                                        onServerSelected = onServerSelected,
+                                        onServerSelected = onServerSelection,
+                                        onYandexSetup = if (yandexAvailable) onYandexSetup else null,
                                         onToggleFavorite = onToggleFavorite,
                                     )
                                 }
@@ -2833,7 +2887,8 @@ private fun ServersScreen(
                                         pingValue = serverPings[server.id],
                                         pingingServers = pingingServers,
                                         isDark = isDark,
-                                        onServerSelected = onServerSelected,
+                                        onServerSelected = onServerSelection,
+                                        onYandexSetup = if (yandexAvailable) onYandexSetup else null,
                                         onToggleFavorite = onToggleFavorite,
                                     )
                                 }
@@ -2847,7 +2902,8 @@ private fun ServersScreen(
                                     pingValue = serverPings[server.id],
                                     pingingServers = pingingServers,
                                     isDark = isDark,
-                                    onServerSelected = onServerSelected,
+                                    onServerSelected = onServerSelection,
+                                    onYandexSetup = if (yandexAvailable) onYandexSetup else null,
                                     onToggleFavorite = onToggleFavorite,
                                 )
                             }
@@ -2861,7 +2917,8 @@ private fun ServersScreen(
                                 pingValue = serverPings[server.id],
                                 pingingServers = pingingServers,
                                 isDark = isDark,
-                                onServerSelected = onServerSelected,
+                                onServerSelected = onServerSelection,
+                                onYandexSetup = if (yandexAvailable) onYandexSetup else null,
                                 onToggleFavorite = onToggleFavorite,
                             )
                         }
@@ -2926,6 +2983,7 @@ private fun ServerItemCard(
     isDark: Boolean,
     onServerSelected: (String) -> Unit,
     onToggleFavorite: (String) -> Unit,
+    onYandexSetup: (() -> Unit)? = null,
 ) {
     var showGuide by remember(server.id) { mutableStateOf(false) }
     if (showGuide) {
@@ -2949,13 +3007,22 @@ private fun ServerItemCard(
     ) {
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = countryFlag(server.countryCode),
-                    fontSize = 28.sp,
-                    modifier = Modifier.semantics {
-                        contentDescription = flagDescriptionText
-                    },
-                )
+                if (server.engine == TunnelEngineKind.LEVIK_YANDEX) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_web),
+                        contentDescription = stringResource(R.string.yandex_title),
+                        tint = LevikBlue,
+                        modifier = Modifier.size(34.dp),
+                    )
+                } else {
+                    Text(
+                        text = countryFlag(server.countryCode),
+                        fontSize = 28.sp,
+                        modifier = Modifier.semantics {
+                            contentDescription = flagDescriptionText
+                        },
+                    )
+                }
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
@@ -3005,6 +3072,11 @@ private fun ServerItemCard(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(stringResource(R.string.relay_guide_open))
+                }
+            }
+            if (server.engine == TunnelEngineKind.LEVIK_YANDEX && onYandexSetup != null) {
+                TextButton(onClick = onYandexSetup) {
+                    Text(stringResource(R.string.yandex_manage_document))
                 }
             }
             Row(

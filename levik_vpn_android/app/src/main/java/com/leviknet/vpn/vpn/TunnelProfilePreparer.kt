@@ -11,7 +11,19 @@ class TunnelProfilePreparer(
         val relayServers = profile.bootstrap?.let { bootstrap ->
             prepareRelayServers(bootstrap, profile.routing)
         }.orEmpty()
-        val servers = converted.servers + relayServers
+        val yandexServers = profile.yandexBootstrap?.let { bootstrap ->
+            listOf(TunnelServer(
+                id = "yandex:document",
+                tag = "yandex:document",
+                name = "Через Яндекс",
+                countryCode = "XX",
+                outbound = JsonObject(emptyMap()),
+                engine = TunnelEngineKind.LEVIK_YANDEX,
+                category = TunnelServerCategory.MOBILE_ALLOWLIST,
+                yandexConfig = YandexServerConfig(bootstrap, profile.routing),
+            ))
+        }.orEmpty()
+        val servers = converted.servers + relayServers + yandexServers
 
         require(servers.isNotEmpty()) { "Tunnel profile has no servers" }
         require(servers.size <= MAX_SERVERS) { "Tunnel profile has too many servers" }

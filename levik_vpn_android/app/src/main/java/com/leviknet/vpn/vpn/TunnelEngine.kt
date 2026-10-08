@@ -38,6 +38,7 @@ data class TunPlan(
     val mtu: Int,
     val addresses: List<TunAddress>,
     val dnsServers: List<String>,
+    val ipv6Enabled: Boolean = true,
 ) {
     init {
         require(mtu in 576..9_000) { "Invalid TUN MTU" }
@@ -46,6 +47,10 @@ data class TunPlan(
         require(dnsServers.isNotEmpty()) { "TUN plan must contain a DNS server" }
         require(dnsServers.size <= 8) { "Too many TUN DNS servers" }
         dnsServers.forEach(::numericIpAddressBits)
+        if (!ipv6Enabled) {
+            require(addresses.all { numericIpAddressBits(it.address) == 32 }) { "IPv4-only TUN contains an IPv6 address" }
+            require(dnsServers.all { numericIpAddressBits(it) == 32 }) { "IPv4-only TUN contains an IPv6 DNS server" }
+        }
     }
 }
 
@@ -92,6 +97,12 @@ sealed interface TunnelEngineRequest {
 
     data class Relay(
         val config: RelayServerConfig,
+        val configFactory: RelayXrayConfigFactory,
+        val tunPlan: TunPlan,
+    ) : TunnelEngineRequest
+
+    data class Yandex(
+        val config: YandexServerConfig,
         val configFactory: RelayXrayConfigFactory,
         val tunPlan: TunPlan,
     ) : TunnelEngineRequest
@@ -182,6 +193,10 @@ private class AndroidEngineOwnedTunnelFileDescriptor(
         DETACHED,
         CLOSED,
     }
+}
+
+interface YandexRefreshableTunnelEngineAdapter {
+    suspend fun refresh(owner: Long, prepared: PreparedTunnelEngineSession, config: YandexServerConfig): Boolean
 }
 
 interface TunnelEngineAdapter {

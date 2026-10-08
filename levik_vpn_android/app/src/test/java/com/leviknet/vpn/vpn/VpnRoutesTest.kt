@@ -8,6 +8,14 @@ import org.junit.Test
 
 class VpnRoutesTest {
     @Test
+    fun `IPv4 only native exclusions never add an IPv6 route`() {
+        assertTrue(VpnRoutes.nativeExcludedIpv4Networks.all { ':' !in it })
+        assertTrue(VpnRoutes.nativeExcludedIpv4Networks.contains("192.168.0.0/16"))
+        assertTrue(VpnRoutes.nativeExcludedIpv4Networks.contains("198.18.0.0/15"))
+        assertFalse(VpnRoutes.nativeExcludedIpv4Networks.contains("fc00::/7"))
+    }
+
+    @Test
     fun `native exclusions omit routes Android rejects`() {
         assertFalse(VpnRoutes.nativeExcludedNetworks.contains("127.0.0.0/8"))
         assertFalse(VpnRoutes.nativeExcludedNetworks.contains("::1/128"))

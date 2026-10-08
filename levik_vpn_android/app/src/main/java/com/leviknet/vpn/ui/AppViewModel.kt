@@ -46,6 +46,10 @@ import com.leviknet.vpn.data.AppIcon
 import com.leviknet.vpn.data.ThemeMode
 import com.leviknet.vpn.data.TrafficHistoryStore
 import com.leviknet.vpn.data.isActiveAt
+import com.leviknet.vpn.data.hasUsableYandexAuth
+import com.leviknet.vpn.vpn.YandexProviderAuth
+import com.leviknet.vpn.vpn.refreshYandexGuest
+import com.leviknet.vpn.vpn.selectYandexGuestNetwork
 import com.leviknet.vpn.vpn.PreparedTunnelProfile
 import com.leviknet.vpn.vpn.ServerPinger
 import com.leviknet.vpn.vpn.TunnelServer
@@ -79,6 +83,7 @@ import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 
 import com.leviknet.vpn.core.network.MobileApiClient
 import com.leviknet.vpn.core.update.AppUpdateManager
@@ -95,11 +100,12 @@ class AppViewModel(
     private val appContext: Context? = null,
     whitelistDetector: WhitelistDetector? = null,
 ) : ViewModel() {
-    private val mutableState = MutableStateFlow(AppUiState())
+    private val mutableState = MutableStateFlow(AppUiState(yandexSupported = repository.supportsYandex()))
     private val effectChannel = Channel<AppEffect>(Channel.BUFFERED)
     private var loginStartJob: Job? = null
     private var loginPollJob: Job? = null
     private var activationAuthorizationJob: Job? = null
+    private var yandexSetupJob: Job? = null
     private var updateCheckJob: Job? = null
     private var pendingPairingToken: String? = null
     private var pendingOnboardingAction: OnboardingAction? = null
@@ -130,6 +136,7 @@ class AppViewModel(
     init {
         viewModelScope.launch {
             repository.session.collect { session ->
+                if (session == SessionStatus.SignedOut) yandexSetupJob?.cancel()
                 mutableState.update { it.copy(session = session) }
             }
         }
@@ -912,6 +919,79 @@ class AppViewModel(
         }
     }
 
+    fun openYandexSetup() {
+        if (!repository.supportsYandex() || mutableState.value.refreshing) return
+        viewModelScope.launch {
+            val documentUrl = repository.savedYandexDocumentUrl().orEmpty()
+            mutableState.update { it.copy(showYandexSetup = true, yandexDocumentUrl = documentUrl) }
+        }
+    }
+
+    fun dismissYandexSetup() {
+        mutableState.update { it.copy(showYandexSetup = false) }
+    }
+
+    fun yandexGuestUnavailable() {
+        mutableState.update {
+            it.copy(problem = AppProblem(ProblemReason.NETWORK, ProblemOperation.SERVERS))
+        }
+    }
+
+    fun installYandexDocument(documentUrl: String, encodedAuth: String) {
+        if (mutableState.value.refreshing) return
+        yandexSetupJob = viewModelScope.launch {
+            val subscription = mutableState.value.account?.let {
+                activeSubscription(it, settings.selectedSubscriptionId.value ?: mutableState.value.profile?.subscriptionId)
+            }
+            if (subscription == null) {
+                mutableState.update { it.copy(message = UiMessage.SUBSCRIPTION_REQUIRED) }
+                return@launch
+            }
+            mutableState.update { it.copy(refreshing = true, showYandexSetup = false) }
+            try {
+                require(encodedAuth.length in 1..10_240)
+                val auth = kotlinx.serialization.json.Json.decodeFromString<YandexProviderAuth>(encodedAuth)
+                val replacingActiveDocument = vpnController.state.value.let { vpn ->
+                    vpn.state in ACTIVE_TUNNEL_STATES && mutableState.value.profile?.servers
+                        ?.firstOrNull { it.id == vpn.serverId }?.yandexConfig?.bootstrap?.documentUrl
+                        ?.let { it != documentUrl } == true
+                }
+                if (replacingActiveDocument) {
+                    // The backend revokes the old document before admitting its replacement.
+                    // Finish stopping that carrier before the profile request uses the network.
+                    vpnController.disconnect()
+                    withTimeout(10_000) {
+                        vpnController.state.first {
+                            it.state in setOf(VpnConnectionState.DISCONNECTED, VpnConnectionState.ERROR, VpnConnectionState.LOCKDOWN)
+                        }
+                    }
+                }
+                val profile = prepareYandexWithRetry(subscription.uuid, documentUrl, auth)
+                require(repository.session.value == SessionStatus.Authenticated &&
+                    repository.account.value?.subscriptions?.any {
+                        it.uuid == subscription.uuid && it.capabilities.yandexRelay && it.isActiveAt(Instant.now())
+                    } == true
+                ) { "Yandex access is unavailable for this session" }
+                settings.setAutomaticServer(false)
+                ensureSelectedSubscription(subscription.uuid)
+                mutableState.update {
+                    it.copy(profile = profile, selectedServerId = "yandex:document", automaticServer = false)
+                }
+                if (replacingActiveDocument) {
+                    vpnController.connect()
+                } else if (vpnController.state.value.state in ACTIVE_TUNNEL_STATES) {
+                    vpnController.switchServer("yandex:document")
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                mutableState.update { it.copy(problem = error.toAppProblem(ProblemOperation.SERVERS, subscription.uuid)) }
+            } finally {
+                mutableState.update { it.copy(refreshing = false) }
+            }
+        }
+    }
+
     private fun prepareConnection(
         allowLteWithoutWhitelist: Boolean = false,
         attemptAllowlistConnection: Boolean = false,
@@ -939,8 +1019,31 @@ class AppViewModel(
             }
             mutableState.update { it.copy(refreshing = true, message = null) }
             try {
-                val profile = if (subscription == null) {
-                    requireNotNull(cached)
+                val yandexSelected = !settings.automaticServer.value &&
+                    (subscription == null || cached?.subscriptionId == subscription.uuid) &&
+                    cached?.servers?.firstOrNull { it.id == mutableState.value.selectedServerId }
+                        ?.engine == TunnelEngineKind.LEVIK_YANDEX
+                var refreshedYandex: PreparedTunnelProfile? = null
+                if (yandexSelected && cached?.servers?.firstOrNull {
+                        it.id == mutableState.value.selectedServerId
+                    }?.hasUsableYandexAuth() != true
+                ) {
+                    val document = cached?.servers?.firstNotNullOfOrNull {
+                        it.yandexConfig?.bootstrap?.documentUrl
+                    }.orEmpty()
+                    val context = appContext
+                    val network = context?.let(::selectYandexGuestNetwork)
+                    val auth = if (context != null && network != null && subscription != null) {
+                        refreshYandexGuest(context, document, network)
+                    } else null
+                    if (auth == null || subscription == null) {
+                        mutableState.update { it.copy(showYandexSetup = true, yandexDocumentUrl = document) }
+                        return@launch
+                    }
+                    refreshedYandex = prepareYandexWithRetry(subscription.uuid, document, auth)
+                }
+                val profile = if (yandexSelected || subscription == null) {
+                    refreshedYandex ?: requireNotNull(cached)
                 } else {
                     val reusableCached = cached?.takeIf { profile ->
                         profile.subscriptionId == subscription.uuid &&
@@ -1336,6 +1439,7 @@ class AppViewModel(
     }
 
     fun confirmLogout() {
+        yandexSetupJob?.cancel()
         viewModelScope.launch {
             mutableState.update {
                 it.copy(showLogoutConfirmation = false, refreshing = true, message = null)
@@ -1561,6 +1665,23 @@ class AppViewModel(
                     "Tunnel profile load failed temporarily; retrying (attempt $failedAttempts)",
                 )
                 delay(retryDelay)
+            }
+        }
+    }
+
+    private suspend fun prepareYandexWithRetry(
+        subscriptionId: String,
+        documentUrl: String,
+        auth: YandexProviderAuth,
+    ): PreparedTunnelProfile {
+        var failedAttempts = 0
+        while (true) {
+            try {
+                return repository.prepareYandexTunnel(subscriptionId, documentUrl, auth)
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                val wait = profileLoadRetryDelayMillis(error, failedAttempts++) ?: throw error
+                delay(wait)
             }
         }
     }
@@ -2361,6 +2482,9 @@ data class AppUiState(
     val optionalDataDisclosure: OptionalDataDisclosure? = null,
     val showLogoutConfirmation: Boolean = false,
     val showRelayIntroduction: Boolean = false,
+    val yandexSupported: Boolean = false,
+    val showYandexSetup: Boolean = false,
+    val yandexDocumentUrl: String = "",
     val showLteWhitelistWarning: Boolean = false,
     val showAllowlistRequiredWarning: Boolean = false,
     val whitelistMode: WhitelistMode = WhitelistMode.UNKNOWN,

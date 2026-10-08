@@ -39,6 +39,7 @@ internal object VpnRoutes {
     internal val nativeExcludedNetworks = localNetworks.filterNot { cidr ->
         cidr == "127.0.0.0/8" || cidr == "::1/128"
     }
+    internal val nativeExcludedIpv4Networks = nativeExcludedNetworks.filterNot { ':' in it }
 
     // 0.0.0.0/0 minus the IPv4 entries in localNetworks.
     internal val publicIpv4Routes = listOf(
@@ -64,9 +65,10 @@ internal object VpnRoutes {
     fun apply(
         builder: VpnService.Builder,
         useNativeExclusions: Boolean = supportsNativeExclusions(),
+        includeIpv6: Boolean = true,
     ) {
         if (useNativeExclusions && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            applyNativeExclusions(builder)
+            applyNativeExclusions(builder, includeIpv6)
             return
         }
 
@@ -74,18 +76,21 @@ internal object VpnRoutes {
             val (address, prefix) = splitCidr(cidr)
             builder.addRoute(address, prefix)
         }
-        val (ipv6Address, ipv6Prefix) = splitCidr(COMPATIBLE_IPV6_ROUTE)
-        builder.addRoute(ipv6Address, ipv6Prefix)
+        if (includeIpv6) {
+            val (ipv6Address, ipv6Prefix) = splitCidr(COMPATIBLE_IPV6_ROUTE)
+            builder.addRoute(ipv6Address, ipv6Prefix)
+        }
     }
 
     internal fun supportsNativeExclusions(): Boolean =
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
-    private fun applyNativeExclusions(builder: VpnService.Builder) {
+    private fun applyNativeExclusions(builder: VpnService.Builder, includeIpv6: Boolean) {
         builder.addRoute("0.0.0.0", 0)
-        builder.addRoute("::", 0)
-        nativeExcludedNetworks.forEach { cidr ->
+        if (includeIpv6) builder.addRoute("::", 0)
+        val exclusions = if (includeIpv6) nativeExcludedNetworks else nativeExcludedIpv4Networks
+        exclusions.forEach { cidr ->
             val (address, prefix) = splitCidr(cidr)
             builder.excludeRoute(IpPrefix(InetAddress.getByName(address), prefix))
         }

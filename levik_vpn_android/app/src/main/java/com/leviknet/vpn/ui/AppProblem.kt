@@ -53,9 +53,11 @@ internal fun Throwable.toAppProblem(
             "profile_upstream_unavailable", "temporarily_unavailable", "bridge_unavailable",
             "pairing_unavailable", "account_unavailable", "login_unavailable", "session_binding_failed" -> ProblemReason.SERVICE
             "profile_unavailable", "invalid_profile_response", "profile_too_large", "invalid_profile_expiry",
-            "relay_profile_binding_mismatch", "invalid_relay_profile" -> ProblemReason.PROFILE
-            "device_not_found", "relay_device_not_registered" -> ProblemReason.DEVICE_REVOKE
-            "relay_not_available", "shield_not_supported" -> ProblemReason.UNSUPPORTED
+            "relay_profile_binding_mismatch", "invalid_relay_profile", "invalid_provider_auth" -> ProblemReason.PROFILE
+            "device_not_found", "relay_device_not_registered", "yandex_device_not_registered" -> ProblemReason.DEVICE_REVOKE
+            "relay_not_available", "shield_not_supported", "yandex_not_available" -> ProblemReason.UNSUPPORTED
+            "yandex_unavailable", "yandex_operation_pending", "yandex_capacity_exceeded",
+            "yandex_entitlement_unavailable", "yandex_control_unavailable" -> ProblemReason.SERVICE
             "invalid_request_signature", "invalid_public_key", "invalid_device_id", "invalid_request_proof",
             "invalid_request_target", "invalid_json_request", "invalid_request_body", "replayed_request" -> ProblemReason.REQUEST
             else -> when {

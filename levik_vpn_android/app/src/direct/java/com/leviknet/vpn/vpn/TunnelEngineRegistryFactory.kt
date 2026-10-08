@@ -16,5 +16,11 @@ internal fun createTunnelEngineRegistry(
             ),
             xrayRuntime,
         ),
+        YandexTunnelEngineAdapter(
+            AndroidYandexNativeSessionFactory(
+                java.io.File(nativeLibraryDir, "liblevikyandex.so").absolutePath,
+            ),
+            xrayRuntime,
+        ),
     ),
 )

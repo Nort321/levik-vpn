@@ -146,6 +146,7 @@ data class SubscriptionSummary(
 @Serializable
 data class SubscriptionCapabilities(
     val whitelistRelay: Boolean = false,
+    val yandexRelay: Boolean = false,
 )
 
 @Serializable
@@ -296,6 +297,8 @@ data class FreeProxyResponse(
 data class TunnelProfileRequest(
     val subscriptionId: String,
     val engine: String? = null,
+    val documentUrl: String? = null,
+    val providerAuth: com.leviknet.vpn.vpn.YandexProviderAuth? = null,
 )
 
 @Serializable

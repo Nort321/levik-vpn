@@ -103,8 +103,11 @@ class LevikVpnService : VpnService() {
     private var reconnectJob: Job? = null
     private var statsJob: Job? = null
     private var profileExpiryJob: Job? = null
+    private var activeProfileDeadline: MonotonicCredentialDeadline? = null
+    private var admittedYandexAuth: YandexProviderAuth? = null
     private var autoHealingJob: Job? = null
     private var relayEntitlementWatchdogJob: Job? = null
+    private var yandexRefreshJob: Job? = null
     private var connectionJob: Job? = null
     private var pauseJob: Job? = null
     private var mobileAutomationJob: Job? = null
@@ -291,6 +294,8 @@ class LevikVpnService : VpnService() {
             statsJob?.cancel()
             profileExpiryJob?.cancel()
             autoHealingJob?.cancel()
+            yandexRefreshJob?.cancel()
+            yandexRefreshJob = null
             relayEntitlementWatchdogJob?.cancel()
             mobileAutomationJob?.cancel()
             mobileNetworkEvaluationJob?.cancel()
@@ -369,7 +374,10 @@ class LevikVpnService : VpnService() {
                     ?: profile.servers.firstOrNull(TunnelServer::isEligibleForAutomaticSelection)
                     ?: error("Tunnel profile has no server eligible for automatic selection")
             }
-            val connectionExpiresAt = selected.relayConfig?.bootstrap?.expiresAt
+            val yandexExpiry = selected.yandexConfig?.bootstrap?.let {
+                Instant.ofEpochSecond(minOf(it.expiresAt, it.providerAuth.validUntil)).toString()
+            }
+            val connectionExpiresAt = (yandexExpiry ?: selected.relayConfig?.bootstrap?.expiresAt)
                 ?.also { value ->
                     require(Instant.parse(value).isAfter(Instant.now())) {
                         "Relay credential has expired"
@@ -485,6 +493,35 @@ class LevikVpnService : VpnService() {
                         secondaryDns = secondaryDns,
                     ),
                 )
+                TunnelEngineKind.LEVIK_YANDEX -> TunnelEngineRequest.Yandex(
+                    config = requireNotNull(selected.yandexConfig) {
+                        "Yandex server has no bootstrap configuration"
+                    },
+                    configFactory = RelayXrayConfigFactory { tunFileDescriptor, proxy ->
+                        XrayConfigBuilder(container.json).buildRelayProxy(
+                            profile = profile,
+                            resolveTargets = true,
+                            tunFileDescriptor = tunFileDescriptor,
+                            proxy = proxy,
+                            primaryDnsIp = primaryDns,
+                            secondaryDnsIp = secondaryDns,
+                            routingPreset = routingPreset,
+                            customDirectDomains = container.settings.customDirectDomains.value,
+                            customProxyDomains = container.settings.customProxyDomains.value,
+                            lteDirectCidrs = if (routingPreset == RoutingPreset.BYPASS_RU) {
+                                container.lteRoutingData.cidrs
+                            } else emptyList(),
+                            lteDirectDomains = if (routingPreset == RoutingPreset.BYPASS_RU) {
+                                container.lteRoutingData.domains
+                            } else emptyList(),
+                        )
+                    },
+                    tunPlan = xrayTunPlan(
+                        primaryDns = primaryDns,
+                        secondaryDns = secondaryDns,
+                        ipv6Enabled = false,
+                    ),
+                )
             }
             val engine = container.tunnelEngineRegistry.require(selected.engine)
             check(!destroyed.get()) { "VPN service was destroyed during startup" }
@@ -561,6 +598,8 @@ class LevikVpnService : VpnService() {
                 startMobileServerAutomation()
                 startRelayEntitlementWatchdog(selected, prepared)
                 connectionExpiryDeadline?.let(::scheduleProfileExpiry)
+                admittedYandexAuth = selected.yandexConfig?.bootstrap?.providerAuth
+                startYandexRefresh(prepared)
                 VpnStateStore.set(
                     coreOwner,
                     VpnSnapshot(
@@ -692,8 +731,12 @@ class LevikVpnService : VpnService() {
         statsJob = null
         profileExpiryJob?.cancel()
         profileExpiryJob = null
+        activeProfileDeadline = null
+        admittedYandexAuth = null
         autoHealingJob?.cancel()
         autoHealingJob = null
+        yandexRefreshJob?.cancel()
+        yandexRefreshJob = null
         relayEntitlementWatchdogJob?.cancel()
         relayEntitlementWatchdogJob = null
         mobileAutomationJob?.cancel()
@@ -785,7 +828,10 @@ class LevikVpnService : VpnService() {
             }
             .setBlocking(true)
             .apply {
-                VpnRoutes.apply(this, useNativeExclusions)
+                // With no IPv6 address, DNS or route, Android blocks the family
+                // before accepting a connection. Do not call allowFamily:
+                // that would permit fallback to the physical network.
+                VpnRoutes.apply(this, useNativeExclusions, includeIpv6 = tunPlan.ipv6Enabled)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     setMetered(false)
                 }
@@ -1046,6 +1092,8 @@ class LevikVpnService : VpnService() {
                 }
                 showForeground(VpnConnectionState.RECONNECTING, currentServerName)
                 try {
+                    yandexRefreshJob?.cancel()
+                    yandexRefreshJob = null
                     relayEntitlementWatchdogJob?.cancel()
                     relayEntitlementWatchdogJob = null
                     autoHealingJob?.cancel()
@@ -1093,6 +1141,7 @@ class LevikVpnService : VpnService() {
                     val previousTunPlan = previousPrepared?.tunPlan ?: when (request) {
                         is TunnelEngineRequest.Xray -> request.tunPlan
                         is TunnelEngineRequest.Relay -> request.tunPlan
+                        is TunnelEngineRequest.Yandex -> request.tunPlan
                     }
                     val activeTun = if (prepared.tunPlan == previousTunPlan) {
                         previousTun
@@ -1127,12 +1176,21 @@ class LevikVpnService : VpnService() {
                         tun = AndroidTunnelFileDescriptorHandle(activeTun),
                     )
                     coreRunning = true
+                    if (request is TunnelEngineRequest.Yandex && request.config.bootstrap.providerAuth != admittedYandexAuth) {
+                        val bootstrap = request.config.bootstrap
+                        scheduleProfileExpiry(MonotonicCredentialDeadline.create(
+                            Instant.ofEpochSecond(minOf(bootstrap.expiresAt, bootstrap.providerAuth.validUntil)),
+                            Instant.now(), SystemClock.elapsedRealtime(),
+                        ))
+                        admittedYandexAuth = bootstrap.providerAuth
+                    }
                     val published = lifecycleGate.withLock {
                         if (destroyed.get()) return@withLock false
                         VpnStateStore.update(coreOwner) {
                             it.copy(state = VpnConnectionState.CONNECTED, failure = null)
                         }
                         startRelayEntitlementWatchdog(server, prepared)
+                        startYandexRefresh(prepared)
                         showForeground(VpnConnectionState.CONNECTED, currentServerName)
                         true
                     }
@@ -1154,6 +1212,8 @@ class LevikVpnService : VpnService() {
                     statsJob = null
                     autoHealingJob?.cancel()
                     autoHealingJob = null
+                    yandexRefreshJob?.cancel()
+                    yandexRefreshJob = null
                     relayEntitlementWatchdogJob?.cancel()
                     relayEntitlementWatchdogJob = null
                     stopCoreAndTun()
@@ -1195,6 +1255,7 @@ class LevikVpnService : VpnService() {
 
     private fun scheduleProfileExpiry(deadline: MonotonicCredentialDeadline) {
         profileExpiryJob?.cancel()
+        activeProfileDeadline = deadline
         profileExpiryJob = serviceScope.launch {
             while (true) {
                 val remainingMs = deadline.remainingMillis(SystemClock.elapsedRealtime())
@@ -1202,6 +1263,8 @@ class LevikVpnService : VpnService() {
                 delay(remainingMs)
             }
             profileExpiryJob = null
+            activeProfileDeadline = null
+            admittedYandexAuth = null
             AppLogger.w(LOG_TAG, "Connection authorization expired, tearing down tunnel")
             VpnStateStore.set(
                 coreOwner,
@@ -1220,6 +1283,107 @@ class LevikVpnService : VpnService() {
         }
     }
 
+    private fun startYandexRefresh(prepared: PreparedTunnelEngineSession) {
+        yandexRefreshJob?.cancel()
+        yandexRefreshJob = null
+        if (currentEngine?.kind != TunnelEngineKind.LEVIK_YANDEX) return
+        yandexRefreshJob = serviceScope.launch {
+            var attempted = false
+            while (true) {
+                val before = connectionMutex.withLock {
+                    if (!coreRunning || currentPreparedSession !== prepared) return@launch
+                    activeProfileDeadline ?: return@launch
+                }
+                val refreshDelay = yandexAuthRefreshDelayMillis(
+                    before.remainingMillis(SystemClock.elapsedRealtime()), attempted,
+                ) ?: return@launch
+                delay(refreshDelay)
+                if (before.isExpired(SystemClock.elapsedRealtime())) return@launch
+                attempted = true
+                val snapshot = connectionMutex.withLock {
+                    if (!coreRunning || currentPreparedSession !== prepared) return@launch
+                    YandexRefreshSnapshot(
+                        currentServer ?: return@launch,
+                        currentNetwork ?: return@launch,
+                        currentSubscriptionId ?: return@launch,
+                        currentEngine as? YandexRefreshableTunnelEngineAdapter ?: return@launch,
+                    )
+                }
+                try {
+                    val originalConfig = requireNotNull(snapshot.server.yandexConfig)
+                    val original = originalConfig.bootstrap
+                    val auth = refreshYandexGuest(this@LevikVpnService, original.documentUrl, snapshot.network)
+                    if (auth == null) {
+                        AppLogger.w(LOG_TAG, "Yandex guest refresh unavailable; original deadline remains active")
+                        continue
+                    }
+                    val stillCurrent = connectionMutex.withLock {
+                        coreRunning && currentPreparedSession === prepared && currentNetwork == snapshot.network
+                    }
+                    if (!stillCurrent) return@launch
+                    val profile = container.repository.prepareYandexTunnel(
+                        snapshot.subscriptionId, original.documentUrl, auth, selectAfterPreparation = false,
+                    )
+                    val refreshedServer = profile.servers.single { it.engine == TunnelEngineKind.LEVIK_YANDEX }
+                    val config = requireNotNull(refreshedServer.yandexConfig)
+                    val refreshMode = yandexProfileRefreshMode(originalConfig, config)
+                    if (refreshMode == YandexProfileRefreshMode.REJECT) {
+                        requestRelayFailClosed(VpnFailure.INVALID_PROFILE, getString(R.string.relay_entitlement_revoked))
+                        return@launch
+                    }
+                    val canRefresh = connectionMutex.withLock {
+                        if (!coreRunning || currentPreparedSession !== prepared) return@withLock false
+                        // Keep the verified server credential for a concurrent reconnect even
+                        // if its network callback cancels this coroutine during the helper ACK.
+                        // The old local expiry stays in force until the helper confirms admission.
+                        currentServer = refreshedServer
+                        currentEngineRequest = (currentEngineRequest as? TunnelEngineRequest.Yandex)?.copy(config = config)
+                        if (refreshMode == YandexProfileRefreshMode.RECONNECT) scheduleReconnectLocked()
+                        true
+                    }
+                    if (!canRefresh) return@launch
+                    if (refreshMode == YandexProfileRefreshMode.RECONNECT) {
+                        AppLogger.i(LOG_TAG, "Yandex session key renewed; reconnecting inside the VPN interface")
+                        return@launch
+                    }
+                    if (!snapshot.adapter.refresh(coreOwner, prepared, config)) continue
+                    val updated = connectionMutex.withLock {
+                        if (!coreRunning || currentPreparedSession !== prepared) {
+                            return@withLock false
+                        }
+                        scheduleProfileExpiry(MonotonicCredentialDeadline.create(
+                            Instant.ofEpochSecond(minOf(config.bootstrap.expiresAt, config.bootstrap.providerAuth.validUntil)),
+                            Instant.now(), SystemClock.elapsedRealtime(),
+                        ))
+                        admittedYandexAuth = config.bootstrap.providerAuth
+                        true
+                    }
+                    if (!updated) continue
+                    AppLogger.i(LOG_TAG, "Yandex authorization refreshed and admitted by the active tunnel")
+                    // No further extension is possible near subscription expiry.
+                    if (config.bootstrap.providerAuth.validUntil <= original.providerAuth.validUntil + 30) return@launch
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Throwable) {
+                    val phase = when (error) {
+                        is com.leviknet.vpn.core.network.ApiException.Network -> "api_network"
+                        is com.leviknet.vpn.core.network.ApiException.Rejected -> "api_rejected"
+                        is com.leviknet.vpn.core.network.ApiException.Unauthorized -> "api_session"
+                        else -> "profile_validation"
+                    }
+                    AppLogger.w(LOG_TAG, "Yandex authorization refresh unavailable ($phase); original deadline remains active")
+                }
+            }
+        }
+    }
+
+    private data class YandexRefreshSnapshot(
+        val server: TunnelServer,
+        val network: Network,
+        val subscriptionId: String,
+        val adapter: YandexRefreshableTunnelEngineAdapter,
+    )
+
     private fun checkConnectionDeadline(deadline: MonotonicCredentialDeadline?) {
         if (deadline?.isExpired(SystemClock.elapsedRealtime()) == true) {
             throw TunnelEngineFailureException("relay_credential_expired")
@@ -1232,7 +1396,7 @@ class LevikVpnService : VpnService() {
     ) {
         relayEntitlementWatchdogJob?.cancel()
         relayEntitlementWatchdogJob = null
-        if (server.engine != TunnelEngineKind.LEVIK_RELAY) {
+        if (server.engine !in DOCUMENT_RELAY_ENGINES) {
             return
         }
         relayEntitlementWatchdogJob = serviceScope.launch {
@@ -1248,11 +1412,11 @@ class LevikVpnService : VpnService() {
                 delay(RELAY_ENTITLEMENT_WATCHDOG_INTERVAL_MS)
                 val stillCurrent = connectionMutex.withLock {
                     coreRunning &&
-                        currentEngine?.kind == TunnelEngineKind.LEVIK_RELAY &&
+                        currentEngine?.kind in DOCUMENT_RELAY_ENGINES &&
                         currentPreparedSession === prepared
                 }
                 if (!stillCurrent) return@launch
-                if (refreshRelayEntitlementActive(subscriptionId) == false) {
+                if (refreshRelayEntitlementActive(subscriptionId, server.engine) == false) {
                     requestRelayFailClosed(
                         VpnFailure.INVALID_PROFILE,
                         getString(R.string.relay_entitlement_revoked),
@@ -1264,12 +1428,13 @@ class LevikVpnService : VpnService() {
     }
 
     /** Null means the authoritative account check was temporarily unavailable. */
-    private suspend fun refreshRelayEntitlementActive(subscriptionId: String): Boolean? = try {
+    private suspend fun refreshRelayEntitlementActive(subscriptionId: String, engine: TunnelEngineKind): Boolean? = try {
         val now = Instant.now()
         val subscription = container.repository.refreshAccount().subscriptions
             .firstOrNull { it.uuid == subscriptionId }
         subscription?.isActiveAt(now) == true &&
-            subscription.capabilities.whitelistRelay
+            (if (engine == TunnelEngineKind.LEVIK_YANDEX) subscription.capabilities.yandexRelay
+            else subscription.capabilities.whitelistRelay)
     } catch (error: CancellationException) {
         throw error
     } catch (_: Throwable) {
@@ -1293,7 +1458,7 @@ class LevikVpnService : VpnService() {
     ) {
         serviceScope.launch {
             connectionMutex.withLock {
-                if (!coreRunning || currentEngine?.kind != TunnelEngineKind.LEVIK_RELAY) {
+                if (!coreRunning || currentEngine?.kind !in DOCUMENT_RELAY_ENGINES) {
                     return@withLock
                 }
                 reconnectJob?.cancel()
@@ -1302,8 +1467,12 @@ class LevikVpnService : VpnService() {
                 statsJob = null
                 profileExpiryJob?.cancel()
                 profileExpiryJob = null
+                activeProfileDeadline = null
+                admittedYandexAuth = null
                 autoHealingJob?.cancel()
                 autoHealingJob = null
+                yandexRefreshJob?.cancel()
+                yandexRefreshJob = null
                 relayEntitlementWatchdogJob?.cancel()
                 relayEntitlementWatchdogJob = null
                 networkMonitor.stop(releaseCellular = false)
@@ -1585,6 +1754,8 @@ class LevikVpnService : VpnService() {
         statsJob?.cancel()
         profileExpiryJob?.cancel()
         autoHealingJob?.cancel()
+        yandexRefreshJob?.cancel()
+        yandexRefreshJob = null
         relayEntitlementWatchdogJob?.cancel()
         relayEntitlementWatchdogJob = null
         lockdownActive = false
@@ -1669,7 +1840,7 @@ class LevikVpnService : VpnService() {
             TunnelProbeObservation("vpn", success = false, failure = "network_unavailable"),
         ))
         val observations = mutableListOf<TunnelProbeObservation>()
-        val relay = currentServer?.engine == TunnelEngineKind.LEVIK_RELAY
+        val relay = currentServer?.engine in DOCUMENT_RELAY_ENGINES
         // Probe the IP endpoint first on relay, avoiding a DNS lookup on the
         // common path while still retaining independent endpoint fallbacks.
         val endpoints = if (relay) HEALTH_CHECK_ENDPOINTS else HEALTH_CHECK_ENDPOINTS.shuffled()
@@ -2011,3 +2182,5 @@ private class NetworkSetupException(
     message: String,
     cause: Throwable? = null,
 ) : Exception(message, cause)
+
+private val DOCUMENT_RELAY_ENGINES = setOf(TunnelEngineKind.LEVIK_RELAY, TunnelEngineKind.LEVIK_YANDEX)

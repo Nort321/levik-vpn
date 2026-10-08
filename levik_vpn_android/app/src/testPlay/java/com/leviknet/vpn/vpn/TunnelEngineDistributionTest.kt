@@ -20,8 +20,14 @@ class TunnelEngineDistributionTest {
         assertThrows(TunnelEngineUnavailableException::class.java) {
             registry.require(TunnelEngineKind.LEVIK_RELAY)
         }
+        assertThrows(TunnelEngineUnavailableException::class.java) {
+            registry.require(TunnelEngineKind.LEVIK_YANDEX)
+        }
         assertThrows(ClassNotFoundException::class.java) {
             Class.forName("com.leviknet.vpn.vpn.RelayTunnelEngineAdapter")
+        }
+        for (type in listOf("YandexTunnelEngineAdapter", "YandexControlCodec", "YandexGuestRefreshService", "YandexGuestActivity")) {
+            assertThrows(ClassNotFoundException::class.java) { Class.forName("com.leviknet.vpn.vpn.$type") }
         }
     }
 }

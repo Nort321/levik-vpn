@@ -103,6 +103,8 @@ val directUpdateSigningCertificateSha256 =
         ?: ""
 val libXrayAar = layout.projectDirectory.file("libs/libXray.aar").asFile
 val expectedLibXraySha256 = "4708a361a74f7e955635dbe3661cefb459bdc867423c3b1826a2c5a6ea4ac77d"
+val yandexNativeProjectDir = rootProject.file("../levik_yandex_relay")
+val yandexNativeJniDir = yandexNativeProjectDir.resolve("build/android/jniLibs")
 val relayNativeProjectDir = rootProject.file("../levik_whitelist_relay")
 val relayNativeJniDir = rootProject.file("../levik_whitelist_relay/build/android/jniLibs")
 val relayNativeBuildScript = relayNativeProjectDir.resolve("scripts/build-android-client.sh")
@@ -265,7 +267,7 @@ android {
         }
     }
 
-    sourceSets.getByName("direct").jniLibs.srcDir(relayNativeJniDir)
+    sourceSets.getByName("direct").jniLibs.srcDirs(relayNativeJniDir, yandexNativeJniDir)
 
     buildFeatures {
         buildConfig = true
@@ -390,6 +392,33 @@ fun validateRelayElf(file: File, abi: String, elfClass: Int, machine: Int) {
     }
 }
 
+val buildDirectYandexNative by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Builds the Direct-only Yandex helper with pinned Go and NDK."
+    workingDir(yandexNativeProjectDir)
+    val goBinary = providers.environmentVariable("YANDEX_GO_BIN")
+        .orElse(providers.environmentVariable("GO_BIN")).orElse("go")
+    environment("GO_BIN", goBinary.get())
+    inputs.property("yandexGoBinary", goBinary)
+    commandLine("bash", yandexNativeProjectDir.resolve("scripts/build-android-helper.sh").absolutePath)
+    inputs.files(yandexNativeProjectDir.resolve("scripts/build-android-helper.sh"),
+        yandexNativeProjectDir.resolve("source/tools.lock"),
+        fileTree(yandexNativeProjectDir.resolve("fork/openflux")) {
+            include("**/*.go", "go.mod", "go.sum")
+        })
+    outputs.dir(yandexNativeJniDir)
+}
+
+val validateDirectYandexNativeRuntime by tasks.registering {
+    group = "verification"
+    dependsOn(buildDirectYandexNative)
+    doLast {
+        relayNativeAbis.forEach { (abi, expected) ->
+            validateRelayElf(yandexNativeJniDir.resolve("$abi/liblevikyandex.so"), abi, expected.first, expected.second)
+        }
+    }
+}
+
 val validateDirectRelayNativeRuntime by tasks.registering {
     group = "verification"
     description = "Fails Direct release builds without every audited relay native executable."
@@ -417,7 +446,7 @@ val verifyPlayRelayExclusion by tasks.registering {
         val leaked = forbiddenSourceRoots
             .filter(File::exists)
             .flatMap { root -> root.walkTopDown().filter(File::isFile).toList() }
-            .filter { it.name == "liblevikrelay.so" }
+            .filter { it.name in setOf("liblevikrelay.so", "liblevikyandex.so") }
         check(leaked.isEmpty()) {
             "Play-visible source sets contain Direct-only relay artifacts: " +
                 leaked.joinToString { it.absolutePath }
@@ -447,10 +476,7 @@ val verifyPlayPackagedRelayExclusion by tasks.registering {
                 val forbidden = zip.entries().asSequence()
                     .map { entry -> entry.name }
                     .filter { entry ->
-                        entry.substringAfterLast('/').equals(
-                            "liblevikrelay.so",
-                            ignoreCase = true,
-                        )
+                        entry.substringAfterLast('/').lowercase() in setOf("liblevikrelay.so", "liblevikyandex.so")
                     }
                     .toList()
                 check(forbidden.isEmpty()) {
@@ -578,6 +604,7 @@ tasks.configureEach {
             validateDirectReleaseSigning,
             validateDirectReleaseOtaConfiguration,
             validateDirectRelayNativeRuntime,
+            validateDirectYandexNativeRuntime,
             verifyDirectReleaseRuntimeClasspath,
         )
     }
@@ -587,7 +614,7 @@ tasks.configureEach {
     if (name.startsWith("mergeDirect") &&
         (name.endsWith("JniLibFolders") || name.endsWith("NativeLibs"))
     ) {
-        dependsOn(validateDirectRelayNativeRuntime)
+        dependsOn(validateDirectRelayNativeRuntime, validateDirectYandexNativeRuntime)
     }
     if (name.matches(Regex("^(assemble|bundle)Play(Debug|Release)$"))) {
         finalizedBy(verifyPlayPackagedRelayExclusion)

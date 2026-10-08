@@ -151,6 +151,24 @@ class MobileApiClient(
         return response.profile
     }
 
+    suspend fun yandexTunnelProfile(
+        accessToken: String,
+        subscriptionId: String,
+        documentUrl: String,
+        providerAuth: com.leviknet.vpn.vpn.YandexProviderAuth,
+    ): TunnelProfileEnvelope {
+        com.leviknet.vpn.vpn.YandexContract.validateDocumentUrl(documentUrl)
+        com.leviknet.vpn.vpn.YandexContract.validateProviderAuth(providerAuth)
+        val response = post<TunnelProfileRequest, TunnelProfileResponse>(
+            path = TUNNEL_PROFILE_PATH,
+            request = TunnelProfileRequest(subscriptionId, "levik-yandex", documentUrl, providerAuth),
+            accessToken = accessToken,
+            requiresIntegrity = true,
+        )
+        checkSuccess(response.ok)
+        return response.profile
+    }
+
     suspend fun logout(accessToken: String) {
         val response = request<LogoutResponse>(
             method = METHOD_POST,

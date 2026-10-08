@@ -143,6 +143,7 @@ class SecureFileStore(context: Context) {
         const val SESSION_TOKEN = "session_token"
         const val PENDING_REVOCATION_TOKEN = "pending_revocation_token"
         const val TUNNEL_PROFILE = "tunnel_profile"
+        const val YANDEX_DOCUMENT = "yandex_document"
         const val SELECTED_SERVER = "selected_server"
         const val LAST_REGULAR_SERVER = "last_regular_server"
         const val APP_DATA_DISCLOSURE_CONSENT = "app_data_disclosure_consent"

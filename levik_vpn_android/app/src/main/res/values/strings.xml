@@ -552,4 +552,14 @@
     <string name="activation_sign_in_title">Sign in to authorize a device</string>
     <string name="activation_sign_in_body">This QR code signs in another device. First sign in to your account on this phone, then scan the code again. To sign in on this phone with QR, scan a code from Devices in your website account.</string>
     <string name="activation_sign_in_button">Sign in</string>
+    <string name="yandex_title">Via Yandex</string>
+    <string name="yandex_manage_document">Your document · connection setup</string>
+    <string name="yandex_guide">1. Create a separate empty document in Yandex Documents. Avoid personal or work files.\n\n2. Open Share, allow anyone with the link to edit, and copy the public document link.\n\n3. Paste the link below. LevikVPN opens it in a separate guest window. Complete any Yandex verification without signing in.\n\nOnlyOffice is currently supported. Documents opened in another editor are not supported yet.</string>
+    <string name="yandex_document_label">Your document link</string>
+    <string name="yandex_document_hint">https://disk.yandex.ru/i/… — editing must be allowed</string>
+    <string name="yandex_privacy">Your document is used. LevikVPN does not receive your Yandex password or account cookies. The app and VPN server use temporary guest authorization. Removing shared access may prevent the next connection refresh. Use LevikVPN to disconnect immediately.</string>
+    <string name="yandex_open_guest">Open as guest</string>
+    <string name="yandex_guest_loading">Opening the public document…</string>
+    <string name="yandex_guest_instructions">Complete any Yandex verification without signing in. A public editable OnlyOffice document is required.</string>
+    <string name="yandex_guest_failed">The editor could not be opened securely. Check your network and link.</string>
 </resources>

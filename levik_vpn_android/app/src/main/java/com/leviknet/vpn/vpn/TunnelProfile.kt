@@ -16,6 +16,7 @@ data class TunnelProfile(
     val subscriptionExpiresAt: String? = null,
     val source: TunnelProfileSource? = null,
     val bootstrap: RelayBootstrap? = null,
+    val yandexBootstrap: YandexBootstrap? = null,
     val routing: TunnelRouting? = null,
 )
 
@@ -32,6 +33,9 @@ enum class TunnelEngineKind {
 
     @SerialName("levik-relay")
     LEVIK_RELAY,
+
+    @SerialName("levik-yandex")
+    LEVIK_YANDEX,
 }
 
 @Serializable
@@ -122,6 +126,30 @@ data class RelayServerConfig(
 )
 
 @Serializable
+data class YandexProviderAuth(
+    val balancerUrl: String,
+    val token: String,
+    val validUntil: Long,
+)
+
+@Serializable
+data class YandexBootstrap(
+    val version: Int,
+    val deviceId: String,
+    val documentUrl: String,
+    val leaseRef: String,
+    val sharedKey: String,
+    val expiresAt: Long,
+    val providerAuth: YandexProviderAuth,
+)
+
+@Serializable
+data class YandexServerConfig(
+    val bootstrap: YandexBootstrap,
+    val routing: TunnelRouting? = null,
+)
+
+@Serializable
 data class PreparedTunnelProfile(
     val version: Int,
     val profileId: String,
@@ -147,6 +175,7 @@ data class TunnelServer(
     val category: TunnelServerCategory? = null,
     val networkRequirement: TunnelNetworkRequirement = TunnelNetworkRequirement.ANY,
     val relayConfig: RelayServerConfig? = null,
+    val yandexConfig: YandexServerConfig? = null,
 )
 
 fun TunnelServer.effectiveCategory(): TunnelServerCategory = category ?: legacyCategory()

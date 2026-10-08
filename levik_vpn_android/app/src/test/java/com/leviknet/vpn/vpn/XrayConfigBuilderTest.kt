@@ -572,6 +572,26 @@ class XrayConfigBuilderTest {
         assertEquals("127.0.0.1", proxyServer.getValue("address").jsonPrimitive.content)
         assertEquals("32123", proxyServer.getValue("port").jsonPrimitive.content)
         assertTrue(config.getValue("routing").toString().contains("domain:allowed.example"))
+        assertFalse(config.getValue("inbounds").jsonArray.first().jsonObject
+            .getValue("sniffing").jsonObject.containsKey("routeOnly"))
+    }
+
+    @Test
+    fun `Yandex preserves resolved targets and uses sniffed names only for routing`() {
+        val profile = PreparedTunnelProfile(1, "profile", "subscription", "2026-07-29T11:59:00Z",
+            servers = listOf(server("b".repeat(64), "server-b")))
+        val encoded = builder.buildRelayProxy(profile, 42,
+            LocalProxyEndpoint("127.0.0.1", 32123, "u".repeat(24), "p".repeat(48)),
+            "1.1.1.1", "1.0.0.1", listOf("203.0.113.0/24"), listOf("domain:allowed.example"), resolveTargets = true)
+        val config = json.parseToJsonElement(encoded).jsonObject
+        assertEquals("ForceIPv4", config.getValue("outbounds").jsonArray.first().jsonObject
+            .getValue("targetStrategy").jsonPrimitive.content)
+        assertEquals("true", config.getValue("inbounds").jsonArray.first().jsonObject
+            .getValue("sniffing").jsonObject.getValue("routeOnly").jsonPrimitive.content)
+        assertEquals("AsIs", config.getValue("routing").jsonObject
+            .getValue("domainStrategy").jsonPrimitive.content)
+        assertTrue(config.getValue("routing").toString().contains("domain:allowed.example"))
+        assertTrue(config.getValue("routing").toString().contains("203.0.113.0/24"))
     }
 
     @Test

@@ -27,10 +27,12 @@ class XrayConfigBuilder(
         routingPreset: RoutingPreset = RoutingPreset.BYPASS_RU,
         customDirectDomains: Set<String> = emptySet(),
         customProxyDomains: Set<String> = emptySet(),
+        resolveTargets: Boolean = false,
     ): String {
         val proxyOutbound = buildJsonObject {
             put("tag", RELAY_PROXY_TAG)
             put("protocol", "socks")
+            if (resolveTargets) put("targetStrategy", "ForceIPv4")
             put("settings", buildJsonObject {
                 put("address", proxy.address)
                 put("port", proxy.port)
@@ -66,6 +68,7 @@ class XrayConfigBuilder(
             effectiveRoutingProfile = EffectiveRoutingProfile.LTE,
             lteDirectCidrs = lteDirectCidrs,
             lteDirectDomains = lteDirectDomains,
+            preserveTargetAddress = resolveTargets,
         )
     }
 
@@ -88,6 +91,7 @@ class XrayConfigBuilder(
         effectiveRoutingProfile: EffectiveRoutingProfile = EffectiveRoutingProfile.USER_SELECTED,
         lteDirectCidrs: List<String> = emptyList(),
         lteDirectDomains: List<String> = emptyList(),
+        preserveTargetAddress: Boolean = false,
     ): String {
         require(tunFileDescriptor >= 0) { "Invalid TUN file descriptor" }
         profile.subscriptionExpiresAt?.let { value ->
@@ -232,6 +236,10 @@ class XrayConfigBuilder(
                     })
                     put("sniffing", buildJsonObject {
                         put("enabled", true)
+                        // Managed IPv4 SOCKS receives the application's resolved
+                        // destination. An outer TLS/QUIC name (including ECH)
+                        // may be used for routing without changing that address.
+                        if (preserveTargetAddress) put("routeOnly", true)
                         put("destOverride", buildJsonArray {
                             add(JsonPrimitive("http"))
                             add(JsonPrimitive("tls"))
@@ -244,7 +252,7 @@ class XrayConfigBuilder(
                 orderedServers.map(TunnelServer::outbound) + additionalOutbounds
             ))
             put("routing", buildJsonObject {
-                put("domainStrategy", if (isLte || isBypassRu || isBlockedOnly || directDomains.isNotEmpty()) "IPIfNonMatch" else "AsIs")
+                put("domainStrategy", if (!preserveTargetAddress && (isLte || isBypassRu || isBlockedOnly || directDomains.isNotEmpty())) "IPIfNonMatch" else "AsIs")
                 put("rules", buildJsonArray {
                     add(buildJsonObject {
                         put("type", "field")

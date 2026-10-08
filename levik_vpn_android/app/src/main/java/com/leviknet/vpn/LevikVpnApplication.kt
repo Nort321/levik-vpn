@@ -9,6 +9,10 @@ class LevikVpnApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        if (android.os.Build.VERSION.SDK_INT >= 28 && getProcessName().endsWith(":yandex_guest")) {
+            android.webkit.WebView.setDataDirectorySuffix("yandex_guest")
+            return
+        }
         // Eagerly initialize the container so the Wi-Fi auto-connect monitor
         // and subscription refresh loop run even before the first activity.
         container

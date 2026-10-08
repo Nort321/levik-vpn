@@ -73,6 +73,9 @@ class SubscriptionSyncWorker(
                     currentEngine = vpnBeforeRefresh.engine,
                     selectedEngine = selectedEngineBeforeRefresh,
                     relayCapabilityEnabled = relayCapabilityEnabled,
+                    yandexCapabilityEnabled = account.subscriptions.any {
+                        it.uuid == relaySubscriptionId && it.isActiveAt(now) && it.capabilities.yandexRelay
+                    },
                     connectionState = vpnBeforeRefresh.state,
                 )
             ) {
@@ -205,9 +208,11 @@ internal fun relayCapabilityRevocationRequiresDisconnect(
     selectedEngine: TunnelEngineKind?,
     relayCapabilityEnabled: Boolean,
     connectionState: VpnConnectionState,
-): Boolean = !relayCapabilityEnabled &&
-    (currentEngine == TunnelEngineKind.LEVIK_RELAY ||
-        selectedEngine == TunnelEngineKind.LEVIK_RELAY) &&
+    yandexCapabilityEnabled: Boolean = false,
+): Boolean = ((!relayCapabilityEnabled &&
+    (currentEngine == TunnelEngineKind.LEVIK_RELAY || selectedEngine == TunnelEngineKind.LEVIK_RELAY)) ||
+    (!yandexCapabilityEnabled &&
+    (currentEngine == TunnelEngineKind.LEVIK_YANDEX || selectedEngine == TunnelEngineKind.LEVIK_YANDEX))) &&
     connectionState !in setOf(
         VpnConnectionState.DISCONNECTED,
         VpnConnectionState.ERROR,

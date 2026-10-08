@@ -28,11 +28,11 @@ class TunnelProfileParser(
         val encodedProfile = plaintext.decodeToString()
         val profile = try {
             val compatible = json.decodeFromString<TunnelProfile>(encodedProfile)
-            if (compatible.version == RELAY_VERSION) {
+            if (compatible.version == RELAY_VERSION || compatible.version == YANDEX_VERSION) {
                 strictRelayJson.decodeFromString<TunnelProfile>(encodedProfile).also {
-                    validateRelayEnvelopeShape(
-                        strictRelayJson.parseToJsonElement(encodedProfile).jsonObject,
-                    )
+                    val envelope = strictRelayJson.parseToJsonElement(encodedProfile).jsonObject
+                    if (compatible.version == RELAY_VERSION) validateRelayEnvelopeShape(envelope)
+                    else validateYandexEnvelopeShape(envelope)
                 }
             } else {
                 compatible
@@ -84,7 +84,7 @@ class TunnelProfileParser(
                 require(profile.engine == TunnelEngineKind.XRAY) {
                     "Version 1 tunnel profiles must use Xray"
                 }
-                require(profile.source != null && profile.bootstrap == null) {
+                require(profile.source != null && profile.bootstrap == null && profile.yandexBootstrap == null) {
                     "Version 1 tunnel profiles require one legacy source"
                 }
                 validateSource(profile.source)
@@ -93,7 +93,7 @@ class TunnelProfileParser(
                 require(profile.engine == TunnelEngineKind.LEVIK_RELAY) {
                     "Version 2 tunnel profiles must use Levik Relay"
                 }
-                require(profile.source == null) {
+                require(profile.source == null && profile.yandexBootstrap == null) {
                     "Version 2 relay profiles must not contain an Xray source"
                 }
                 validateRelayBootstrap(
@@ -108,6 +108,18 @@ class TunnelProfileParser(
                     now = now,
                 )
             }
+            YANDEX_VERSION -> {
+                require(profile.engine == TunnelEngineKind.LEVIK_YANDEX &&
+                    profile.source == null && profile.bootstrap == null
+                ) { "Version 3 requires an exclusive Yandex bootstrap" }
+                YandexContract.validateBootstrap(
+                    requireNotNull(profile.yandexBootstrap),
+                    requireNotNull(expectedDeviceId),
+                    issuedAt,
+                    subscriptionExpiresAt,
+                    now,
+                )
+            }
         }
     }
 
@@ -118,8 +130,18 @@ class TunnelProfileParser(
         require("source" !in envelope) {
             "Version 2 relay profiles must omit the legacy source"
         }
+        require("yandexBootstrap" !in envelope) { "Unexpected Yandex bootstrap" }
         require(envelope["routing"] is JsonObject) {
             "Version 2 relay profiles require routing"
+        }
+    }
+
+    private fun validateYandexEnvelopeShape(envelope: JsonObject) {
+        require(envelope.keys == REQUIRED_YANDEX_ENVELOPE_FIELDS) {
+            "Invalid Yandex profile envelope"
+        }
+        require(envelope["routing"] is JsonObject && envelope["yandexBootstrap"] is JsonObject) {
+            "Incomplete Yandex profile"
         }
     }
 
@@ -278,7 +300,12 @@ class TunnelProfileParser(
     companion object {
         private const val LEGACY_VERSION = 1
         private const val RELAY_VERSION = 2
-        private val SUPPORTED_VERSIONS = setOf(LEGACY_VERSION, RELAY_VERSION)
+        private const val YANDEX_VERSION = 3
+        private val SUPPORTED_VERSIONS = setOf(LEGACY_VERSION, RELAY_VERSION, YANDEX_VERSION)
+        private val REQUIRED_YANDEX_ENVELOPE_FIELDS = setOf(
+            "version", "engine", "profileId", "subscriptionId", "issuedAt",
+            "subscriptionExpiresAt", "yandexBootstrap", "routing",
+        )
         private const val RELAY_BOOTSTRAP_VERSION = 1
         private const val RELAY_POLICY_VERSION = 1
         private const val RELAY_PROTOCOL = "levik-relay-v1"

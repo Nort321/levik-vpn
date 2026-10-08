@@ -19,6 +19,10 @@ import com.leviknet.vpn.core.security.DeviceIdentity
 import com.leviknet.vpn.core.security.HybridProfileDecryptor
 import com.leviknet.vpn.core.security.SecureFileStore
 import com.leviknet.vpn.core.security.TrialDeviceBinding
+import com.leviknet.vpn.core.security.validateYandexProfileBinding
+import com.leviknet.vpn.vpn.YandexContract
+import com.leviknet.vpn.vpn.YandexProviderAuth
+import com.leviknet.vpn.vpn.YANDEX_AUTH_REFRESH_LEAD_SECONDS
 import com.leviknet.vpn.vpn.PreparedTunnelProfile
 import com.leviknet.vpn.vpn.TunnelEngineKind
 import com.leviknet.vpn.vpn.TunnelProfileParser
@@ -54,6 +58,7 @@ class AppRepository(
     )
     private val authMutex = Mutex()
     private val profileMutex = Mutex()
+    private val sessionCacheMutex = Mutex()
     private val _session = MutableStateFlow<SessionStatus>(SessionStatus.Loading)
     private val _account = MutableStateFlow<MobileAccountResponse?>(null)
     private val _tunnelProfile = MutableStateFlow<PreparedTunnelProfile?>(null)
@@ -61,6 +66,74 @@ class AppRepository(
     val session: StateFlow<SessionStatus> = _session.asStateFlow()
     val account: StateFlow<MobileAccountResponse?> = _account.asStateFlow()
     val tunnelProfile: StateFlow<PreparedTunnelProfile?> = _tunnelProfile.asStateFlow()
+
+    fun supportsYandex(): Boolean = TunnelEngineKind.LEVIK_YANDEX in supportedTunnelEngines &&
+        Build.VERSION.SDK_INT >= 28
+
+    suspend fun savedYandexDocumentUrl(): String? = withContext(Dispatchers.IO) {
+        val bytes = secureStore.get(SecureFileStore.YANDEX_DOCUMENT) ?: return@withContext null
+        try {
+            runCatching { YandexContract.validateDocumentUrl(bytes.decodeToString()) }.getOrNull()
+        } finally {
+            bytes.fill(0)
+        }
+    }
+
+    suspend fun prepareYandexTunnel(
+        subscriptionId: String,
+        documentUrl: String,
+        providerAuth: YandexProviderAuth,
+        selectAfterPreparation: Boolean = true,
+    ): PreparedTunnelProfile = profileMutex.withLock {
+        require(supportsYandex()) { "Yandex is unavailable in this build" }
+        val subscription = _account.value?.subscriptions?.firstOrNull { it.uuid == subscriptionId }
+        require(subscription?.capabilities?.yandexRelay == true && subscription.isActiveAt(Instant.now())) {
+            "Yandex access is unavailable for this subscription"
+        }
+        YandexContract.validateDocumentUrl(documentUrl)
+        YandexContract.validateProviderAuth(providerAuth)
+        val token = requireToken()
+        val expectedDeviceId = withContext(Dispatchers.IO) { deviceIdentity.deviceId() }
+        val envelope = try {
+            apiClient.yandexTunnelProfile(token, subscriptionId, documentUrl, providerAuth)
+        } catch (error: ApiException.Unauthorized) {
+            clearAuthentication(expectedToken = token)
+            throw error
+        }
+        val plaintext = withContext(Dispatchers.IO) { profileDecryptor.decrypt(envelope) }
+        val yandex = try {
+            withContext(Dispatchers.Default) {
+                val profile = profileParser.parse(plaintext, subscriptionId, expectedDeviceId)
+                require(profile.version == 3 && profile.engine == TunnelEngineKind.LEVIK_YANDEX)
+                val bootstrap = requireNotNull(profile.yandexBootstrap)
+                require(bootstrap.documentUrl == documentUrl &&
+                    bootstrap.providerAuth.token == providerAuth.token &&
+                    bootstrap.providerAuth.balancerUrl.trimEnd('/') == providerAuth.balancerUrl.trimEnd('/')
+                ) { "Yandex document authorization does not match the request" }
+                validateYandexProfileBinding(envelope.aad, profile, expectedDeviceId)
+                tunnelProfilePreparer.prepare(profile)
+            }
+        } finally {
+            plaintext.fill(0)
+        }
+        sessionCacheMutex.withLock {
+            requireCurrentSession(token)
+            val currentSubscription = _account.value?.subscriptions?.firstOrNull { it.uuid == subscriptionId }
+            require(currentSubscription?.capabilities?.yandexRelay == true && currentSubscription.isActiveAt(Instant.now())) {
+                "Yandex access is unavailable for this subscription"
+            }
+            val cached = _tunnelProfile.value ?: withContext(Dispatchers.IO) { cachedTunnelBlocking() }
+            val prepared = mergeYandexProfile(cached?.takeIf { it.subscriptionId == subscriptionId }, yandex)
+            persistPreparedTunnel(prepared)
+            withContext(Dispatchers.IO) {
+                val encoded = documentUrl.encodeToByteArray()
+                try { secureStore.put(SecureFileStore.YANDEX_DOCUMENT, encoded) } finally { encoded.fill(0) }
+            }
+            if (selectAfterPreparation) selectServer("yandex:document")
+            _tunnelProfile.value = prepared
+            prepared
+        }
+    }
 
     suspend fun initialize() {
         retryPendingRevocation()
@@ -73,7 +146,7 @@ class AppRepository(
         runCatching { refreshAccount() }
             .onFailure { error ->
                 if (error is ApiException.Unauthorized) {
-                    clearAuthentication()
+                    clearAuthentication(expectedToken = token)
                 }
             }
     }
@@ -135,10 +208,7 @@ class AppRepository(
         val response = apiClient.claimDevicePairing(request)
         val accessToken = requireNotNull(response.accessToken)
         require(accessToken.length in 32..MAX_ACCESS_TOKEN_LENGTH) { "Invalid access token" }
-        withContext(Dispatchers.IO) {
-            secureStore.put(SecureFileStore.SESSION_TOKEN, accessToken.encodeToByteArray())
-        }
-        _session.value = SessionStatus.Authenticated
+        writeSessionToken(accessToken)
     }
 
     suspend fun activateDeviceTrial(): MobileAccountResponse = authMutex.withLock {
@@ -161,13 +231,7 @@ class AppRepository(
         require(accessToken.length in 32..MAX_ACCESS_TOKEN_LENGTH) {
             "Invalid access token"
         }
-        withContext(Dispatchers.IO) {
-            secureStore.put(
-                SecureFileStore.SESSION_TOKEN,
-                accessToken.encodeToByteArray(),
-            )
-        }
-        _session.value = SessionStatus.Authenticated
+        writeSessionToken(accessToken)
         refreshAccount()
     }
 
@@ -189,13 +253,7 @@ class AppRepository(
                 require(accessToken.length in 32..MAX_ACCESS_TOKEN_LENGTH) {
                     "Invalid access token"
                 }
-                withContext(Dispatchers.IO) {
-                    secureStore.put(
-                        SecureFileStore.SESSION_TOKEN,
-                        accessToken.encodeToByteArray(),
-                    )
-                }
-                _session.value = SessionStatus.Authenticated
+                writeSessionToken(accessToken)
                 refreshAccount()
                 LoginPollResult.Authenticated
             }
@@ -206,11 +264,16 @@ class AppRepository(
         val token = requireToken()
         return try {
             apiClient.account(token).also { response ->
-                reconcileCachedProfile(response)
-                _account.value = response
+                profileMutex.withLock {
+                    sessionCacheMutex.withLock {
+                        requireCurrentSession(token)
+                        reconcileCachedProfile(response)
+                        _account.value = response
+                    }
+                }
             }
         } catch (error: ApiException.Unauthorized) {
-            clearAuthentication()
+            clearAuthentication(expectedToken = token)
             throw error
         }
     }
@@ -230,7 +293,7 @@ class AppRepository(
                     engine = null,
                 )
             } catch (error: ApiException.Unauthorized) {
-                clearAuthentication()
+                clearAuthentication(expectedToken = token)
                 throw error
             }
             val relayCapabilityEnabled =
@@ -239,8 +302,10 @@ class AppRepository(
                         ?.firstOrNull { it.uuid == subscriptionId }
                         ?.capabilities
                         ?.whitelistRelay == true
-            val cached = _tunnelProfile.value
-                ?: withContext(Dispatchers.IO) { cachedTunnelBlocking() }
+            val cached = sessionCacheMutex.withLock {
+                requireCurrentSession(token)
+                _tunnelProfile.value ?: withContext(Dispatchers.IO) { cachedTunnelBlocking() }
+            }
             val cachedRelay = cached
                 ?.takeIf { relayCapabilityEnabled && it.subscriptionId == subscriptionId }
             val freshRelay = if (relayCapabilityEnabled) {
@@ -254,7 +319,7 @@ class AppRepository(
                 } catch (error: CancellationException) {
                     throw error
                 } catch (error: ApiException.Unauthorized) {
-                    clearAuthentication()
+                    clearAuthentication(expectedToken = token)
                     throw error
                 } catch (_: Throwable) {
                     AppLogger.w(
@@ -266,17 +331,27 @@ class AppRepository(
             } else {
                 null
             }
-            val prepared = mergePreparedProfiles(xrayPrepared, freshRelay ?: cachedRelay)
-            persistPreparedTunnel(prepared)
-            val selected = selectedServerId()
-            if (selected == null || prepared.servers.none { it.id == selected }) {
-                val defaultServer = prepared.servers
-                    .firstOrNull { it.isEligibleForAutomaticSelection() }
-                    ?: prepared.servers.first()
-                selectServer(defaultServer.id)
+            val base = mergePreparedProfiles(xrayPrepared, freshRelay ?: cachedRelay)
+            sessionCacheMutex.withLock {
+                requireCurrentSession(token)
+                val cachedYandex = cached?.takeIf {
+                    it.subscriptionId == subscriptionId && supportsYandex() &&
+                        _account.value?.subscriptions?.firstOrNull { sub -> sub.uuid == subscriptionId }
+                            ?.let { sub -> sub.capabilities.yandexRelay && sub.isActiveAt(Instant.now()) } == true
+                }?.servers?.filter { it.engine == TunnelEngineKind.LEVIK_YANDEX && it.hasUsableYandexAuth() }
+                    .orEmpty()
+                val prepared = base.copy(servers = base.servers + cachedYandex)
+                persistPreparedTunnel(prepared)
+                val selected = selectedServerId()
+                if (selected == null || prepared.servers.none { it.id == selected }) {
+                    val defaultServer = prepared.servers
+                        .firstOrNull { it.isEligibleForAutomaticSelection() }
+                        ?: prepared.servers.first()
+                    selectServer(defaultServer.id)
+                }
+                _tunnelProfile.value = prepared
+                prepared
             }
-            _tunnelProfile.value = prepared
-            prepared
         }
 
     private suspend fun fetchPreparedTunnelProfile(
@@ -315,10 +390,10 @@ class AppRepository(
         }
     }
 
-    suspend fun cachedTunnel(): PreparedTunnelProfile? {
+    suspend fun cachedTunnel(): PreparedTunnelProfile? = sessionCacheMutex.withLock {
         val profile = withContext(Dispatchers.IO) { cachedTunnelBlocking() }
         _tunnelProfile.value = profile
-        return profile
+        profile
     }
 
     private fun cachedTunnelBlocking(): PreparedTunnelProfile? {
@@ -331,14 +406,12 @@ class AppRepository(
 
         return try {
             val decoded = json.decodeFromString<PreparedTunnelProfile>(bytes.decodeToString())
-            val containsRelay = decoded.servers.any {
-                it.engine == TunnelEngineKind.LEVIK_RELAY
-            }
-            if (!containsRelay || TunnelEngineKind.LEVIK_RELAY in supportedTunnelEngines) {
-                decoded
-            } else {
-                withoutRelayServers(decoded).also(::persistPreparedTunnelBlocking)
-            }
+            val sanitized = decoded.copy(servers = decoded.servers.filter {
+                it.engine in supportedTunnelEngines &&
+                    (it.engine != TunnelEngineKind.LEVIK_YANDEX || supportsYandex())
+            })
+            if (sanitized != decoded) persistPreparedTunnelBlocking(sanitized)
+            sanitized
         } catch (_: Exception) {
             secureStore.remove(SecureFileStore.TUNNEL_PROFILE)
             null
@@ -474,6 +547,18 @@ class AppRepository(
     private suspend fun requireToken(): String =
         readToken() ?: throw ApiException.Unauthorized()
 
+    private suspend fun writeSessionToken(token: String) = sessionCacheMutex.withLock {
+        withContext(Dispatchers.IO) {
+            val encoded = token.encodeToByteArray()
+            try { secureStore.put(SecureFileStore.SESSION_TOKEN, encoded) } finally { encoded.fill(0) }
+        }
+        _session.value = SessionStatus.Authenticated
+    }
+
+    private suspend fun requireCurrentSession(expectedToken: String) {
+        if (readToken() != expectedToken) throw ApiException.Unauthorized()
+    }
+
     private suspend fun readToken(): String? = withContext(Dispatchers.IO) {
         readTokenBlocking()
     }
@@ -493,18 +578,25 @@ class AppRepository(
     }
 
     private suspend fun clearLocalSession(keepPendingRevocation: Boolean = false) =
-        withContext(Dispatchers.IO) {
-            clearAuthenticationBlocking(keepPendingRevocation)
-            clearTunnelProfile()
+        sessionCacheMutex.withLock {
+            withContext(Dispatchers.IO) {
+                clearAuthenticationBlocking(keepPendingRevocation)
+                clearTunnelProfile()
+            }
         }
 
-    private suspend fun clearAuthentication(keepPendingRevocation: Boolean = false) =
-        withContext(Dispatchers.IO) {
-            clearAuthenticationBlocking(keepPendingRevocation)
+    private suspend fun clearAuthentication(keepPendingRevocation: Boolean = false, expectedToken: String? = null) =
+        sessionCacheMutex.withLock {
+            withContext(Dispatchers.IO) {
+                if (expectedToken == null || readTokenBlocking() == expectedToken) {
+                    clearAuthenticationBlocking(keepPendingRevocation)
+                }
+            }
         }
 
     private fun clearAuthenticationBlocking(keepPendingRevocation: Boolean) {
         secureStore.remove(SecureFileStore.SESSION_TOKEN)
+        secureStore.remove(SecureFileStore.YANDEX_DOCUMENT)
         if (!keepPendingRevocation) {
             secureStore.remove(SecureFileStore.PENDING_REVOCATION_TOKEN)
         }
@@ -513,7 +605,9 @@ class AppRepository(
     }
 
     private suspend fun reconcileCachedProfile(account: MobileAccountResponse) {
-        val cached = cachedTunnel() ?: return
+        // Caller holds profileMutex then sessionCacheMutex; do not re-enter cachedTunnel().
+        val cached = withContext(Dispatchers.IO) { cachedTunnelBlocking() } ?: return
+        _tunnelProfile.value = cached
         val subscription = account.subscriptions.firstOrNull { it.uuid == cached.subscriptionId }
         if (subscription?.isActiveAt(Instant.now()) != true) {
             withContext(Dispatchers.IO) {
@@ -523,10 +617,12 @@ class AppRepository(
         }
         val relayUnavailable = !subscription.capabilities.whitelistRelay ||
             TunnelEngineKind.LEVIK_RELAY !in supportedTunnelEngines
-        if (relayUnavailable &&
-            cached.servers.any { it.engine == TunnelEngineKind.LEVIK_RELAY }
-        ) {
-            val sanitized = withoutRelayServers(cached)
+        val yandexUnavailable = !subscription.capabilities.yandexRelay || !supportsYandex()
+        val sanitized = cached.copy(servers = cached.servers.filter {
+            (it.engine != TunnelEngineKind.LEVIK_RELAY || !relayUnavailable) &&
+                (it.engine != TunnelEngineKind.LEVIK_YANDEX || !yandexUnavailable)
+        }, relayCredentialExpiresAt = if (relayUnavailable) null else cached.relayCredentialExpiresAt)
+        if (sanitized != cached) {
             persistPreparedTunnel(sanitized)
             val selected = selectedServerId()
             if (sanitized.servers.none { it.id == selected }) {
@@ -572,6 +668,24 @@ class AppRepository(
         const val DEFAULT_FREE_PROXY_TG_LINK =
             "tg://proxy?server=mt.leviknet.com&port=31443&secret=1cb61164c70fc4d193569b05f34e3f7d"
     }
+}
+
+internal fun TunnelServer.hasUsableYandexAuth(now: Instant = Instant.now()): Boolean =
+    yandexConfig?.bootstrap?.let {
+        it.expiresAt > now.epochSecond + YANDEX_AUTH_REFRESH_LEAD_SECONDS &&
+            it.providerAuth.validUntil > now.epochSecond + YANDEX_AUTH_REFRESH_LEAD_SECONDS
+    } == true
+
+internal fun mergeYandexProfile(base: PreparedTunnelProfile?, yandex: PreparedTunnelProfile): PreparedTunnelProfile {
+    require(yandex.servers.size == 1 && yandex.servers.single().engine == TunnelEngineKind.LEVIK_YANDEX)
+    if (base == null) return yandex
+    require(base.subscriptionId == yandex.subscriptionId)
+    return base.copy(
+        version = maxOf(base.version, yandex.version),
+        profileId = yandex.profileId,
+        subscriptionExpiresAt = earliestExpiry(base.subscriptionExpiresAt, yandex.subscriptionExpiresAt),
+        servers = base.servers.filter { it.engine != TunnelEngineKind.LEVIK_YANDEX } + yandex.servers,
+    )
 }
 
 internal fun mergePreparedProfiles(
