@@ -1,5 +1,16 @@
 # Уведомления об использовании сторонних библиотек
 
+## sing-box — TUIC-хелпер (только Direct)
+
+- Проект: <https://github.com/SagerNet/sing-box>
+- Зафиксированная версия: `v1.14.2` (commit `af6e64c3b69e6132ebaee0e1a3d24e93903f6709`)
+- Лицензия: GPL-3.0-or-later
+- SHA-256 архива исходников:
+  `67dd8f8c37ecaaadcfcafad1f0827eed4b034c963b86fd3aa5c0d7a36876845d`
+
+Direct APK содержит минимальную сборку (`with_quic`) как `libleviktuic.so`,
+см. `native/tuic/`. Google Play flavor этот бинарник не содержит.
+
 ## Levik WhiteList Relay / WDTT Plus v15 (только Direct)
 
 - Проект: <https://github.com/Ivan4537/WDTT-Plus>

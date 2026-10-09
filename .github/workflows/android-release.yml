@@ -239,6 +239,10 @@ jobs:
         shell: bash
         run: printf 'YANDEX_GO_BIN=%s/bin/go\n' "$(go env GOROOT)" >>"${GITHUB_ENV}"
 
+      - name: Pin TUIC toolchain independently
+        shell: bash
+        run: printf 'TUIC_GO_BIN=%s/bin/go\n' "$(go env GOROOT)" >>"${GITHUB_ENV}"
+
       - name: Set up Go 1.26.5
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -328,6 +332,7 @@ jobs:
             --aar levik_vpn_android/app/libs/libXray.aar \
             --relay-jni-directory levik_whitelist_relay/build/android/jniLibs \
             --yandex-jni-directory levik_vpn_android/native/yandex/build/android/jniLibs \
+            --tuic-jni-directory levik_vpn_android/native/tuic/build/android/jniLibs \
             --source-lock release/native-sources.lock.json \
             --output-directory "${RUNNER_TEMP}/levik-native-sbom"
 

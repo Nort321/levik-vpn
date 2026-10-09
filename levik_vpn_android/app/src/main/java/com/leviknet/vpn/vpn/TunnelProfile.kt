@@ -36,6 +36,10 @@ enum class TunnelEngineKind {
 
     @SerialName("levik-yandex")
     LEVIK_YANDEX,
+
+    /** TUIC v5 through the Direct-only sing-box sidecar; Xray keeps TUN and routing. */
+    @SerialName("levik-tuic")
+    LEVIK_TUIC,
 }
 
 @Serializable
@@ -143,6 +147,20 @@ data class YandexBootstrap(
     val providerAuth: YandexProviderAuth,
 )
 
+/** TUIC endpoint issued by the Levik profile; the CA is pinned, system roots are never used. */
+@Serializable
+data class TuicServerConfig(
+    val address: String,
+    val port: Int,
+    val uuid: String,
+    val password: String,
+    val serverName: String,
+    val alpn: List<String>,
+    val congestionControl: String,
+    val udpRelayMode: String,
+    val caCertificatePem: String,
+)
+
 @Serializable
 data class YandexServerConfig(
     val bootstrap: YandexBootstrap,
@@ -176,6 +194,7 @@ data class TunnelServer(
     val networkRequirement: TunnelNetworkRequirement = TunnelNetworkRequirement.ANY,
     val relayConfig: RelayServerConfig? = null,
     val yandexConfig: YandexServerConfig? = null,
+    val tuicConfig: TuicServerConfig? = null,
 )
 
 fun TunnelServer.effectiveCategory(): TunnelServerCategory = category ?: legacyCategory()

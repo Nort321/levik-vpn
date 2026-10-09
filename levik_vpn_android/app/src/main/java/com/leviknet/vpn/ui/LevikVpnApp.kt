@@ -176,6 +176,10 @@ import com.leviknet.vpn.vpn.effectiveCategory
 import com.leviknet.vpn.vpn.TunnelEngineKind
 import com.leviknet.vpn.vpn.createYandexGuestIntent
 import com.leviknet.vpn.vpn.isMobileServer
+import com.leviknet.vpn.vpn.ServerProtocolGroup
+import com.leviknet.vpn.vpn.groupProtocolVariants
+import com.leviknet.vpn.vpn.localizedCountryName
+import com.leviknet.vpn.vpn.protocol
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -2856,12 +2860,13 @@ private fun ServersScreen(
                                         topPadding = 8,
                                     )
                                 }
-                                items(regularServers, key = TunnelServer::id) { server ->
-                                    ServerItemCard(
-                                        server = server,
-                                        selected = !automaticServer && server.id == selectedServerId,
-                                        isFav = favoriteServerIds.contains(server.id),
-                                        pingValue = serverPings[server.id],
+                                items(groupProtocolVariants(regularServers), key = ServerProtocolGroup::id) { group ->
+                                    ServerGroupCard(
+                                        group = group,
+                                        automaticServer = automaticServer,
+                                        selectedServerId = selectedServerId,
+                                        favoriteServerIds = favoriteServerIds,
+                                        serverPings = serverPings,
                                         pingingServers = pingingServers,
                                         isDark = isDark,
                                         onServerSelected = onServerSelection,
@@ -2894,12 +2899,13 @@ private fun ServersScreen(
                                 }
                             }
                         } else {
-                            items(filtered, key = TunnelServer::id) { server ->
-                                ServerItemCard(
-                                    server = server,
-                                    selected = !automaticServer && server.id == selectedServerId,
-                                    isFav = favoriteServerIds.contains(server.id),
-                                    pingValue = serverPings[server.id],
+                            items(groupProtocolVariants(filtered), key = ServerProtocolGroup::id) { group ->
+                                ServerGroupCard(
+                                    group = group,
+                                    automaticServer = automaticServer,
+                                    selectedServerId = selectedServerId,
+                                    favoriteServerIds = favoriteServerIds,
+                                    serverPings = serverPings,
                                     pingingServers = pingingServers,
                                     isDark = isDark,
                                     onServerSelected = onServerSelection,
@@ -2909,12 +2915,13 @@ private fun ServersScreen(
                             }
                         }
                     } else {
-                        items(filtered, key = TunnelServer::id) { server ->
-                            ServerItemCard(
-                                server = server,
-                                selected = !automaticServer && server.id == selectedServerId,
-                                isFav = favoriteServerIds.contains(server.id),
-                                pingValue = serverPings[server.id],
+                        items(groupProtocolVariants(filtered), key = ServerProtocolGroup::id) { group ->
+                            ServerGroupCard(
+                                group = group,
+                                automaticServer = automaticServer,
+                                selectedServerId = selectedServerId,
+                                favoriteServerIds = favoriteServerIds,
+                                serverPings = serverPings,
                                 pingingServers = pingingServers,
                                 isDark = isDark,
                                 onServerSelected = onServerSelection,
@@ -2973,6 +2980,39 @@ private fun ServerCategoryHeader(
     }
 }
 
+/** One card per server; protocol variants of the same server switch inside the card. */
+@Composable
+private fun ServerGroupCard(
+    group: ServerProtocolGroup,
+    automaticServer: Boolean,
+    selectedServerId: String?,
+    favoriteServerIds: Set<String>,
+    serverPings: Map<String, Long?>,
+    pingingServers: Boolean,
+    isDark: Boolean,
+    onServerSelected: (String) -> Unit,
+    onToggleFavorite: (String) -> Unit,
+    onYandexSetup: (() -> Unit)?,
+) {
+    val server = group.active(selectedServerId)
+    val favoriteIds = group.variants.map(TunnelServer::id).filter(favoriteServerIds::contains)
+    ServerItemCard(
+        server = server,
+        selected = !automaticServer && group.variants.any { it.id == selectedServerId },
+        isFav = favoriteIds.isNotEmpty(),
+        pingValue = serverPings[server.id],
+        pingingServers = pingingServers,
+        isDark = isDark,
+        onServerSelected = onServerSelected,
+        onToggleFavorite = { id ->
+            // A card stands for every protocol of the server: clear all, or mark the active one.
+            if (favoriteIds.isEmpty()) onToggleFavorite(id) else favoriteIds.forEach(onToggleFavorite)
+        },
+        onYandexSetup = onYandexSetup,
+        protocolVariants = if (group.variants.size > 1) group.variants else emptyList(),
+    )
+}
+
 @Composable
 private fun ServerItemCard(
     server: TunnelServer,
@@ -2984,6 +3024,7 @@ private fun ServerItemCard(
     onServerSelected: (String) -> Unit,
     onToggleFavorite: (String) -> Unit,
     onYandexSetup: (() -> Unit)? = null,
+    protocolVariants: List<TunnelServer> = emptyList(),
 ) {
     var showGuide by remember(server.id) { mutableStateOf(false) }
     if (showGuide) {
@@ -3026,7 +3067,11 @@ private fun ServerItemCard(
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
-                        text = server.name.displayName(),
+                        text = if (protocolVariants.isNotEmpty()) {
+                            localizedCountryName(server.countryCode) ?: server.name.displayName()
+                        } else {
+                            server.name.displayName()
+                        },
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         maxLines = 3,
@@ -3062,6 +3107,41 @@ private fun ServerItemCard(
                     )
                 }
                 RadioButton(selected = selected, onClick = null)
+            }
+            if (protocolVariants.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .selectableGroup(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    protocolVariants.forEach { variant ->
+                        val active = variant.id == server.id
+                        Surface(
+                            modifier = Modifier.selectable(
+                                selected = active,
+                                role = Role.RadioButton,
+                                onClick = { onServerSelected(variant.id) },
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (active) LevikBlue else MaterialTheme.colorScheme.surface,
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (active) LevikBlue else MaterialTheme.colorScheme.outline,
+                            ),
+                        ) {
+                            Text(
+                                text = variant.protocol().label,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                fontSize = 13.sp,
+                                fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                                color = if (active) Color.White else MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
+                    }
+                }
             }
             if (server.engine == TunnelEngineKind.LEVIK_RELAY) {
                 TextButton(onClick = { showGuide = true }) {

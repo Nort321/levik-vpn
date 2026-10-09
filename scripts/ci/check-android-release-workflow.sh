@@ -49,6 +49,8 @@ required_literals=(
   'generate-native-sbom.py'
   '--relay-jni-directory levik_whitelist_relay/build/android/jniLibs'
   '--yandex-jni-directory levik_vpn_android/native/yandex/build/android/jniLibs'
+  '--tuic-jni-directory levik_vpn_android/native/tuic/build/android/jniLibs'
+  'TUIC_GO_BIN='
   'go-version: "1.26.5"'
   'go-version: "1.26.8"'
   'YANDEX_GO_BIN='

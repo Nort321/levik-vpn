@@ -105,6 +105,8 @@ val libXrayAar = layout.projectDirectory.file("libs/libXray.aar").asFile
 val expectedLibXraySha256 = "4708a361a74f7e955635dbe3661cefb459bdc867423c3b1826a2c5a6ea4ac77d"
 val yandexNativeProjectDir = rootProject.file("native/yandex")
 val yandexNativeJniDir = yandexNativeProjectDir.resolve("build/android/jniLibs")
+val tuicNativeProjectDir = rootProject.file("native/tuic")
+val tuicNativeJniDir = tuicNativeProjectDir.resolve("build/android/jniLibs")
 val relayNativeProjectDir = rootProject.file("../levik_whitelist_relay")
 val relayNativeJniDir = rootProject.file("../levik_whitelist_relay/build/android/jniLibs")
 val relayNativeBuildScript = relayNativeProjectDir.resolve("scripts/build-android-client.sh")
@@ -267,7 +269,7 @@ android {
         }
     }
 
-    sourceSets.getByName("direct").jniLibs.srcDirs(relayNativeJniDir, yandexNativeJniDir)
+    sourceSets.getByName("direct").jniLibs.srcDirs(relayNativeJniDir, yandexNativeJniDir, tuicNativeJniDir)
 
     buildFeatures {
         buildConfig = true
@@ -419,6 +421,30 @@ val validateDirectYandexNativeRuntime by tasks.registering {
     }
 }
 
+val buildDirectTuicNative by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Builds the Direct-only TUIC helper (minimal sing-box) with pinned Go and NDK."
+    workingDir(tuicNativeProjectDir)
+    val goBinary = providers.environmentVariable("TUIC_GO_BIN")
+        .orElse(providers.environmentVariable("GO_BIN")).orElse("go")
+    environment("GO_BIN", goBinary.get())
+    inputs.property("tuicGoBinary", goBinary)
+    commandLine("bash", tuicNativeProjectDir.resolve("scripts/build-android-helper.sh").absolutePath)
+    inputs.files(tuicNativeProjectDir.resolve("scripts/build-android-helper.sh"),
+        tuicNativeProjectDir.resolve("source/upstream.json"))
+    outputs.dir(tuicNativeJniDir)
+}
+
+val validateDirectTuicNativeRuntime by tasks.registering {
+    group = "verification"
+    dependsOn(buildDirectTuicNative)
+    doLast {
+        relayNativeAbis.forEach { (abi, expected) ->
+            validateRelayElf(tuicNativeJniDir.resolve("$abi/libleviktuic.so"), abi, expected.first, expected.second)
+        }
+    }
+}
+
 val validateDirectRelayNativeRuntime by tasks.registering {
     group = "verification"
     description = "Fails Direct release builds without every audited relay native executable."
@@ -446,7 +472,7 @@ val verifyPlayRelayExclusion by tasks.registering {
         val leaked = forbiddenSourceRoots
             .filter(File::exists)
             .flatMap { root -> root.walkTopDown().filter(File::isFile).toList() }
-            .filter { it.name in setOf("liblevikrelay.so", "liblevikyandex.so") }
+            .filter { it.name in setOf("liblevikrelay.so", "liblevikyandex.so", "libleviktuic.so") }
         check(leaked.isEmpty()) {
             "Play-visible source sets contain Direct-only relay artifacts: " +
                 leaked.joinToString { it.absolutePath }
@@ -476,7 +502,7 @@ val verifyPlayPackagedRelayExclusion by tasks.registering {
                 val forbidden = zip.entries().asSequence()
                     .map { entry -> entry.name }
                     .filter { entry ->
-                        entry.substringAfterLast('/').lowercase() in setOf("liblevikrelay.so", "liblevikyandex.so")
+                        entry.substringAfterLast('/').lowercase() in setOf("liblevikrelay.so", "liblevikyandex.so", "libleviktuic.so")
                     }
                     .toList()
                 check(forbidden.isEmpty()) {
@@ -605,6 +631,7 @@ tasks.configureEach {
             validateDirectReleaseOtaConfiguration,
             validateDirectRelayNativeRuntime,
             validateDirectYandexNativeRuntime,
+            validateDirectTuicNativeRuntime,
             verifyDirectReleaseRuntimeClasspath,
         )
     }
@@ -614,7 +641,7 @@ tasks.configureEach {
     if (name.startsWith("mergeDirect") &&
         (name.endsWith("JniLibFolders") || name.endsWith("NativeLibs"))
     ) {
-        dependsOn(validateDirectRelayNativeRuntime, validateDirectYandexNativeRuntime)
+        dependsOn(validateDirectRelayNativeRuntime, validateDirectYandexNativeRuntime, validateDirectTuicNativeRuntime)
     }
     if (name.matches(Regex("^(assemble|bundle)Play(Debug|Release)$"))) {
         finalizedBy(verifyPlayPackagedRelayExclusion)

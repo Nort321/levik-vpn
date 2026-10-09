@@ -5,6 +5,8 @@ import kotlinx.serialization.json.JsonObject
 
 class TunnelProfilePreparer(
     private val xrayRuntime: XrayRuntime,
+    /** True only where the TUIC sidecar is packaged (Direct). */
+    private val includeTuic: Boolean = false,
 ) {
     fun prepare(profile: TunnelProfile): PreparedTunnelProfile {
         val converted = xrayRuntime.convertProfile(profile)
@@ -23,7 +25,11 @@ class TunnelProfilePreparer(
                 yandexConfig = YandexServerConfig(bootstrap, profile.routing),
             ))
         }.orEmpty()
-        val servers = converted.servers + relayServers + yandexServers
+        val tuicServers = profile.source
+            ?.takeIf { includeTuic }
+            ?.let { source -> TuicLinkParser.parse(source.content) }
+            .orEmpty()
+        val servers = converted.servers + tuicServers + relayServers + yandexServers
 
         require(servers.isNotEmpty()) { "Tunnel profile has no servers" }
         require(servers.size <= MAX_SERVERS) { "Tunnel profile has too many servers" }

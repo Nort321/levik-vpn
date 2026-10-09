@@ -365,6 +365,39 @@ for yandex_abi in arm64-v8a armeabi-v7a x86_64; do
       >"${EVIDENCE_DIRECTORY}/liblevikyandex-${yandex_abi}-build-info.txt"
 done
 
+# TUIC helper: a minimal sing-box build from the digest-locked upstream archive.
+readonly TUIC_GO_COMMAND="${TUIC_GO_BIN:?TUIC_GO_BIN must identify Go 1.26.8}"
+if [[ "$("${TUIC_GO_COMMAND}" env GOVERSION)" != "go1.26.8" ]]; then
+  printf 'ERROR: TUIC corresponding source requires Go 1.26.8.\n' >&2
+  exit 1
+fi
+tuic_archives=("${UPSTREAM_ARCHIVES}"/*-sing-box-v1.14.2.tar.gz)
+if [[ "${#tuic_archives[@]}" != "1" || ! -f "${tuic_archives[0]}" || -L "${tuic_archives[0]}" ]]; then
+  printf 'ERROR: digest-locked sing-box source archive is missing.\n' >&2
+  exit 1
+fi
+readonly TUIC_SOURCE="${TEMPORARY_DIRECTORY}/tuic-sing-box"
+mkdir -p -- "${TUIC_SOURCE}"
+tar -xzf "${tuic_archives[0]}" --strip-components=1 -C "${TUIC_SOURCE}"
+capture_go_module_graph \
+  tuic-android-client \
+  "${TUIC_SOURCE}" \
+  "${MODULE_CACHE}/tuic-android-client" \
+  "${VENDOR_SOURCE}/tuic-android-client" \
+  "${EVIDENCE_DIRECTORY}/go-modules-tuic-android-client.json" \
+  "${TUIC_GO_COMMAND}"
+
+for tuic_abi in arm64-v8a armeabi-v7a x86_64; do
+  tuic_library="${REPOSITORY_ROOT}/levik_vpn_android/native/tuic/build/android/jniLibs/${tuic_abi}/libleviktuic.so"
+  if [[ ! -f "${tuic_library}" || -L "${tuic_library}" ]]; then
+    printf 'ERROR: verified TUIC binary is missing for %s.\n' "${tuic_abi}" >&2
+    exit 1
+  fi
+  "${TUIC_GO_COMMAND}" version -m "${tuic_library}" |
+    sed -E "1s#^.*: (go[0-9]+(\\.[0-9]+)+)\$#libleviktuic-${tuic_abi}.so: \\1#" \
+      >"${EVIDENCE_DIRECTORY}/libleviktuic-${tuic_abi}-build-info.txt"
+done
+
 unzip -p "${NATIVE_AAR}" jni/arm64-v8a/libgojni.so \
   >"${TEMPORARY_DIRECTORY}/libgojni.so"
 go version -m "${TEMPORARY_DIRECTORY}/libgojni.so" |

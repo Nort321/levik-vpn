@@ -22,5 +22,11 @@ internal fun createTunnelEngineRegistry(
             ),
             xrayRuntime,
         ),
+        TuicTunnelEngineAdapter(
+            AndroidTuicNativeSessionFactory(
+                java.io.File(nativeLibraryDir, "libleviktuic.so").absolutePath,
+            ),
+            xrayRuntime,
+        ),
     ),
 )

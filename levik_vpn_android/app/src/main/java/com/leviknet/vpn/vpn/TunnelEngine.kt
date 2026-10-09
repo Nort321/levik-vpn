@@ -106,6 +106,12 @@ sealed interface TunnelEngineRequest {
         val configFactory: RelayXrayConfigFactory,
         val tunPlan: TunPlan,
     ) : TunnelEngineRequest
+
+    data class Tuic(
+        val config: TuicServerConfig,
+        val configFactory: RelayXrayConfigFactory,
+        val tunPlan: TunPlan,
+    ) : TunnelEngineRequest
 }
 
 /**

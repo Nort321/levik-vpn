@@ -23,6 +23,12 @@ class TunnelEngineDistributionTest {
         assertThrows(TunnelEngineUnavailableException::class.java) {
             registry.require(TunnelEngineKind.LEVIK_YANDEX)
         }
+        assertThrows(TunnelEngineUnavailableException::class.java) {
+            registry.require(TunnelEngineKind.LEVIK_TUIC)
+        }
+        assertThrows(ClassNotFoundException::class.java) {
+            Class.forName("com.leviknet.vpn.vpn.TuicTunnelEngineAdapter")
+        }
         assertThrows(ClassNotFoundException::class.java) {
             Class.forName("com.leviknet.vpn.vpn.RelayTunnelEngineAdapter")
         }

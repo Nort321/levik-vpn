@@ -14,7 +14,7 @@ class TunnelEngineDistributionTest {
         )
 
         assertEquals(
-            setOf(TunnelEngineKind.XRAY, TunnelEngineKind.LEVIK_RELAY, TunnelEngineKind.LEVIK_YANDEX),
+            setOf(TunnelEngineKind.XRAY, TunnelEngineKind.LEVIK_RELAY, TunnelEngineKind.LEVIK_YANDEX, TunnelEngineKind.LEVIK_TUIC),
             registry.supportedProfileEngines,
         )
         assertTrue(
@@ -23,6 +23,10 @@ class TunnelEngineDistributionTest {
         )
         assertTrue(
             Class.forName("com.leviknet.vpn.vpn.RelayTunnelEngineAdapter") != null,
+        )
+        assertTrue(
+            "Direct must use the native TUIC sidecar adapter",
+            registry.require(TunnelEngineKind.LEVIK_TUIC) is TuicTunnelEngineAdapter,
         )
     }
 }

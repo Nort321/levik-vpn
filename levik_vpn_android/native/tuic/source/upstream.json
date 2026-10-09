@@ -1,0 +1,12 @@
+{
+  "repository": "https://github.com/SagerNet/sing-box",
+  "tag": "v1.14.2",
+  "commit": "af6e64c3b69e6132ebaee0e1a3d24e93903f6709",
+  "sourceArchive": "https://github.com/SagerNet/sing-box/archive/refs/tags/v1.14.2.tar.gz",
+  "sourceArchiveSha256": "67dd8f8c37ecaaadcfcafad1f0827eed4b034c963b86fd3aa5c0d7a36876845d",
+  "license": "GPL-3.0-or-later",
+  "goVersion": "1.26.8",
+  "command": "./cmd/sing-box",
+  "buildTags": "with_quic,badlinkname,tfogo_checklinkname0",
+  "output": "libleviktuic.so"
+}

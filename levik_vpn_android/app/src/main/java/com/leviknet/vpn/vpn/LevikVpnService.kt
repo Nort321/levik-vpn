@@ -142,7 +142,8 @@ class LevikVpnService : VpnService() {
 
     private fun fileDescriptorProtector(network: Network, server: TunnelServer): TunnelFileDescriptorProtector {
         val bindingFailureLogged = AtomicBoolean(false)
-        val requireBinding = server.engine != TunnelEngineKind.XRAY ||
+        // A TUIC server is a regular server: binding is best-effort exactly as for Xray.
+        val requireBinding = server.engine !in setOf(TunnelEngineKind.XRAY, TunnelEngineKind.LEVIK_TUIC) ||
             server.networkRequirement != TunnelNetworkRequirement.ANY
         return TunnelFileDescriptorProtector { fd ->
             protectTunnelSocket(
@@ -429,36 +430,60 @@ class LevikVpnService : VpnService() {
                 }
             } else null
 
+            // Regular servers and the TUIC sidecar share one Xray configuration path.
+            fun regularXrayConfig(
+                buildProfile: PreparedTunnelProfile,
+                tunFileDescriptor: Int,
+                antiDpiEnabled: Boolean,
+            ): String = XrayConfigBuilder(container.json).build(
+                profile = buildProfile,
+                selectedServerId = selected.id,
+                tunFileDescriptor = tunFileDescriptor,
+                routingPreset = routingPreset,
+                bypassRussianTraffic = container.settings.bypassRussianTraffic.value,
+                russianDirectCidrs = container.russianRoutingData.cidrs,
+                primaryDnsIp = primaryDns,
+                secondaryDnsIp = secondaryDns,
+                dohEndpoint = dohUrl,
+                antiDpiEnabled = antiDpiEnabled,
+                antiDpiPackets = container.settings.antiDpiPackets.value,
+                antiDpiLength = container.settings.antiDpiLength.value,
+                antiDpiInterval = container.settings.antiDpiInterval.value,
+                customDirectDomains = container.settings.customDirectDomains.value,
+                customProxyDomains = container.settings.customProxyDomains.value,
+                effectiveRoutingProfile = routingProfile,
+                lteDirectCidrs = if (routingProfile == EffectiveRoutingProfile.LTE) {
+                    container.lteRoutingData.cidrs
+                } else {
+                    emptyList()
+                },
+                lteDirectDomains = if (routingProfile == EffectiveRoutingProfile.LTE) {
+                    container.lteRoutingData.domains
+                } else {
+                    emptyList()
+                },
+            )
+
             val request = when (selected.engine) {
                 TunnelEngineKind.XRAY -> TunnelEngineRequest.Xray(
                     configFactory = XrayConfigFactory { tunFileDescriptor ->
-                        XrayConfigBuilder(container.json).build(
-                            profile = profile,
-                            selectedServerId = selected.id,
-                            tunFileDescriptor = tunFileDescriptor,
-                            routingPreset = routingPreset,
-                            bypassRussianTraffic = container.settings.bypassRussianTraffic.value,
-                            russianDirectCidrs = container.russianRoutingData.cidrs,
-                            primaryDnsIp = primaryDns,
-                            secondaryDnsIp = secondaryDns,
-                            dohEndpoint = dohUrl,
-                            antiDpiEnabled = antiDpi,
-                            antiDpiPackets = container.settings.antiDpiPackets.value,
-                            antiDpiLength = container.settings.antiDpiLength.value,
-                            antiDpiInterval = container.settings.antiDpiInterval.value,
-                            customDirectDomains = container.settings.customDirectDomains.value,
-                            customProxyDomains = container.settings.customProxyDomains.value,
-                            effectiveRoutingProfile = routingProfile,
-                            lteDirectCidrs = if (routingProfile == EffectiveRoutingProfile.LTE) {
-                                container.lteRoutingData.cidrs
-                            } else {
-                                emptyList()
-                            },
-                            lteDirectDomains = if (routingProfile == EffectiveRoutingProfile.LTE) {
-                                container.lteRoutingData.domains
-                            } else {
-                                emptyList()
-                            },
+                        regularXrayConfig(profile, tunFileDescriptor, antiDpi)
+                    },
+                    tunPlan = xrayTunPlan(
+                        primaryDns = primaryDns,
+                        secondaryDns = secondaryDns,
+                    ),
+                )
+                TunnelEngineKind.LEVIK_TUIC -> TunnelEngineRequest.Tuic(
+                    config = requireNotNull(selected.tuicConfig) {
+                        "TUIC server has no configuration"
+                    },
+                    configFactory = RelayXrayConfigFactory { tunFileDescriptor, proxy ->
+                        // TLS fragmentation applies to TCP; the QUIC sidecar hop never uses it.
+                        regularXrayConfig(
+                            XrayConfigBuilder(container.json).withTuicProxy(profile, selected.id, proxy),
+                            tunFileDescriptor,
+                            antiDpiEnabled = false,
                         )
                     },
                     tunPlan = xrayTunPlan(
@@ -1142,6 +1167,7 @@ class LevikVpnService : VpnService() {
                         is TunnelEngineRequest.Xray -> request.tunPlan
                         is TunnelEngineRequest.Relay -> request.tunPlan
                         is TunnelEngineRequest.Yandex -> request.tunPlan
+                        is TunnelEngineRequest.Tuic -> request.tunPlan
                     }
                     val activeTun = if (prepared.tunPlan == previousTunPlan) {
                         previousTun

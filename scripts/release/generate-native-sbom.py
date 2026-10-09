@@ -40,6 +40,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--aar", required=True, type=pathlib.Path)
     parser.add_argument("--relay-jni-directory", required=True, type=pathlib.Path)
     parser.add_argument("--yandex-jni-directory", required=True, type=pathlib.Path)
+    parser.add_argument("--tuic-jni-directory", required=True, type=pathlib.Path)
     parser.add_argument("--source-lock", required=True, type=pathlib.Path)
     parser.add_argument("--output-directory", required=True, type=pathlib.Path)
     parser.add_argument("--go", default="go")
@@ -179,6 +180,8 @@ def make_inventory(
     relay_modules: list[GoModule],
     yandex_artifacts: list[tuple[str, str, str]],
     yandex_modules: list[GoModule],
+    tuic_artifacts: list[tuple[str, str, str]],
+    tuic_modules: list[GoModule],
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, list[str]]]:
     native = source_lock["nativeArtifact"]
     if native.get("sha256") != aar_sha256 or not SHA256_PATTERN.fullmatch(aar_sha256):
@@ -354,6 +357,43 @@ def make_inventory(
         component_refs.add(ref)
         dependency_graph[ref] = yandex_dependency_refs
 
+    tuic = source_lock.get("tuicArtifact", {})
+    tuic_archive = next(
+        (archive for archive in source_lock["sourceArchives"] if archive.get("name") == tuic.get("sourceArchive")),
+        {},
+    )
+    if (tuic.get("embeddedGoVersion") != "go1.26.8" or
+            tuic.get("license") != "GPL-3.0-or-later" or
+            tuic_archive.get("commit") != tuic.get("upstreamCommit") or
+            len(tuic_artifacts) != len(RELAY_ABIS) or
+            {abi for abi, _, _ in tuic_artifacts} != set(RELAY_ABIS) or
+            any(version != tuic["embeddedGoVersion"] for _, _, version in tuic_artifacts)):
+        raise SystemExit("TUIC native inventory does not match the pinned source and toolchain")
+    tuic_dependency_refs = add_go_modules(tuic_modules)
+    tuic_component_refs = []
+    for abi, binary_sha256, go_version in tuic_artifacts:
+        if not SHA256_PATTERN.fullmatch(binary_sha256):
+            raise SystemExit("TUIC native inventory contains an invalid artifact digest")
+        name = f"{tuic['name']}:{abi}"
+        ref = component_ref("native", name, tuic["version"])
+        tuic_component_refs.append(ref)
+        components.append({
+            "type": "application", "bom-ref": ref,
+            "group": "com.leviknet.tuic", "name": name, "version": tuic["version"],
+            "hashes": [{"alg": "SHA-256", "content": binary_sha256}],
+            "licenses": [{"license": {"id": tuic["license"]}}],
+            "properties": [
+                {"name": "levik.native.abi", "value": abi},
+                {"name": "levik.native.archivePath", "value": f"lib/{abi}/{tuic['name']}"},
+                {"name": "levik.native.embeddedGoVersion", "value": go_version},
+                {"name": "levik.native.buildTags", "value": tuic["buildTags"]},
+                {"name": "levik.source.url", "value": tuic_archive["url"]},
+                {"name": "levik.source.commit", "value": tuic["upstreamCommit"]},
+            ],
+        })
+        component_refs.add(ref)
+        dependency_graph[ref] = tuic_dependency_refs
+
     for archive in source_lock["sourceArchives"]:
         required = ("name", "version", "url", "sha256", "license")
         if any(not archive.get(field) for field in required):
@@ -385,7 +425,9 @@ def make_inventory(
         "name": "Levik VPN Android native inventory",
         "version": str(native["version"]),
     }
-    dependency_graph[metadata_component["bom-ref"]] = [aar_ref, *relay_component_refs, *yandex_component_refs]
+    dependency_graph[metadata_component["bom-ref"]] = [
+        aar_ref, *relay_component_refs, *yandex_component_refs, *tuic_component_refs,
+    ]
     return metadata_component, components, dependency_graph
 
 
@@ -512,6 +554,9 @@ def main() -> None:
     yandex_artifacts, yandex_modules = relay_build_info(
         arguments.yandex_jni_directory, arguments.go, "liblevikyandex.so",
     )
+    tuic_artifacts, tuic_modules = relay_build_info(
+        arguments.tuic_jni_directory, arguments.go, "libleviktuic.so",
+    )
     metadata_component, components, dependencies = make_inventory(
         source_lock,
         aar_sha256,
@@ -521,6 +566,8 @@ def main() -> None:
         relay_modules,
         yandex_artifacts,
         yandex_modules,
+        tuic_artifacts,
+        tuic_modules,
     )
     arguments.output_directory.mkdir(parents=True, exist_ok=True)
     write_json(
@@ -537,7 +584,8 @@ def main() -> None:
     )
     print(
         "Generated native CycloneDX inventory for "
-        f"{len(modules)} libXray, {len(relay_modules)} relay and {len(yandex_modules)} Yandex Go modules.",
+        f"{len(modules)} libXray, {len(relay_modules)} relay, {len(yandex_modules)} Yandex "
+        f"and {len(tuic_modules)} TUIC Go modules.",
     )
 
 

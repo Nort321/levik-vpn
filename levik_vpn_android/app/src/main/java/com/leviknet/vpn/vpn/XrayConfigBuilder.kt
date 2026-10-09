@@ -72,6 +72,31 @@ class XrayConfigBuilder(
         )
     }
 
+    /**
+     * Replaces the selected TUIC server with a loopback SOCKS5 outbound to the running
+     * sidecar, so the regular Xray configuration (routing, DNS, split tunnelling) applies.
+     */
+    fun withTuicProxy(
+        profile: PreparedTunnelProfile,
+        tuicServerId: String,
+        proxy: LocalProxyEndpoint,
+    ): PreparedTunnelProfile {
+        val tuicServer = profile.servers.firstOrNull { it.id == tuicServerId && it.engine == TunnelEngineKind.LEVIK_TUIC }
+            ?: throw IllegalArgumentException("Selected TUIC server is unavailable")
+        val proxyOutbound = buildJsonObject {
+            put("tag", tuicServer.tag)
+            put("protocol", "socks")
+            put("settings", buildJsonObject {
+                put("address", proxy.address)
+                put("port", proxy.port)
+                put("user", proxy.username)
+                put("pass", proxy.password)
+            })
+        }
+        val proxied = tuicServer.copy(engine = TunnelEngineKind.XRAY, outbound = proxyOutbound, tuicConfig = null)
+        return profile.copy(servers = listOf(proxied) + profile.servers.filter { it.engine == TunnelEngineKind.XRAY })
+    }
+
     fun build(
         profile: PreparedTunnelProfile,
         selectedServerId: String,

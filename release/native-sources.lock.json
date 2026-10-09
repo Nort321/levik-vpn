@@ -77,6 +77,15 @@
       "size": 34150120,
       "sha256": "4e39b98e42f946fa05ac8bc5b71877df97dbdb7cbb1a777b541667ad7117fd2e",
       "license": "BSD-3-Clause"
+    },
+    {
+      "name": "sing-box",
+      "version": "v1.14.2",
+      "commit": "af6e64c3b69e6132ebaee0e1a3d24e93903f6709",
+      "url": "https://github.com/SagerNet/sing-box/archive/refs/tags/v1.14.2.tar.gz",
+      "size": 1985133,
+      "sha256": "67dd8f8c37ecaaadcfcafad1f0827eed4b034c963b86fd3aa5c0d7a36876845d",
+      "license": "GPL-3.0-or-later"
     }
   ],
   "yandexArtifact": {
@@ -86,5 +95,14 @@
     "license": "GPL-3.0-or-later",
     "sourceDirectory": "levik_vpn_android/native/yandex/fork/openflux",
     "upstreamCommit": "74cac6d47bf4c27947348ee957538a2c0728a485"
+  },
+  "tuicArtifact": {
+    "name": "libleviktuic.so",
+    "version": "levik-tuic-sing-box-v1.14.2",
+    "embeddedGoVersion": "go1.26.8",
+    "license": "GPL-3.0-or-later",
+    "sourceArchive": "sing-box",
+    "buildTags": "with_quic,badlinkname,tfogo_checklinkname0",
+    "upstreamCommit": "af6e64c3b69e6132ebaee0e1a3d24e93903f6709"
   }
 }

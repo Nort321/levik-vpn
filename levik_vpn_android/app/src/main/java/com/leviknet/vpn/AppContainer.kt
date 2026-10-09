@@ -25,6 +25,7 @@ import com.leviknet.vpn.vpn.VpnConnectionState
 import com.leviknet.vpn.vpn.VpnController
 import com.leviknet.vpn.vpn.WifiAutoConnectMonitor
 import com.leviknet.vpn.vpn.XrayRuntime
+import com.leviknet.vpn.vpn.TunnelEngineKind
 import com.leviknet.vpn.vpn.TunnelProfilePreparer
 import com.leviknet.vpn.vpn.createTunnelEngineRegistry
 import com.leviknet.vpn.vpn.relayCapabilityRevocationRequiresDisconnect
@@ -86,7 +87,10 @@ class AppContainer(application: Application) {
         trialDeviceBinding = trialDeviceBinding,
         secureStore = secureStore,
         profileDecryptor = profileDecryptor,
-        tunnelProfilePreparer = TunnelProfilePreparer(xrayRuntime),
+        tunnelProfilePreparer = TunnelProfilePreparer(
+            xrayRuntime,
+            includeTuic = TunnelEngineKind.LEVIK_TUIC in tunnelEngineRegistry.supportedProfileEngines,
+        ),
         supportedTunnelEngines = tunnelEngineRegistry.supportedProfileEngines,
         json = json,
     )

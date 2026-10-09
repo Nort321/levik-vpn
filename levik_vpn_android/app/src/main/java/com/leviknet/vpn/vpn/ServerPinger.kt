@@ -35,7 +35,7 @@ object ServerPinger {
     }
 
     fun measure(server: TunnelServer): Long? =
-        if (server.engine == TunnelEngineKind.XRAY) measure(server.outbound) else null
+        if (server.engine == TunnelEngineKind.XRAY || server.engine == TunnelEngineKind.LEVIK_TUIC) measure(server.outbound) else null
 
     fun measure(outbound: JsonObject): Long? {
         val endpoint = extractEndpoint(outbound) ?: return null
