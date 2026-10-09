@@ -40,6 +40,31 @@ class RelayProfileMergeTest {
     }
 
     @Test
+    fun `relay merge keeps TUIC servers of the regular profile`() {
+        val xray = profile(
+            version = 1,
+            profileId = "xray-profile",
+            expiry = "2026-10-01T00:00:00Z",
+            servers = listOf(
+                server("xray-1", TunnelEngineKind.XRAY),
+                server("tuic-1", TunnelEngineKind.LEVIK_TUIC),
+            ),
+        )
+        val relay = profile(
+            version = 2,
+            profileId = "relay-profile",
+            expiry = "2026-10-01T00:00:00Z",
+            relayExpiry = "2026-09-01T00:00:00Z",
+            servers = listOf(server("relay:de-1", TunnelEngineKind.LEVIK_RELAY)),
+        )
+
+        assertEquals(
+            listOf("xray-1", "tuic-1", "relay:de-1"),
+            mergePreparedProfiles(xray, relay).servers.map { it.id },
+        )
+    }
+
+    @Test
     fun `temporary relay refresh failure may retain only an unexpired cached credential`() {
         val cached = profile(
             version = 2,

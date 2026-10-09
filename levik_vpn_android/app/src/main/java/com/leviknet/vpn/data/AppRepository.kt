@@ -688,6 +688,8 @@ internal fun mergeYandexProfile(base: PreparedTunnelProfile?, yandex: PreparedTu
     )
 }
 
+private val REGULAR_PROFILE_ENGINES = setOf(TunnelEngineKind.XRAY, TunnelEngineKind.LEVIK_TUIC)
+
 internal fun mergePreparedProfiles(
     xray: PreparedTunnelProfile,
     relay: PreparedTunnelProfile?,
@@ -719,7 +721,8 @@ internal fun mergePreparedProfiles(
             relay.subscriptionExpiresAt,
         ),
         relayCredentialExpiresAt = relay.relayCredentialExpiresAt,
-        servers = xray.servers.filter { it.engine == TunnelEngineKind.XRAY } + relayServers,
+        // TUIC servers come from the same regular profile as the Xray servers.
+        servers = xray.servers.filter { it.engine in REGULAR_PROFILE_ENGINES } + relayServers,
     )
 }
 
