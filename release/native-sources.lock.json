@@ -82,7 +82,7 @@
       "name": "sing-box",
       "version": "v1.14.2",
       "commit": "af6e64c3b69e6132ebaee0e1a3d24e93903f6709",
-      "url": "https://github.com/SagerNet/sing-box/archive/refs/tags/v1.14.2.tar.gz",
+      "url": "https://codeload.github.com/SagerNet/sing-box/tar.gz/refs/tags/v1.14.2",
       "size": 1985133,
       "sha256": "67dd8f8c37ecaaadcfcafad1f0827eed4b034c963b86fd3aa5c0d7a36876845d",
       "license": "GPL-3.0-or-later"
