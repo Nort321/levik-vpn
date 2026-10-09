@@ -117,7 +117,7 @@ object TuicLinkParser {
             if (index < 0) decode(part) to "" else decode(part.substring(0, index)) to decode(part.substring(index + 1))
         }
 
-    private fun decode(value: String): String = URLDecoder.decode(value, Charsets.UTF_8)
+    private fun decode(value: String): String = URLDecoder.decode(value, Charsets.UTF_8.name())
 
     private fun stripLeadingFlags(value: String): String {
         var index = 0
