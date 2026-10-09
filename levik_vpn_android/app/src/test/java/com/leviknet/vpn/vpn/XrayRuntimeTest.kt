@@ -6,6 +6,7 @@ import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -15,6 +16,36 @@ import org.junit.Test
 
 class XrayRuntimeTest {
     private val runtime = XrayRuntime(Json)
+
+    @Test
+    fun `preparing Hysteria2 preserves Salamander credentials and TLS identity`() {
+        val stream = buildJsonObject {
+            put("network", "hysteria")
+            put("security", "tls")
+            put("hysteriaSettings", buildJsonObject { put("version", 2); put("auth", "test-auth") })
+            put("tlsSettings", buildJsonObject { put("serverName", "hy2.example.com") })
+            put("finalmask", buildJsonObject {
+                put("udp", buildJsonArray {
+                    add(buildJsonObject {
+                        put("type", "salamander")
+                        put("settings", buildJsonObject { put("password", "S+and&=Secret") })
+                    })
+                })
+            })
+        }
+        val servers = runtime.prepareServers(buildJsonArray {
+            add(buildJsonObject {
+                put("protocol", "hysteria")
+                put("tag", "Hysteria2-obfuscated")
+                put("settings", buildJsonObject {
+                    put("version", 2); put("address", "192.0.2.1"); put("port", 2443)
+                })
+                put("streamSettings", stream)
+            })
+        })
+
+        assertEquals(stream, servers.single().outbound.getValue("streamSettings").jsonObject)
+    }
 
     @Test
     fun `creates unique safe routing tags while preserving readable names`() {

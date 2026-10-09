@@ -7,6 +7,7 @@ import java.time.ZoneOffset
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -669,6 +670,14 @@ class XrayConfigBuilderTest {
                     put("security", "tls")
                     put("sockopt", buildJsonObject { put("dialerProxy", "existing-dialer") })
                     put("hysteriaSettings", buildJsonObject { put("auth", "test-auth") })
+                    put("finalmask", buildJsonObject {
+                        put("udp", buildJsonArray {
+                            add(buildJsonObject {
+                                put("type", "salamander")
+                                put("settings", buildJsonObject { put("password", "test-obfs-password") })
+                            })
+                        })
+                    })
                 })
             })
             val profile = PreparedTunnelProfile(
