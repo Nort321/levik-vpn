@@ -50,7 +50,7 @@ Corresponding Source. Глобальное отключение linker-пров�
 - Зафиксированная версия: `v1.14.2` (commit `af6e64c3b69e6132ebaee0e1a3d24e93903f6709`)
 - SHA-256 архива исходников: `67dd8f8c37ecaaadcfcafad1f0827eed4b034c963b86fd3aa5c0d7a36876845d`
 - Лицензия: GPL-3.0-or-later
-- Сборка: `levik_vpn_android/native/tuic/scripts/build-android-helper.sh` (Go 1.26.8, теги `with_quic`).
+- Сборка: `levik_vpn_android/native/tuic/scripts/build-android-helper.sh` (Go 1.26.8): команда `levik_vpn_android/native/tuic/source/levik-tuic/main.go` собирается внутри этого дерева исходников против его `go.mod`/`go.sum` и использует только TUIC-клиент sing-quic и SOCKS5-сервер sing.
 
 Direct APK содержит `libleviktuic.so` — отдельный процесс для TUIC v5. Google Play flavor этот бинарник не содержит.
 

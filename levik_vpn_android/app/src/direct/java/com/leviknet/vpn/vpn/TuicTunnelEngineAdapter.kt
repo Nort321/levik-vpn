@@ -193,7 +193,7 @@ internal class AndroidTuicNativeSessionFactory(private val executablePath: Strin
 }
 
 /**
- * Runs `libleviktuic.so` (sing-box) and answers its `protect_path` requests: every
+ * Runs `libleviktuic.so` (Levik TUIC client, sing-box config subset) and answers its `protect_path` requests: every
  * outbound socket arrives over an abstract Unix socket via SCM_RIGHTS and is protected
  * from the VPN and bound to the selected network before the sidecar may use it.
  */

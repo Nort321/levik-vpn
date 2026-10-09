@@ -172,12 +172,15 @@ fun normalizedCertificateSha256(value: String): String =
 android {
     namespace = "com.leviknet.vpn"
     compileSdk = 36
+    // The pinned NDK lets AGP strip the debug sections shipped inside libXray's
+    // libgojni.so (~15 MB per ABI); without it packaging silently keeps them.
+    ndkVersion = "29.0.14206865"
 
     defaultConfig {
         applicationId = "com.leviknet.vpn"
         minSdk = 26
         targetSdk = 36
-        versionCode = 75
+        versionCode = 76
         versionName = rootProject.version.toString()
 
         buildConfigField("String", "CABINET_BASE_URL", "\"${cabinetBaseUrl.trimEnd('/')}\"")
@@ -307,9 +310,12 @@ android {
 androidComponents {
     onVariants(selector().withFlavor("distribution" to "direct")) { variant ->
         // The Direct APK contains the large libXray core for every supported ABI.
-        // Compress those libraries in the downloadable APK while keeping every ABI;
-        // Android extracts only the device-compatible library during installation.
+        // Compress those libraries in the downloadable APK; Android extracts only
+        // the device-compatible library during installation.
         variant.packaging.jniLibs.useLegacyPackaging.set(true)
+        // 32-bit x86 has no Android 8+ phones and no relay, Yandex or TUIC helper;
+        // its libXray copy alone added ~20 MB to every Direct download.
+        variant.packaging.jniLibs.excludes.add("lib/x86/**")
     }
 }
 
@@ -423,7 +429,7 @@ val validateDirectYandexNativeRuntime by tasks.registering {
 
 val buildDirectTuicNative by tasks.registering(Exec::class) {
     group = "build"
-    description = "Builds the Direct-only TUIC helper (minimal sing-box) with pinned Go and NDK."
+    description = "Builds the Direct-only TUIC helper (Levik TUIC client on pinned sing-box sources) with pinned Go and NDK."
     workingDir(tuicNativeProjectDir)
     val goBinary = providers.environmentVariable("TUIC_GO_BIN")
         .orElse(providers.environmentVariable("GO_BIN")).orElse("go")
@@ -431,7 +437,8 @@ val buildDirectTuicNative by tasks.registering(Exec::class) {
     inputs.property("tuicGoBinary", goBinary)
     commandLine("bash", tuicNativeProjectDir.resolve("scripts/build-android-helper.sh").absolutePath)
     inputs.files(tuicNativeProjectDir.resolve("scripts/build-android-helper.sh"),
-        tuicNativeProjectDir.resolve("source/upstream.json"))
+        tuicNativeProjectDir.resolve("source/upstream.json"),
+        tuicNativeProjectDir.resolve("source/levik-tuic/main.go"))
     outputs.dir(tuicNativeJniDir)
 }
 

@@ -6,7 +6,7 @@
   "sourceArchiveSha256": "67dd8f8c37ecaaadcfcafad1f0827eed4b034c963b86fd3aa5c0d7a36876845d",
   "license": "GPL-3.0-or-later",
   "goVersion": "1.26.8",
-  "command": "./cmd/sing-box",
-  "buildTags": "with_quic,badlinkname,tfogo_checklinkname0",
+  "command": "./cmd/levik-tuic (overlay: native/tuic/source/levik-tuic/main.go)",
+  "buildTags": "",
   "output": "libleviktuic.so"
 }

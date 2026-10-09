@@ -289,8 +289,13 @@ PY
   rm -rf -- "${private_module_cache}/cache/download/sumdb"
   if [[ -d "${private_module_cache}/cache/download" ]]; then
     find "${private_module_cache}/cache/download" -type f -path '*/@v/list' -delete
+    # Only the verified module archives are bundled. The extracted module trees
+    # duplicate those .zip files byte for byte (and the vendor tree), so they
+    # tripled the bundle size and the release time. Offline rebuilds use
+    # GOPROXY=file://<bundle>/native/go-module-cache/<graph>/cache/download.
+    mkdir -p -- "${module_cache_destination}/cache"
+    cp -R -- "${private_module_cache}/cache/download" "${module_cache_destination}/cache/"
   fi
-  cp -R -- "${private_module_cache}/." "${module_cache_destination}/"
 }
 
 capture_go_module_graph \
@@ -460,8 +465,8 @@ manifest = {
     "contents": {
         "application": "Git archive of the exact Android repository commit",
         "native/libXray": "Pinned libXray source and build scripts",
-        "native/go-vendor": "Separate vendored source trees for libXray and every distributed relay Go module",
-        "native/go-module-cache": "Separate complete module downloads for libXray and every distributed relay Go module",
+        "native/go-vendor": "Separate vendored source trees for libXray and every distributed Go module",
+        "native/go-module-cache": "Verified module archives (cache/download: .zip/.mod/.info/.ziphash) for libXray and every distributed Go module, usable as a file:// GOPROXY",
         "application/levik_whitelist_relay/fork/wdtt-plus-v15/go_client/third_party/anet": "Tracked BSD-3-Clause local anet v0.0.5 fork with pinned provenance and linker-safe Android patch",
         "native/upstream-archives": "Digest-locked source archives for audited copyleft inputs and Go",
         "evidence": "Per-module inventories, per-ABI native build metadata, notices, and source locks",
@@ -494,7 +499,9 @@ def normalized(info: tarfile.TarInfo) -> tarfile.TarInfo:
 paths = [root]
 paths.extend(sorted(root.rglob("*"), key=lambda item: item.as_posix()))
 with output_path.open("wb") as raw:
-    with gzip.GzipFile(filename="", mode="wb", compresslevel=9, fileobj=raw, mtime=0) as compressed:
+    # Level 6 is several times faster than 9 on this mostly-compressed input
+    # (module .zip files) and still deterministic.
+    with gzip.GzipFile(filename="", mode="wb", compresslevel=6, fileobj=raw, mtime=0) as compressed:
         with tarfile.open(fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT) as archive:
             for path in paths:
                 relative = path.relative_to(parent).as_posix()

@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Builds a minimal sing-box (TUIC v5 client + SOCKS5 inbound) for the Direct
-# Android distribution. Xray has no TUIC client; the app runs this binary as a
-# loopback SOCKS5 sidecar and protects its sockets through `protect_path`.
+# Builds the Levik TUIC v5 sidecar for the Direct Android distribution. Xray has
+# no TUIC client; the app runs this binary as a loopback SOCKS5 sidecar and
+# protects its sockets through `protect_path`. The command in
+# source/levik-tuic/main.go is compiled inside the digest-locked sing-box source
+# tree against its go.mod/go.sum, but links only sing-quic's TUIC client and
+# sing's SOCKS5 server (about 9 MB instead of the full ~42 MB sing-box binary).
 set -euo pipefail
 
 workspace_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -13,8 +16,7 @@ ndk_dir="${ANDROID_NDK_HOME:-}"
 readonly version="1.14.2"
 readonly source_url="https://github.com/SagerNet/sing-box/archive/refs/tags/v${version}.tar.gz"
 readonly source_sha256="67dd8f8c37ecaaadcfcafad1f0827eed4b034c963b86fd3aa5c0d7a36876845d"
-# Only TUIC (QUIC) is compiled in; linkname tags match the upstream release build.
-readonly build_tags="with_quic,badlinkname,tfogo_checklinkname0"
+readonly command_source="${workspace_dir}/source/levik-tuic/main.go"
 
 if [[ "$("${go_bin}" version)" != go\ version\ go1.26.8* ]]; then
   printf 'Go 1.26.8 is required (set TUIC_GO_BIN or GO_BIN)\n' >&2
@@ -47,6 +49,9 @@ fi
 if [[ ! -d "${source_dir}" ]]; then
   tar -xzf "${archive}" -C "${work_dir}"
 fi
+# The Levik command is the only file added to the pinned upstream tree.
+mkdir -p "${source_dir}/cmd/levik-tuic"
+cp -- "${command_source}" "${source_dir}/cmd/levik-tuic/main.go"
 
 build_abi() {
   local abi="$1" goarch="$2" compiler="$3" interpreter="$4" goarm="${5:-}"
@@ -58,9 +63,9 @@ build_abi() {
     # Dependencies are verified against the pinned go.sum of the release.
     env GOOS=android GOARCH="${goarch}" GOARM="${goarm}" GOTOOLCHAIN=local \
       GOFLAGS=-mod=readonly CGO_ENABLED=1 CC="${toolchain}/bin/${compiler}" \
-      "${go_bin}" build -buildvcs=false -buildmode=pie -trimpath -tags "${build_tags}" \
-      -ldflags="-X 'github.com/sagernet/sing-box/constant.Version=${version}' -X runtime.godebugDefault=multipathtcp=0,tlssha1=1 -checklinkname=0 -s -w -buildid= -linkmode=external -extldflags=-Wl,-z,max-page-size=16384" \
-      -o "${destination}" ./cmd/sing-box
+      "${go_bin}" build -buildvcs=false -buildmode=pie -trimpath \
+      -ldflags="-s -w -buildid= -linkmode=external -extldflags=-Wl,-z,max-page-size=16384" \
+      -o "${destination}" ./cmd/levik-tuic
   )
   local elf_header program_headers go_metadata
   elf_header="$("${readelf_bin}" -h "${destination}")"
@@ -73,7 +78,13 @@ build_abi() {
     exit 1
   fi
   grep -Fq 'go1.26.8' <<<"${go_metadata}"
-  grep -Fq "${build_tags}" <<<"${go_metadata}"
+  grep -Eq '^[[:space:]]*path[[:space:]]+github.com/sagernet/sing-box/cmd/levik-tuic$' <<<"${go_metadata}"
+  grep -Eq '^[[:space:]]*dep[[:space:]]+github.com/sagernet/sing-quic[[:space:]]' <<<"${go_metadata}"
+  # Guard against accidentally linking the whole sing-box runtime again.
+  if grep -Eq '^[[:space:]]*dep[[:space:]]+github.com/sagernet/(gvisor|sing-tun)[[:space:]]' <<<"${go_metadata}"; then
+    printf 'TUIC helper links the full sing-box runtime\n' >&2
+    exit 1
+  fi
   printf 'built %s with Android API 26 compiler\n' "${destination}"
 }
 

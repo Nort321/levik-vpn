@@ -91,7 +91,7 @@ import zipfile
 apk_path = pathlib.Path(sys.argv[1])
 expected_libxray_entries = {
     f"lib/{abi}/libgojni.so"
-    for abi in ("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+    for abi in ("arm64-v8a", "armeabi-v7a", "x86_64")
 }
 with zipfile.ZipFile(apk_path) as archive:
     native_entries = {

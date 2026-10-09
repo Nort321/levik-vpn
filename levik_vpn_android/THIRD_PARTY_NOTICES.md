@@ -8,7 +8,9 @@
 - SHA-256 архива исходников:
   `67dd8f8c37ecaaadcfcafad1f0827eed4b034c963b86fd3aa5c0d7a36876845d`
 
-Direct APK содержит минимальную сборку (`with_quic`) как `libleviktuic.so`,
+Direct APK содержит TUIC-клиент `libleviktuic.so`: команда
+`native/tuic/source/levik-tuic/main.go`, собранная внутри этого дерева исходников
+против его `go.mod`/`go.sum` (TUIC-клиент sing-quic и SOCKS5-сервер sing),
 см. `native/tuic/`. Google Play flavor этот бинарник не содержит.
 
 ## Levik WhiteList Relay / WDTT Plus v15 (только Direct)

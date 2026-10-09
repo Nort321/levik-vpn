@@ -98,11 +98,12 @@
   },
   "tuicArtifact": {
     "name": "libleviktuic.so",
-    "version": "levik-tuic-sing-box-v1.14.2",
+    "version": "levik-tuic-client-v2-sing-box-v1.14.2",
     "embeddedGoVersion": "go1.26.8",
     "license": "GPL-3.0-or-later",
     "sourceArchive": "sing-box",
-    "buildTags": "with_quic,badlinkname,tfogo_checklinkname0",
+    "command": "./cmd/levik-tuic",
+    "commandSource": "levik_vpn_android/native/tuic/source/levik-tuic/main.go",
     "upstreamCommit": "af6e64c3b69e6132ebaee0e1a3d24e93903f6709"
   }
 }
