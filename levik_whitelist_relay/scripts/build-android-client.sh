@@ -12,8 +12,8 @@ if grep -Rqs --include='*.go' '//go:linkname' "${source_dir}/third_party/anet"; 
   exit 1
 fi
 
-if [[ "$(${go_bin} version)" != go\ version\ go1.26.5* ]]; then
-  printf 'Go 1.26.5 is required (set GO_BIN)\n' >&2
+if [[ "$(${go_bin} version)" != go\ version\ go1.26.9* ]]; then
+  printf 'Go 1.26.9 is required (set GO_BIN)\n' >&2
   exit 1
 fi
 if [[ -z "${ndk_dir}" || ! -r "${ndk_dir}/source.properties" ]]; then
@@ -66,7 +66,7 @@ build_abi() {
     printf '%s does not have 16 KiB LOAD alignment\n' "${destination}" >&2
     exit 1
   fi
-  grep -Fq 'go1.26.5' <<<"${go_metadata}"
+  grep -Fq 'go1.26.9' <<<"${go_metadata}"
   printf 'built %s with Android API 26 compiler\n' "${destination}"
 }
 

@@ -189,9 +189,13 @@ def make_inventory(
     if native.get("embeddedGoVersion") != embedded_go_version:
         raise SystemExit("embedded Go version does not match the native source lock")
     expected_go_version = str(native.get("embeddedGoVersion", ""))
+    relay = source_lock.get("relayArtifact", {})
+    expected_relay_go_version = str(relay.get("embeddedGoVersion", ""))
+    if relay.get("name") != RELAY_LIBRARY_NAME or not expected_relay_go_version:
+        raise SystemExit("native source lock does not pin the relay Go toolchain")
     if len(relay_artifacts) != len(RELAY_ABIS):
         raise SystemExit("relay native inventory does not cover every required Android ABI")
-    if any(go_version != expected_go_version for _, _, go_version in relay_artifacts):
+    if any(go_version != expected_relay_go_version for _, _, go_version in relay_artifacts):
         raise SystemExit("relay embedded Go version does not match the native source lock")
 
     source_by_module = {
@@ -204,9 +208,12 @@ def make_inventory(
     }
     relay_source = archive_by_name.get("WDTT-Plus", {})
     go_source = archive_by_name.get("Go toolchain source", {})
+    relay_go_source = archive_by_name.get(relay.get("goSourceArchive", ""), {})
     if relay_source.get("license") != "GPL-3.0-only":
         raise SystemExit("native source lock does not identify the relay GPL source")
     if go_source.get("version") != expected_go_version:
+        raise SystemExit("native source lock does not identify the libXray Go toolchain source")
+    if relay_go_source.get("version") != expected_relay_go_version:
         raise SystemExit("native source lock does not identify the relay Go toolchain source")
     root_license = archive_by_name.get("libXray", {}).get("license")
     aar_ref = component_ref("aar", native["name"], native["version"])

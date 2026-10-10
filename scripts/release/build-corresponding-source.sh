@@ -11,7 +11,8 @@ readonly RELAY_JNI_DIRECTORY="${REPOSITORY_ROOT}/levik_whitelist_relay/build/and
 readonly RELAY_ANET_SOURCE_RELATIVE="levik_whitelist_relay/fork/wdtt-plus-v15/go_client/third_party/anet"
 readonly RELAY_ANET_SOURCE="${REPOSITORY_ROOT}/${RELAY_ANET_SOURCE_RELATIVE}"
 readonly RELAY_ANET_COMMIT="839bc3a920f1b87dd3ce1386e425aa5ef2e69d24"
-readonly REQUIRED_GO_VERSION="go1.26.5"
+readonly REQUIRED_GO_VERSION="go1.26.9"
+readonly LIBXRAY_EMBEDDED_GO_VERSION="go1.26.5"
 readonly EXPECTED_AAR_SHA256="4708a361a74f7e955635dbe3661cefb459bdc867423c3b1826a2c5a6ea4ac77d"
 
 usage() {
@@ -410,7 +411,7 @@ go version -m "${TEMPORARY_DIRECTORY}/libgojni.so" |
     >"${EVIDENCE_DIRECTORY}/libgojni-build-info.txt"
 
 for required_build_entry in \
-  "${REQUIRED_GO_VERSION}" \
+  "${LIBXRAY_EMBEDDED_GO_VERSION}" \
   $'dep\tgithub.com/xtls/xray-core\tv1.260327.1-0.20260728075948-5ca6f4b7d4dc' \
   $'dep\tgithub.com/sagernet/sing\tv0.5.1' \
   $'dep\tgithub.com/sagernet/sing-shadowsocks\tv0.2.7'; do

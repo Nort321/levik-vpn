@@ -51,7 +51,7 @@ required_literals=(
   '--yandex-jni-directory levik_vpn_android/native/yandex/build/android/jniLibs'
   '--tuic-jni-directory levik_vpn_android/native/tuic/build/android/jniLibs'
   'TUIC_GO_BIN='
-  'go-version: "1.26.5"'
+  'go-version: "1.26.9"'
   'go-version: "1.26.8"'
   'YANDEX_GO_BIN='
   'ndk_version="29.0.14206865"'
@@ -92,7 +92,7 @@ for literal in "${direct_manifest_required_literals[@]}"; do
 done
 
 ci_required_literals=(
-  'go-version: "1.26.5"'
+  'go-version: "1.26.9"'
   'go-version: "1.26.8"'
   'YANDEX_GO_BIN='
   'ndk_version="29.0.14206865"'

@@ -18,7 +18,7 @@ this repository.
 
 Output is exactly `build/android/jniLibs/<abi>/liblevikrelay.so` for
 `arm64-v8a`, `armeabi-v7a` and `x86_64`. The script requires NDK
-`29.0.14206865` and Go 1.26.5, invokes only the API-26 compilers and emits
+`29.0.14206865` and Go 1.26.9, invokes only the API-26 compilers and emits
 only PIE (`ET_DYN`) executables with the Android linker and 16 KiB LOAD
 alignment. It fails instead of silently switching toolchains.
 
