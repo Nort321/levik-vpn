@@ -524,6 +524,7 @@ class LevikVpnService : VpnService() {
                 } else {
                     emptyList()
                 },
+                xhttpMuxHosts = container.appPlatform.xhttpMuxHosts(),
             )
 
             val request = when (selected.engine) {

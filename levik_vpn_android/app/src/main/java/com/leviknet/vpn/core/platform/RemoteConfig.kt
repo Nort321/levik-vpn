@@ -48,6 +48,8 @@ data class RemoteConfig(
     val announcements: List<AppAnnouncement>,
     val protocols: ProtocolAdvice?,
     val refreshAfterSeconds: Long,
+    /** Hosts whose XHTTP outbound needs Mux.Cool; the server decides, the app keeps no host list. */
+    val xhttpMuxHosts: Set<String> = emptySet(),
 )
 
 data class StoredRemoteConfig(
@@ -71,6 +73,8 @@ object RemoteConfigPolicy {
     private val PROTOCOL = Regex("^[a-z0-9-]{1,24}$")
     private val FLAG_KEY = Regex("^[a-z][a-z0-9_]{1,47}$")
     private val ANNOUNCEMENT_ID = Regex("^[0-9a-f-]{36}$")
+    private const val MAX_HOSTS = 32
+    private val HOSTNAME = Regex("^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$")
 
     fun parse(value: JsonElement): RemoteConfig? {
         val root = value as? JsonObject ?: return null
@@ -90,8 +94,21 @@ object RemoteConfigPolicy {
         val announcements = (root["announcements"] as? JsonArray).orEmpty()
             .take(MAX_ANNOUNCEMENTS)
             .mapNotNull(::parseAnnouncement)
-        return RemoteConfig(flags, announcements, parseAdvice(root["protocols"]), refresh)
+        return RemoteConfig(
+            flags = flags,
+            announcements = announcements,
+            protocols = parseAdvice(root["protocols"]),
+            refreshAfterSeconds = refresh,
+            xhttpMuxHosts = parseHosts((root["transport"] as? JsonObject)?.get("xhttpMuxHosts")),
+        )
     }
+
+    private fun parseHosts(value: JsonElement?): Set<String> = (value as? JsonArray).orEmpty()
+        .asSequence()
+        .mapNotNull { (it as? JsonPrimitive)?.takeIf(JsonPrimitive::isString)?.content?.lowercase() }
+        .filter(HOSTNAME::matches)
+        .take(MAX_HOSTS)
+        .toSet()
 
     private fun parseAnnouncement(value: JsonElement): AppAnnouncement? {
         val item = value as? JsonObject ?: return null

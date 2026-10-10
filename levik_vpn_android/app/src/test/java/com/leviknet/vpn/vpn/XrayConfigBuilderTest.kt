@@ -66,7 +66,7 @@ class XrayConfigBuilderTest {
     }
 
     @Test
-    fun `enables mux only for the alternate XHTTP domain`() {
+    fun `enables mux only for XHTTP hosts named by the server`() {
         fun xhttpServer(id: String, tag: String, address: String): TunnelServer =
             server(id, tag).copy(outbound = buildJsonObject {
                 put("protocol", "vless")
@@ -84,18 +84,23 @@ class XrayConfigBuilderTest {
                     put("xhttpSettings", buildJsonObject { put("path", "/api/getFile/") })
                 })
             })
-        val alternate = xhttpServer("a".repeat(64), "alternate", "leva.levikfartik.ru")
-        val yandex = xhttpServer("b".repeat(64), "yandex", "levik.levikfartik.ru")
+        val alternate = xhttpServer("a".repeat(64), "alternate", "mux.example.net")
+        val yandex = xhttpServer("b".repeat(64), "yandex", "plain.example.net")
         val profile = PreparedTunnelProfile(
             version = 1, profileId = "profile", subscriptionId = "subscription",
             issuedAt = "2026-07-29T11:59:00Z", servers = listOf(alternate, yandex),
         )
 
-        val outbounds = json.parseToJsonElement(builder.build(profile, alternate.id, 42))
+        val withoutHints = json.parseToJsonElement(builder.build(profile, alternate.id, 42))
             .jsonObject.getValue("outbounds").jsonArray
+        assertFalse("mux" in withoutHints[0].jsonObject)
+
+        val outbounds = json.parseToJsonElement(
+            builder.build(profile, alternate.id, 42, xhttpMuxHosts = setOf("mux.example.net")),
+        ).jsonObject.getValue("outbounds").jsonArray
         val alternateOutbound = outbounds[0].jsonObject
         val yandexOutbound = outbounds[1].jsonObject
-        assertEquals("leva.levikfartik.ru", alternateOutbound.getValue("settings").jsonObject
+        assertEquals("mux.example.net", alternateOutbound.getValue("settings").jsonObject
             .getValue("vnext").jsonArray.single().jsonObject.getValue("address").jsonPrimitive.content)
         assertEquals("1", alternateOutbound.getValue("mux").jsonObject
             .getValue("concurrency").jsonPrimitive.content)

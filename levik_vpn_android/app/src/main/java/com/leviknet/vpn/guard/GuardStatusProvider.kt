@@ -10,14 +10,14 @@ import com.leviknet.vpn.LevikVpnApplication
 import com.leviknet.vpn.vpn.VpnStateStore
 import java.time.LocalDate
 
-/** Local, read-only companion bridge. Only the installed Guard package UID is accepted. */
+/** Local, read-only companion bridge. Only the Guard build the person approved is answered. */
 class GuardStatusProvider : ContentProvider() {
     override fun onCreate(): Boolean = true
 
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
-        if (method != METHOD_STATUS || !isGuardCaller()) return null
+        if (method != METHOD_STATUS) return null
         val app = context?.applicationContext as? LevikVpnApplication ?: return null
-        if (!GuardBridgeAccess.isEnabled(app)) return null
+        if (!GuardBridgeAccess.isTrustedCaller(app, Binder.getCallingUid())) return null
         val snapshot = VpnStateStore.state.value
         val today = LocalDate.now().toString()
         val usage = app.container.trafficHistoryStore.history.value.firstOrNull { it.date == today }
@@ -29,12 +29,6 @@ class GuardStatusProvider : ContentProvider() {
             putLong("today_rx_bytes", usage?.downloadedBytes ?: 0L)
             putLong("today_tx_bytes", usage?.uploadedBytes ?: 0L)
         }
-    }
-
-    private fun isGuardCaller(): Boolean {
-        val callerUid = Binder.getCallingUid()
-        val packages = context?.packageManager?.getPackagesForUid(callerUid).orEmpty()
-        return packages.any { it == "com.leviknet.guard" }
     }
 
     override fun query(

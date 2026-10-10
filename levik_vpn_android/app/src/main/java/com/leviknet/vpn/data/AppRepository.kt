@@ -501,6 +501,23 @@ class AppRepository(
         CreateOrderRequest(kind, subscriptionId, tariffId, months, paymentMethodId),
     ).order
 
+    suspend fun invitePreview(code: String): com.leviknet.vpn.core.network.InvitePreview =
+        apiClient.invitePreview(requireToken(), code)
+
+    suspend fun claimInvite(code: String): com.leviknet.vpn.core.network.InviteClaimResult =
+        apiClient.claimInvite(requireToken(), code)
+
+    suspend fun family(
+        action: String,
+        memberId: Long? = null,
+    ): com.leviknet.vpn.core.network.FamilyResponse = apiClient.family(
+        requireToken(),
+        com.leviknet.vpn.core.network.FamilyRequest(action, memberId),
+    )
+
+    suspend fun referrals(): com.leviknet.vpn.core.network.ReferralsResponse =
+        apiClient.referrals(requireToken())
+
     suspend fun openOrderPayment(orderId: Long): String {
         require(orderId > 0) { "Invalid order id" }
         return apiClient.openOrderPayment(requireToken(), orderId).paymentUrl

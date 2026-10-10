@@ -26,6 +26,7 @@ object AppLinks {
     private const val OPEN_APP_PATH = "/open-app"
     private val HANDOFF_QUERY = Regex("^token=[A-Za-z0-9_-]{43}$")
     private const val MAX_URI_LENGTH = 300
+    private val INVITE_PATH = Regex("^/i/([A-Za-z0-9]{8,12})/?$")
 
     /**
      * https://leviknet.org/open-app?to=<screen> opens the app through an App
@@ -38,6 +39,16 @@ object AppLinks {
             ?.split('&')
             ?.firstNotNullOfOrNull { part -> part.removePrefix("to=").takeIf { part.startsWith("to=") } }
         return OpenAppTarget.entries.firstOrNull { it.wire == target } ?: OpenAppTarget.HOME
+    }
+
+    /**
+     * https://leviknet.org/i/<code> is one link for referrals, family invites and gifts.
+     * The app only reads the code; accepting always needs the person to confirm.
+     */
+    fun inviteCode(rawUri: String): String? {
+        val uri = siteUri(rawUri) ?: return null
+        if (uri.rawQuery != null) return null
+        return INVITE_PATH.matchEntire(uri.rawPath.orEmpty())?.groupValues?.get(1)?.uppercase()
     }
 
     /** The one-time sign-in link must point at the Levik website's /handoff page. */

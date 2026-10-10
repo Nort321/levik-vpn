@@ -26,6 +26,17 @@ class AppLinksTest {
     }
 
     @Test
+    fun `invite links give only the code`() {
+        assertEquals("ABCD2345", AppLinks.inviteCode("https://leviknet.org/i/ABCD2345"))
+        assertEquals("ABCD2345EFGH", AppLinks.inviteCode("https://leviknet.com/i/abcd2345efgh/"))
+        assertNull(AppLinks.inviteCode("https://evil.example/i/ABCD2345"))
+        assertNull(AppLinks.inviteCode("https://leviknet.org/i/ABCD2345?claim=1"))
+        assertNull(AppLinks.inviteCode("https://leviknet.org/i/../dashboard"))
+        assertNull(AppLinks.inviteCode("https://leviknet.org/i/SHORT"))
+        assertNull(AppLinks.inviteCode("https://leviknet.org/open-app?to=plans"))
+    }
+
+    @Test
     fun `handoff links must be the one-time page on the website`() {
         val token = "A".repeat(42) + "_"
         assertTrue(AppLinks.isHandoffUrl("https://leviknet.org/handoff?token=$token"))

@@ -115,6 +115,14 @@ class AppViewModel(
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(AppUiState(yandexSupported = repository.supportsYandex()))
     private val effectChannel = Channel<AppEffect>(Channel.BUFFERED)
+
+    /** Referral, family and gift links; kept apart from the rest of the app state. */
+    val growth = com.leviknet.vpn.ui.growth.GrowthController(
+        repository = repository,
+        scope = viewModelScope,
+        isAuthenticated = { mutableState.value.session == SessionStatus.Authenticated },
+        onAccessChanged = { refreshSubscription(showErrors = false) },
+    )
     private val supportNotes = SupportNoteClient()
     private var loginStartJob: Job? = null
     private var loginPollJob: Job? = null
@@ -2362,6 +2370,11 @@ class AppViewModel(
     fun handleDeepLink(uri: android.net.Uri) {
         AppLinks.openAppTarget(uri.toString())?.let { target ->
             openAppTarget(target)
+            return
+        }
+        AppLinks.inviteCode(uri.toString())?.let { code ->
+            selectTab(AppTab.PROFILE)
+            growth.openInvite(code)
             return
         }
         when (DeepLinkRouter.route(uri.toString())) {

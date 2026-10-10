@@ -49,6 +49,17 @@ class RemoteConfigPolicyTest {
     }
 
     @Test
+    fun `reads transport hosts and drops invalid ones`() {
+        val config = RemoteConfigPolicy.parse(
+            Json.parseToJsonElement(
+                """{"ok":true,"transport":{"xhttpMuxHosts":["Mux.Example.net","bad host",7,"-x.ru"]}}""",
+            ),
+        )!!
+        assertEquals(setOf("mux.example.net"), config.xhttpMuxHosts)
+        assertTrue(RemoteConfigPolicy.parse(response)!!.xhttpMuxHosts.isEmpty())
+    }
+
+    @Test
     fun `announcements show only inside their window and until closed`() {
         val config = RemoteConfigPolicy.parse(response)
         assertEquals(1, RemoteConfigPolicy.visible(config, emptySet(), start + 1).size)

@@ -143,6 +143,8 @@ class AppPlatform(
 
     fun protocolAdvice(): ProtocolAdvice? = RemoteConfigPolicy.currentAdvice(stored, System.currentTimeMillis())
 
+    fun xhttpMuxHosts(): Set<String> = stored?.config?.xhttpMuxHosts.orEmpty()
+
     /** The cabinet page signed in through a one-time link, or the plain page when that fails. */
     suspend fun cabinetUrl(target: CabinetTarget): String = try {
         repository.webHandoffUrl(target.path) ?: AppLinks.cabinetFallbackUrl(target)

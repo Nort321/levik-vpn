@@ -250,6 +250,50 @@ class MobileApiClient(
     }
 
     /** A one-time link that opens the website signed in to the same account. */
+    suspend fun invitePreview(accessToken: String, code: String): InvitePreview {
+        val response = post<InviteCodeRequest, InvitePreviewResponse>(
+            path = INVITE_PREVIEW_PATH,
+            request = InviteCodeRequest(code),
+            accessToken = accessToken,
+            requiresIntegrity = false,
+        )
+        checkSuccess(response.ok)
+        return response.invite
+    }
+
+    suspend fun claimInvite(accessToken: String, code: String): InviteClaimResult {
+        val response = post<InviteCodeRequest, InviteClaimResponse>(
+            path = INVITE_CLAIM_PATH,
+            request = InviteCodeRequest(code),
+            accessToken = accessToken,
+            requiresIntegrity = false,
+        )
+        checkSuccess(response.ok)
+        return response.result
+    }
+
+    suspend fun family(accessToken: String, request: FamilyRequest): FamilyResponse {
+        val response = post<FamilyRequest, FamilyResponse>(
+            path = FAMILY_PATH,
+            request = request,
+            accessToken = accessToken,
+            requiresIntegrity = false,
+        )
+        checkSuccess(response.ok)
+        return response
+    }
+
+    suspend fun referrals(accessToken: String): ReferralsResponse {
+        val response = post<EmptyRequest, ReferralsResponse>(
+            path = REFERRALS_PATH,
+            request = EmptyRequest(),
+            accessToken = accessToken,
+            requiresIntegrity = false,
+        )
+        checkSuccess(response.ok)
+        return response
+    }
+
     suspend fun webHandoff(accessToken: String, target: String): WebHandoffResponse {
         val response = post<WebHandoffRequest, WebHandoffResponse>(
             path = WEB_HANDOFF_PATH,
@@ -480,6 +524,10 @@ class MobileApiClient(
         private const val BROWSER_CHECKS_PATH = "/api/monitor/v1/browser-checks"
         private const val SETTINGS_PATH = "/api/mobile/v1/settings"
         private const val WEB_HANDOFF_PATH = "/api/mobile/v1/web-handoff"
+        private const val INVITE_PREVIEW_PATH = "/api/mobile/v1/invites/preview"
+        private const val INVITE_CLAIM_PATH = "/api/mobile/v1/invites/claim"
+        private const val FAMILY_PATH = "/api/mobile/v1/family"
+        private const val REFERRALS_PATH = "/api/mobile/v1/referrals"
         private const val METHOD_GET = "GET"
         private const val METHOD_POST = "POST"
         private const val METHOD_PUT = "PUT"

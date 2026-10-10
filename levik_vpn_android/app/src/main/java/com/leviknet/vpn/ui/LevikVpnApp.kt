@@ -341,6 +341,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     onWhitelistMapChanged = viewModel::setWhitelistMapEnabled,
                     onOpenWhitelistMap = viewModel::openWhitelistMap,
                     onShareReferralLink = viewModel::shareReferralLink,
+                    onOpenFamily = viewModel.growth::openFamily,
                     onOpenPlans = { openDistributionPlans(viewModel) },
                     onCloseSubscriptionManagement = viewModel::closeSubscriptionManagement,
                     onRefreshSubscriptionManagement = viewModel::refreshSubscriptionManagement,
@@ -369,6 +370,46 @@ fun LevikVpnApp(viewModel: AppViewModel) {
         onAccept = viewModel::acceptOptionalDataDisclosure,
         onDecline = viewModel::declineOptionalDataDisclosure,
     )
+
+    val invite by viewModel.growth.invite.collectAsStateWithLifecycle()
+    val familyState by viewModel.growth.family.collectAsStateWithLifecycle()
+    LaunchedEffect(state.session) {
+        if (state.session == SessionStatus.Authenticated) viewModel.growth.onSignedIn()
+    }
+    invite?.takeUnless { it.waitingForSignIn }?.let { inviteState ->
+        com.leviknet.vpn.ui.growth.InviteDialog(
+            state = inviteState,
+            onAccept = viewModel.growth::claimInvite,
+            onSignIn = {
+                viewModel.growth.waitForSignIn()
+                viewModel.selectTab(AppTab.PROFILE)
+            },
+            onRetry = viewModel.growth::loadInvitePreview,
+            onOpenSubscriptions = {
+                viewModel.growth.dismissInvite()
+                viewModel.selectTab(AppTab.PROFILE)
+            },
+            onDismiss = viewModel.growth::dismissInvite,
+        )
+    }
+    if (familyState.open) {
+        com.leviknet.vpn.ui.growth.FamilyAndFriendsScreen(
+            state = familyState,
+            externalPurchasesEnabled = BuildConfig.EXTERNAL_PURCHASES_ENABLED,
+            onClose = viewModel.growth::closeFamily,
+            onRefresh = viewModel.growth::refreshFamily,
+            onCreateInvite = viewModel.growth::createFamilyInvite,
+            onRemoveMember = viewModel.growth::removeFamilyMember,
+            onLeave = viewModel.growth::leaveFamily,
+            onShare = { text -> viewModel.shareText("Levik VPN", text) },
+            onOpenPlans = {
+                viewModel.growth.closeFamily()
+                viewModel.selectTab(AppTab.PROFILE)
+                viewModel.openSubscriptionManagement()
+            },
+            onBuyGift = { viewModel.openCabinet(com.leviknet.vpn.core.platform.CabinetTarget.PLANS) },
+        )
+    }
 
     DistributionInstalledAppsDisclosure(
         visible = pendingInstalledAppsAction != null,
@@ -1270,6 +1311,7 @@ private fun MainContent(
     onWhitelistMapChanged: (Boolean) -> Unit,
     onOpenWhitelistMap: () -> Unit,
     onShareReferralLink: (String) -> Unit,
+    onOpenFamily: () -> Unit,
     onOpenPlans: () -> Unit,
     onCloseSubscriptionManagement: () -> Unit,
     onRefreshSubscriptionManagement: () -> Unit,
@@ -1424,6 +1466,7 @@ private fun MainContent(
                 connectionTelemetryEnabled = state.connectionTelemetryEnabled,
                 onConnectionTelemetryChanged = onConnectionTelemetryChanged,
                 onShareReferralLink = onShareReferralLink,
+                onOpenFamily = onOpenFamily,
                 onOpenPlans = onOpenPlans,
                 onRequestBatteryOptimization = onRequestBatteryOptimization,
                 onCheckForUpdates = onCheckForUpdates,
@@ -3804,6 +3847,7 @@ private fun ProfileScreen(
     connectionTelemetryEnabled: Boolean,
     onConnectionTelemetryChanged: (Boolean) -> Unit,
     onShareReferralLink: (String) -> Unit,
+    onOpenFamily: () -> Unit,
     onOpenPlans: () -> Unit,
     onRequestBatteryOptimization: () -> Unit,
     onCheckForUpdates: () -> Unit,
@@ -3953,6 +3997,10 @@ private fun ProfileScreen(
                         .fillMaxWidth()
                             .heightIn(min = LevikDimensions.ButtonHeight),
                 )
+            }
+
+            if (session == SessionStatus.Authenticated) {
+                com.leviknet.vpn.ui.growth.FamilyEntryCard(onClick = onOpenFamily)
             }
 
             referralSummaryForDisplay(account)?.let { referrals ->
@@ -4724,8 +4772,10 @@ private fun ProfileScreen(
                 Switch(
                     checked = guardBridgeEnabled,
                     onCheckedChange = { enabled ->
-                        com.leviknet.vpn.guard.GuardBridgeAccess.setEnabled(context, enabled)
-                        guardBridgeEnabled = enabled
+                        guardBridgeEnabled = com.leviknet.vpn.guard.GuardBridgeAccess.setEnabled(context, enabled)
+                        if (enabled && !guardBridgeEnabled) {
+                            Toast.makeText(context, R.string.guard_bridge_not_installed, Toast.LENGTH_LONG).show()
+                        }
                     },
                 )
             }
@@ -6872,7 +6922,7 @@ private fun decodeQrCode(image: androidx.camera.core.ImageProxy): String? {
     }.getOrNull().also { reader.reset() }
 }
 
-private fun activationQrBitmap(value: String, size: Int = 768): Bitmap {
+internal fun activationQrBitmap(value: String, size: Int = 768): Bitmap {
     val matrix = QRCodeWriter().encode(value, BarcodeFormat.QR_CODE, size, size)
     val pixels = IntArray(size * size)
     for (y in 0 until size) {

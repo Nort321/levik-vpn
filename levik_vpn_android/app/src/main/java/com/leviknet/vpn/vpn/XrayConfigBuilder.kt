@@ -117,6 +117,7 @@ class XrayConfigBuilder(
         lteDirectCidrs: List<String> = emptyList(),
         lteDirectDomains: List<String> = emptyList(),
         preserveTargetAddress: Boolean = false,
+        xhttpMuxHosts: Set<String> = emptySet(),
     ): String {
         require(tunFileDescriptor >= 0) { "Invalid TUN file descriptor" }
         profile.subscriptionExpiresAt?.let { value ->
@@ -134,7 +135,7 @@ class XrayConfigBuilder(
 
         val orderedServers = (listOf(selected) + xrayServers.filterNot { it.id == selected.id })
             .map { server ->
-                var repairedOutbound = enableAlternateXhttpMux(RealityRepair.repair(server.outbound))
+                var repairedOutbound = enableXhttpMux(RealityRepair.repair(server.outbound), xhttpMuxHosts)
                 if (antiDpiEnabled) {
                     repairedOutbound = injectFragmentDialer(repairedOutbound)
                 }
@@ -393,8 +394,12 @@ class XrayConfigBuilder(
         return json.encodeToString(JsonObject.serializer(), config)
     }
 
-    private fun enableAlternateXhttpMux(outbound: JsonObject): JsonObject {
-        if ("mux" in outbound ||
+    /**
+     * Share links cannot carry Mux settings, so hosts that need Mux.Cool over XHTTP come from the
+     * server's remote config. An outbound that already has `mux` keeps it.
+     */
+    private fun enableXhttpMux(outbound: JsonObject, hosts: Set<String>): JsonObject {
+        if (hosts.isEmpty() || "mux" in outbound ||
             (outbound["protocol"] as? JsonPrimitive)?.contentOrNull != "vless"
         ) return outbound
 
@@ -406,7 +411,7 @@ class XrayConfigBuilder(
         val servers = settings["vnext"] as? JsonArray ?: return outbound
         if (servers.isEmpty() || servers.any { server ->
                 val address = ((server as? JsonObject)?.get("address") as? JsonPrimitive)?.contentOrNull
-                address?.equals("leva.levikfartik.ru", ignoreCase = true) != true
+                address?.lowercase() !in hosts
             }
         ) return outbound
 
@@ -427,6 +432,8 @@ class XrayConfigBuilder(
         if (protocol in setOf("hysteria", "hysteria2", "tuic", "wireguard") ||
             transport in setOf("hysteria", "hysteria2", "quic", "kcp", "mkcp")
         ) return outbound
+        // A server-chosen Finalmask already shapes the traffic; a second fragmenter would fight it.
+        if ("finalmask" in stream) return outbound
         val existingSockopt = (stream["sockopt"] as? JsonObject) ?: buildJsonObject {}
         val updatedSockopt = buildJsonObject {
             existingSockopt.forEach { (k, v) -> put(k, v) }

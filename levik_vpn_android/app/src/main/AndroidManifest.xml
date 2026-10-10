@@ -31,6 +31,7 @@
         android:required="false" />
 
     <queries>
+        <package android:name="com.leviknet.guard" />
         <intent>
             <action android:name="android.intent.action.MAIN" />
         </intent>
@@ -83,6 +84,15 @@
                     android:scheme="https"
                     android:host="leviknet.org"
                     android:path="/open-app" />
+                <!-- Referral, family and gift links; accepting always needs a confirmation. -->
+                <data
+                    android:scheme="https"
+                    android:host="leviknet.com"
+                    android:pathPrefix="/i/" />
+                <data
+                    android:scheme="https"
+                    android:host="leviknet.org"
+                    android:pathPrefix="/i/" />
             </intent-filter>
         </activity>
 
