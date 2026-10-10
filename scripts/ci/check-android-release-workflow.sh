@@ -107,9 +107,7 @@ done
 
 source_bundle_required_literals=(
   'GOFLAGS=-mod=readonly'
-  'go-modules-relay-server.json'
   'go-modules-relay-android-client.json'
-  'go-modules-relay-node-agent.json'
   'go-modules-yandex-android-client.json'
   'liblevikyandex-${yandex_abi}-build-info.txt'
   'liblevikrelay-${relay_abi}-build-info.txt'

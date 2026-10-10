@@ -305,12 +305,8 @@ capture_go_module_graph \
   "${MODULE_CACHE}/libxray" \
   "${VENDOR_SOURCE}/libxray" \
   "${EVIDENCE_DIRECTORY}/go-modules-libxray.json"
-capture_go_module_graph \
-  relay-server \
-  "${APPLICATION_SOURCE}/levik_whitelist_relay/fork/wdtt-plus-v15" \
-  "${MODULE_CACHE}/relay-server" \
-  "${VENDOR_SOURCE}/relay-server" \
-  "${EVIDENCE_DIRECTORY}/go-modules-relay-server.json"
+# The relay server and node agent live in a private repository and are not
+# part of any app, so only the Android relay client graph is captured.
 capture_go_module_graph \
   relay-android-client \
   "${APPLICATION_SOURCE}/levik_whitelist_relay/fork/wdtt-plus-v15/go_client" \
@@ -340,12 +336,6 @@ for filename in ("LICENSE", "interface_android.go"):
 if b"//go:linkname" in (vendor_path / "interface_android.go").read_bytes():
     raise SystemExit("vendored local anet source reintroduces private linknames")
 PY
-capture_go_module_graph \
-  relay-node-agent \
-  "${APPLICATION_SOURCE}/levik_whitelist_relay/node-agent" \
-  "${MODULE_CACHE}/relay-node-agent" \
-  "${VENDOR_SOURCE}/relay-node-agent" \
-  "${EVIDENCE_DIRECTORY}/go-modules-relay-node-agent.json"
 
 readonly YANDEX_GO_COMMAND="${YANDEX_GO_BIN:?YANDEX_GO_BIN must identify Go 1.26.8}"
 if [[ "$("${YANDEX_GO_COMMAND}" env GOVERSION)" != "go1.26.8" ]]; then
