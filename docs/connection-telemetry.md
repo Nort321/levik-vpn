@@ -158,6 +158,11 @@ every platform.
 - Android resolves sessions left by a killed process from the exit reason the
   system recorded (Android 11 and later); older versions report
   `end.by = unknown`.
+- On macOS the privileged helper runs the VPN core and reduces its output to
+  fixed categories, so macOS sends no `core_log` events either. A failed
+  start carries the helper's category as the `attempt_failed` code, for
+  example `handshake` / `reality_auth` or `auth_failed`. macOS restarts the
+  same server after a failure; it does not fail over automatically.
 
 ## Retention
 
