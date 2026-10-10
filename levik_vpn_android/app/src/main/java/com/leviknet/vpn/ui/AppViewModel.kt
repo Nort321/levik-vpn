@@ -27,7 +27,9 @@ import com.leviknet.vpn.core.network.AuthChallengeResponse
 import com.leviknet.vpn.core.network.DiagnosticReport
 import com.leviknet.vpn.core.network.LevikStatusSnapshot
 import com.leviknet.vpn.core.network.MobileAccountResponse
+import com.leviknet.vpn.core.network.MAX_SUPPORT_NOTE_BYTES
 import com.leviknet.vpn.core.network.NetworkDiagnostics
+import com.leviknet.vpn.core.network.supportNoteText
 import com.leviknet.vpn.core.network.SubscriptionSummary
 import com.leviknet.vpn.core.network.TrafficSummary
 import com.leviknet.vpn.core.network.WhitelistDetector
@@ -2285,7 +2287,10 @@ class AppViewModel(
         viewModelScope.launch {
             mutableState.update { it.copy(isSharingNote = true) }
             try {
-                val noteUrl = NetworkDiagnostics.createEncryptedSupportNote(report.toFormattedString(), apiClient)
+                val text = withContext(Dispatchers.IO) {
+                    supportNoteText(report.toFormattedString(), AppLogger.readDiskLog(MAX_SUPPORT_NOTE_BYTES))
+                }
+                val noteUrl = NetworkDiagnostics.createEncryptedSupportNote(text, apiClient)
                 mutableState.update { it.copy(supportNoteUrl = noteUrl, isSharingNote = false) }
             } catch (e: Exception) {
                 AppLogger.e("AppViewModel", "Failed to share note", e)

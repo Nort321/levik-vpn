@@ -465,7 +465,7 @@
     <string name="referral_copy_btn">Копировать ссылку</string>
 
     <string name="support_note_title">Зашифрованный отчет</string>
-    <string name="support_note_desc">Отчет безопасно зашифрован ключом AES-GCM. Передайте ссылку в поддержку:</string>
+    <string name="support_note_desc">Отчёт и журнал приложения (в журнале IP-адреса и сайты скрыты) зашифрованы на устройстве ключом AES-GCM. Передайте ссылку в поддержку:</string>
     <string name="support_note_export_btn">Зашифровать в заметку</string>
     <string name="support_note_share">Поделиться ссылкой</string>
     <string name="support_note_open_support">Открыть поддержку</string>

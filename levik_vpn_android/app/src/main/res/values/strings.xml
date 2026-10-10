@@ -465,7 +465,7 @@
     <string name="referral_copy_btn">Copy Link</string>
 
     <string name="support_note_title">Encrypted Diagnostic Note</string>
-    <string name="support_note_desc">Report is client-side encrypted with AES-GCM. Share this one-time link with support:</string>
+    <string name="support_note_desc">The report and the app log (with IP addresses and sites removed from the log) are encrypted on this device with AES-GCM. Share this one-time link with support:</string>
     <string name="support_note_export_btn">Encrypt to Note</string>
     <string name="support_note_share">Share Link</string>
     <string name="support_note_open_support">Open support</string>

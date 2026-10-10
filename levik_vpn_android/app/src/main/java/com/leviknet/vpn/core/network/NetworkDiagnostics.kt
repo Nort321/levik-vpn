@@ -66,6 +66,29 @@ data class DiagnosticReport(
     }
 }
 
+/** The server stores at most this much plaintext per note (lib/notes/crypto.ts). */
+internal const val MAX_SUPPORT_NOTE_BYTES = 12_000
+
+/**
+ * The diagnostic report followed by the newest lines of the redacted app log
+ * that still fit in one note. The log only travels inside the encrypted note.
+ */
+internal fun supportNoteText(report: String, log: String, maxBytes: Int = MAX_SUPPORT_NOTE_BYTES): String {
+    val header = "\n=== Recent app log ===\n"
+    var budget = maxBytes - report.utf8Size() - header.utf8Size()
+    if (budget <= 0 || log.isBlank()) return report
+    val kept = ArrayDeque<String>()
+    for (line in log.trimEnd().lineSequence().toList().asReversed()) {
+        val size = line.utf8Size() + 1
+        if (size > budget) break
+        kept.addFirst(line)
+        budget -= size
+    }
+    return if (kept.isEmpty()) report else report + header + kept.joinToString("\n") + "\n"
+}
+
+private fun String.utf8Size(): Int = toByteArray(StandardCharsets.UTF_8).size
+
 object NetworkDiagnostics {
     private val TARGET_SERVICES = listOf(
         Triple("telegram", "Telegram", "https://t.me"),
