@@ -1,6 +1,6 @@
 module wg-turn-client
 
-go 1.26
+go 1.26.0
 
 // Levik-pinned v0.0.5 fork removes forbidden writes into private Go zone
 // caches. The Android relay is IPv4-only and retains anet's Android 11+
@@ -15,7 +15,7 @@ require (
 	github.com/pion/dtls/v3 v3.1.4
 	github.com/pion/logging v0.2.4
 	github.com/pion/turn/v5 v5.0.2
-	golang.org/x/crypto v0.52.0
+	golang.org/x/crypto v0.57.0
 )
 
 require (
@@ -37,9 +37,9 @@ require (
 	github.com/tam7t/hpkp v0.0.0-20160821193359-2b70b4024ed5 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
-	golang.org/x/net v0.55.0 // indirect
-	golang.org/x/sys v0.45.0 // indirect
-	golang.org/x/text v0.37.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	golang.zx2c4.com/wireguard v0.0.0-20260522210424-ecfc5a8d5446 // indirect
