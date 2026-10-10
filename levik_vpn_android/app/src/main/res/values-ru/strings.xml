@@ -443,6 +443,15 @@
     <string name="censorship_radar_title">Анонимный радар блокировок</string>
     <string name="censorship_radar_desc">Анонимно собирать статус доступности сервисов (YouTube, Discord, Telegram) для общей карты доступности на leviknet.com.</string>
 
+    <string name="connection_telemetry_title">Статистика качества подключения</string>
+    <string name="connection_telemetry_desc">Анонимно сообщать об обрывах и ошибках подключения. Без IP-адресов, сайтов и данных аккаунта.</string>
+    <string name="connection_telemetry_notice_title">Помогите сделать подключение стабильнее</string>
+    <string name="connection_telemetry_notice_body">Levik VPN может анонимно сообщать, когда подключение не удалось или оборвалось: сервер, протокол, код ошибки, тип сети и оператор. Оператора сервер определяет по адресу запроса и сам адрес не сохраняет. Посещённые сайты, трафик, данные аккаунта и идентификаторы устройства не отправляются. Изменить решение можно в любой момент в настройках.</string>
+    <string name="connection_telemetry_details">Подробнее</string>
+    <string name="connection_telemetry_accept">Хорошо</string>
+    <string name="connection_telemetry_allow">Разрешить</string>
+    <string name="connection_telemetry_decline">Не отправлять</string>
+
     <string name="battery_optimization_title">Работа в фоне (Батарея)</string>
     <string name="battery_optimization_desc">Отключить оптимизацию батареи для стабильной работы VPN при выключенном экране.</string>
 

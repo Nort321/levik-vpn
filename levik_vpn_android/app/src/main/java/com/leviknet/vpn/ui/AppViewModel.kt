@@ -86,6 +86,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 
 import com.leviknet.vpn.core.network.MobileApiClient
+import com.leviknet.vpn.core.telemetry.EndBy
+import com.leviknet.vpn.core.telemetry.SessionEnd
 import com.leviknet.vpn.core.update.AppUpdateManager
 import com.leviknet.vpn.core.update.AppUpdateDto
 import com.leviknet.vpn.core.update.UpdateState
@@ -343,6 +345,16 @@ class AppViewModel(
                 mutableState.update { it.copy(anonymousTelemetryEnabled = enabled) }
             }
         }
+        viewModelScope.launch {
+            settings.connectionTelemetryEnabled.collect { enabled ->
+                mutableState.update { it.copy(connectionTelemetryEnabled = enabled) }
+            }
+        }
+        viewModelScope.launch {
+            settings.connectionTelemetryNoticeShown.collect { shown ->
+                mutableState.update { it.copy(connectionTelemetryNoticeShown = shown) }
+            }
+        }
         if (BuildConfig.SELF_UPDATE_ENABLED) {
             viewModelScope.launch {
                 updateManager.state.collect { updateState ->
@@ -391,7 +403,7 @@ class AppViewModel(
                         vpnState = vpnController.state.value.state,
                     )
                 ) {
-                    vpnController.disconnect()
+                    vpnController.disconnect(SessionEnd(EndBy.SYSTEM, null))
                 }
             }
         }
@@ -959,7 +971,7 @@ class AppViewModel(
                 if (replacingActiveDocument) {
                     // The backend revokes the old document before admitting its replacement.
                     // Finish stopping that carrier before the profile request uses the network.
-                    vpnController.disconnect()
+                    vpnController.disconnect(SessionEnd(EndBy.SYSTEM, null))
                     withTimeout(10_000) {
                         vpnController.state.first {
                             it.state in setOf(VpnConnectionState.DISCONNECTED, VpnConnectionState.ERROR, VpnConnectionState.LOCKDOWN)
@@ -1618,7 +1630,7 @@ class AppViewModel(
         if (refreshRequired) {
             if (vpnController.state.value.state in ACTIVE_TUNNEL_STATES) {
                 if (cached == null) {
-                    vpnController.disconnect()
+                    vpnController.disconnect(SessionEnd(EndBy.SYSTEM, null))
                 }
                 profileRefreshPending = true
                 return syncCachedProfile()
@@ -1643,7 +1655,7 @@ class AppViewModel(
                 vpnState = vpnController.state.value.state,
             )
         ) {
-            vpnController.disconnect()
+            vpnController.disconnect(SessionEnd(EndBy.SYSTEM, null))
         }
         return profile
     }
@@ -2230,6 +2242,26 @@ class AppViewModel(
         appContext?.let { CensorshipRadarWorker.configure(it, enabled) }
     }
 
+    fun setConnectionTelemetryEnabled(enabled: Boolean) {
+        // Play: switching on needs the prominent disclosure and an affirmative choice.
+        if (BuildConfig.IS_PLAY_DISTRIBUTION && enabled) {
+            mutableState.update { it.copy(connectionTelemetryPromptRequested = true) }
+            return
+        }
+        settings.setConnectionTelemetryEnabled(enabled)
+    }
+
+    fun answerConnectionTelemetryNotice(allow: Boolean) {
+        mutableState.update { it.copy(connectionTelemetryPromptRequested = false) }
+        settings.setConnectionTelemetryEnabled(allow)
+    }
+
+    fun openConnectionTelemetryDetails() {
+        viewModelScope.launch {
+            effectChannel.send(AppEffect.OpenExternal(CONNECTION_TELEMETRY_DETAILS_URL))
+        }
+    }
+
     fun acceptOptionalDataDisclosure() {
         val disclosure = mutableState.value.optionalDataDisclosure ?: return
         mutableState.update { it.copy(optionalDataDisclosure = null) }
@@ -2462,6 +2494,8 @@ enum class ServerFilterType {
 
 enum class OptionalDataDisclosure { MAP, DIAGNOSTICS, WIFI }
 
+private const val CONNECTION_TELEMETRY_DETAILS_URL = "https://leviknet.org/legal/privacy#connection-telemetry"
+
 data class AppUiState(
     val session: SessionStatus = SessionStatus.Loading,
     val account: MobileAccountResponse? = null,
@@ -2518,6 +2552,9 @@ data class AppUiState(
     val customDirectDomains: Set<String> = emptySet(),
     val customProxyDomains: Set<String> = emptySet(),
     val anonymousTelemetryEnabled: Boolean = false,
+    val connectionTelemetryEnabled: Boolean = false,
+    val connectionTelemetryNoticeShown: Boolean = true,
+    val connectionTelemetryPromptRequested: Boolean = false,
     val whitelistMapEnabled: Boolean = true,
     val serverSearchQuery: String = "",
     val serverFilter: ServerFilterType = ServerFilterType.ALL,
@@ -2534,6 +2571,21 @@ data class AppUiState(
     val message: UiMessage? = null,
     val problem: AppProblem? = null,
 )
+
+/** The one-time notice waits until the user is signed in and no other dialog is open. */
+internal fun shouldShowConnectionTelemetryNotice(state: AppUiState): Boolean =
+    state.connectionTelemetryPromptRequested || (
+        !state.connectionTelemetryNoticeShown &&
+            state.session == SessionStatus.Authenticated &&
+            !state.showAppDataDisclosure &&
+            !state.showVpnDisclosure &&
+            state.optionalDataDisclosure == null &&
+            !state.showLogoutConfirmation &&
+            !state.showRelayIntroduction &&
+            !state.showYandexSetup &&
+            !state.showLteWhitelistWarning &&
+            !state.showAllowlistRequiredWarning
+        )
 
 internal fun displayedServerId(state: AppUiState): String? =
     state.vpn.serverId.takeIf {

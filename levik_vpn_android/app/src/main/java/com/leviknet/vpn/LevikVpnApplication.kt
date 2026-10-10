@@ -13,6 +13,9 @@ class LevikVpnApplication : Application() {
             android.webkit.WebView.setDataDirectorySuffix("yandex_guest")
             return
         }
+        com.leviknet.vpn.core.logger.AppLogger.attachDiskLog(
+            com.leviknet.vpn.core.logger.DiskLog(java.io.File(noBackupFilesDir, "logs")),
+        )
         // Eagerly initialize the container so the Wi-Fi auto-connect monitor
         // and subscription refresh loop run even before the first activity.
         container

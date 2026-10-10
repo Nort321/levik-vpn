@@ -443,6 +443,15 @@
     <string name="censorship_radar_title">Anonymous Censorship Radar</string>
     <string name="censorship_radar_desc">Anonymously monitor service availability (YouTube, Discord, Telegram) to help map blocks on leviknet.com.</string>
 
+    <string name="connection_telemetry_title">Connection quality statistics</string>
+    <string name="connection_telemetry_desc">Anonymously report connection failures and drops. No IP addresses, websites or account data.</string>
+    <string name="connection_telemetry_notice_title">Help make connections more stable</string>
+    <string name="connection_telemetry_notice_body">Levik VPN can anonymously report when a connection fails or drops: the server, protocol, error code, network type and network operator. The server derives the operator from the request address and does not store the address. Websites you visit, traffic and account or device identifiers are never sent. You can change this at any time in Settings.</string>
+    <string name="connection_telemetry_details">Learn more</string>
+    <string name="connection_telemetry_accept">OK</string>
+    <string name="connection_telemetry_allow">Allow</string>
+    <string name="connection_telemetry_decline">Don\'t send</string>
+
     <string name="battery_optimization_title">Background Battery Settings</string>
     <string name="battery_optimization_desc">Disable battery optimization to keep VPN connected with screen off.</string>
 

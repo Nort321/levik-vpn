@@ -1,5 +1,6 @@
 package com.leviknet.vpn.vpn
 
+import com.leviknet.vpn.core.telemetry.SessionTrigger
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -30,7 +31,7 @@ class BootReceiver : BroadcastReceiver() {
                             container.vpnController.hasDisclosureConsent() &&
                             container.vpnController.permissionIntent() == null
                         ) {
-                            runCatching { container.vpnController.connect() }
+                            runCatching { container.vpnController.connect(SessionTrigger.BOOT) }
                         }
                     } finally {
                         pendingResult.finish()

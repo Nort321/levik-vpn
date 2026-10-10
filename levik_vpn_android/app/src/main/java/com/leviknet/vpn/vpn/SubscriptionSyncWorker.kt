@@ -15,6 +15,8 @@ import com.leviknet.vpn.core.logger.AppLogger
 import com.leviknet.vpn.core.network.ApiException
 import com.leviknet.vpn.core.notification.SubscriptionNotificationManager
 import com.leviknet.vpn.core.notification.SupportNotificationManager
+import com.leviknet.vpn.core.telemetry.EndBy
+import com.leviknet.vpn.core.telemetry.SessionEnd
 import com.leviknet.vpn.data.SessionStatus
 import com.leviknet.vpn.data.containsActiveSubscription
 import com.leviknet.vpn.data.isActiveAt
@@ -80,7 +82,7 @@ class SubscriptionSyncWorker(
                 )
             ) {
                 AppLogger.w(TAG, "Relay capability was revoked; disconnecting fail-closed")
-                container.vpnController.disconnect()
+                container.vpnController.disconnect(SessionEnd(EndBy.SYSTEM, "relay_terminal"))
             }
 
             if (cachedBeforeRefresh != null) {
@@ -95,7 +97,7 @@ class SubscriptionSyncWorker(
                             VpnConnectionState.ERROR,
                         )
                     ) {
-                        container.vpnController.disconnect()
+                        container.vpnController.disconnect(SessionEnd(EndBy.SYSTEM, "subscription_expired"))
                     }
                     SubscriptionNotificationManager.notifySubscriptionExpired(applicationContext)
                 }
@@ -117,7 +119,7 @@ class SubscriptionSyncWorker(
                         VpnConnectionState.ERROR,
                     )
                 ) {
-                    container.vpnController.disconnect()
+                    container.vpnController.disconnect(SessionEnd(EndBy.SYSTEM, "subscription_expired"))
                 }
             }
 

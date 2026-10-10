@@ -39,6 +39,17 @@ data class LogEntry(
 object AppLogger {
     private const val MAX_LOGS = 500
     private val logBuffer = ConcurrentLinkedDeque<LogEntry>()
+    private val DISK_TIMESTAMP = DateTimeFormatter.ISO_INSTANT
+    @Volatile
+    private var diskLog: DiskLog? = null
+
+    /** Keeps informational and error lines across restarts for support reports. */
+    fun attachDiskLog(log: DiskLog) {
+        diskLog = log
+    }
+
+    /** Redacted lines from previous and current runs, oldest first. */
+    fun readDiskLog(maxBytes: Int): String = diskLog?.read(maxBytes).orEmpty()
 
     private val SENSITIVE_TOKEN_REGEX = Regex(
         "(?i)(bearer\\s+[a-zA-Z0-9._~+/-]+=*|" +
@@ -86,6 +97,12 @@ object AppLogger {
         while (logBuffer.size > MAX_LOGS) {
             logBuffer.pollFirst()
         }
+        if (level != LogLevel.DEBUG) {
+            diskLog?.write(
+                DISK_TIMESTAMP.format(entry.timestamp),
+                "${level.name.take(1)}/$tag: ${platformMessage(entry)}",
+            )
+        }
         return entry
     }
 
@@ -99,6 +116,7 @@ object AppLogger {
 
     fun clear() {
         logBuffer.clear()
+        diskLog?.clear()
     }
 
     internal fun sanitize(input: String): String {

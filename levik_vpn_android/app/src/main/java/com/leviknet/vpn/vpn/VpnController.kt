@@ -5,6 +5,8 @@ import android.content.Intent
 import android.net.VpnService
 import androidx.core.content.ContextCompat
 import com.leviknet.vpn.core.security.SecureFileStore
+import com.leviknet.vpn.core.telemetry.SessionEnd
+import com.leviknet.vpn.core.telemetry.SessionTrigger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
@@ -32,18 +34,24 @@ class VpnController(
         secureStore.put(SecureFileStore.VPN_DISCLOSURE_CONSENT, CONSENT_VALUE)
     }
 
-    suspend fun connect() {
+    suspend fun connect(trigger: SessionTrigger = SessionTrigger.USER) {
         check(hasDisclosureConsent()) { "VPN disclosure consent is required" }
         ContextCompat.startForegroundService(
             context,
-            Intent(context, LevikVpnService::class.java).setAction(LevikVpnService.ACTION_CONNECT),
+            Intent(context, LevikVpnService::class.java)
+                .setAction(LevikVpnService.ACTION_CONNECT)
+                .putExtra(LevikVpnService.EXTRA_TRIGGER, trigger.wire),
         )
     }
 
-    fun disconnect() {
-        context.startService(
-            Intent(context, LevikVpnService::class.java).setAction(LevikVpnService.ACTION_DISCONNECT),
-        )
+    /** [end] labels the connection quality report; the default is the user's own choice. */
+    fun disconnect(end: SessionEnd? = null) {
+        val intent = Intent(context, LevikVpnService::class.java).setAction(LevikVpnService.ACTION_DISCONNECT)
+        if (end != null) {
+            intent.putExtra(LevikVpnService.EXTRA_END_BY, end.by.wire)
+            end.code?.let { intent.putExtra(LevikVpnService.EXTRA_END_CODE, it) }
+        }
+        context.startService(intent)
     }
 
     fun reconfigure() {

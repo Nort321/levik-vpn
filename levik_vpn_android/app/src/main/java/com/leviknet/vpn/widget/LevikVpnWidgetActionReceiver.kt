@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import com.leviknet.vpn.LevikVpnApplication
 import com.leviknet.vpn.MainActivity
+import com.leviknet.vpn.core.telemetry.SessionTrigger
 import com.leviknet.vpn.vpn.VpnConnectionState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -42,7 +43,7 @@ class LevikVpnWidgetActionReceiver : BroadcastReceiver() {
             openApp(context)
             return
         }
-        runCatching { controller.connect() }
+        runCatching { controller.connect(SessionTrigger.WIDGET) }
             .onFailure { openApp(context) }
     }
 

@@ -13,6 +13,12 @@ import com.leviknet.vpn.core.security.DeviceIdentity
 import com.leviknet.vpn.core.security.HybridProfileDecryptor
 import com.leviknet.vpn.core.security.SecureFileStore
 import com.leviknet.vpn.core.security.TrialDeviceBinding
+import com.leviknet.vpn.core.telemetry.ConnectionTelemetry
+import com.leviknet.vpn.core.telemetry.EndBy
+import com.leviknet.vpn.core.telemetry.HttpTelemetryTransport
+import com.leviknet.vpn.core.telemetry.SessionEnd
+import com.leviknet.vpn.core.telemetry.androidTelemetryClient
+import com.leviknet.vpn.core.telemetry.processExitResolver
 import com.leviknet.vpn.core.update.createAppUpdateManager
 import com.leviknet.vpn.data.AppRepository
 import com.leviknet.vpn.data.AppSettings
@@ -29,11 +35,13 @@ import com.leviknet.vpn.vpn.TunnelEngineKind
 import com.leviknet.vpn.vpn.TunnelProfilePreparer
 import com.leviknet.vpn.vpn.createTunnelEngineRegistry
 import com.leviknet.vpn.vpn.relayCapabilityRevocationRequiresDisconnect
+import java.io.File
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 
@@ -61,6 +69,14 @@ class AppContainer(application: Application) {
     )
     val whitelistDetector = WhitelistDetector(application)
     val whitelistMapReporter = WhitelistMapReporter(application, settings)
+    val telemetryTransport = HttpTelemetryTransport()
+    val connectionTelemetry = ConnectionTelemetry(
+        directory = File(application.noBackupFilesDir, "telemetry"),
+        client = androidTelemetryClient(BuildConfig.VERSION_NAME),
+        transport = telemetryTransport,
+        scope = nativeCleanupScope,
+        interruptedEnd = processExitResolver(application),
+    )
 
     private val requestSigner = RequestSigner(deviceIdentity)
     private val attestationProvider = createAppAttestationProvider(
@@ -113,6 +129,13 @@ class AppContainer(application: Application) {
                 if (!enabled) whitelistMapReporter.clear()
             }
         }
+        nativeCleanupScope.launch {
+            combine(
+                settings.connectionTelemetryEnabled,
+                settings.connectionTelemetryNoticeShown,
+            ) { enabled, noticeShown -> enabled && noticeShown }
+                .collect(connectionTelemetry::setEnabled)
+        }
         CensorshipRadarWorker.configure(
             application,
             settings.anonymousTelemetryEnabled.value,
@@ -150,14 +173,14 @@ class AppContainer(application: Application) {
                             connectionState = vpnBeforeRefresh.state,
                         )
                     ) {
-                        vpnController.disconnect()
+                        vpnController.disconnect(SessionEnd(EndBy.SYSTEM, "relay_terminal"))
                     }
                     val active = account.subscriptions.filter { it.isActiveAt(now) }
                     val selected = active.firstOrNull {
                         it.uuid == settings.selectedSubscriptionId.value
                     } ?: active.firstOrNull()
                     if (selected == null) {
-                        vpnController.disconnect()
+                        vpnController.disconnect(SessionEnd(EndBy.SYSTEM, "subscription_expired"))
                     } else {
                         settings.setSelectedSubscriptionId(selected.uuid)
                         val profile = repository.prepareTunnel(selected.uuid)
@@ -168,7 +191,7 @@ class AppContainer(application: Application) {
                                 VpnConnectionState.ERROR,
                             )
                         ) {
-                            vpnController.disconnect()
+                            vpnController.disconnect(SessionEnd(EndBy.SYSTEM, null))
                         }
                     }
                 }

@@ -15,6 +15,7 @@ import androidx.core.content.ContextCompat
 import com.leviknet.vpn.BuildConfig
 import com.leviknet.vpn.data.AppSettings
 import com.leviknet.vpn.core.logger.AppLogger
+import com.leviknet.vpn.core.telemetry.SessionTrigger
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -102,7 +103,7 @@ class WifiAutoConnectMonitor(
         lastAttemptAtBySsid[rawSsid] = now
 
         AppLogger.i(TAG, "Untrusted Wi-Fi detected, auto-connecting VPN")
-        runCatching { vpnController.connect() }
+        runCatching { vpnController.connect(SessionTrigger.UNTRUSTED_WIFI) }
             .onFailure { error ->
                 AppLogger.w(TAG, "Wi-Fi auto-connect failed: ${error.message}")
             }

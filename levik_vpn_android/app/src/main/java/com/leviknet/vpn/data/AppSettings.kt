@@ -192,6 +192,10 @@ class AppSettings(context: Context) {
     private val telemetryPreferenceKey = if (BuildConfig.IS_PLAY_DISTRIBUTION) {
         "play_diagnostics_consent_v1"
     } else ANONYMOUS_TELEMETRY_ENABLED
+    // Direct builds explain it once with a notice; Play requires an affirmative choice.
+    private val connectionTelemetryPreferenceKey = if (BuildConfig.IS_PLAY_DISTRIBUTION) {
+        "play_connection_telemetry_consent_v1"
+    } else CONNECTION_TELEMETRY_ENABLED
     private val wifiPreferenceKey = if (BuildConfig.IS_PLAY_DISTRIBUTION) {
         "play_wifi_consent_v1"
     } else AUTO_CONNECT_UNTRUSTED_WIFI
@@ -318,6 +322,12 @@ class AppSettings(context: Context) {
     private val mutableAnonymousTelemetryEnabled = MutableStateFlow(
         preferences.getBoolean(telemetryPreferenceKey, false),
     )
+    private val mutableConnectionTelemetryEnabled = MutableStateFlow(
+        preferences.getBoolean(connectionTelemetryPreferenceKey, !BuildConfig.IS_PLAY_DISTRIBUTION),
+    )
+    private val mutableConnectionTelemetryNoticeShown = MutableStateFlow(
+        preferences.getBoolean(CONNECTION_TELEMETRY_NOTICE_SHOWN, false),
+    )
     private val mutablePausedUntilMs = MutableStateFlow(
         preferences.getLong(PAUSED_UNTIL_MS, 0L),
     )
@@ -356,6 +366,12 @@ class AppSettings(context: Context) {
 
     val anonymousTelemetryEnabled: StateFlow<Boolean> = mutableAnonymousTelemetryEnabled.asStateFlow()
     val pausedUntilMs: StateFlow<Long> = mutablePausedUntilMs.asStateFlow()
+    val connectionTelemetryEnabled: StateFlow<Boolean> = mutableConnectionTelemetryEnabled.asStateFlow()
+    val connectionTelemetryNoticeShown: StateFlow<Boolean> = mutableConnectionTelemetryNoticeShown.asStateFlow()
+
+    /** Reports are recorded only after the user has seen what they contain. */
+    fun connectionTelemetryAllowed(): Boolean =
+        mutableConnectionTelemetryEnabled.value && mutableConnectionTelemetryNoticeShown.value
 
     fun setRoutingPreset(preset: RoutingPreset) {
         preferences.edit(commit = true) {
@@ -589,6 +605,16 @@ class AppSettings(context: Context) {
         mutableAnonymousTelemetryEnabled.value = enabled
     }
 
+    /** Any explicit choice also counts as having seen the notice. */
+    fun setConnectionTelemetryEnabled(enabled: Boolean) {
+        preferences.edit(commit = true) {
+            putBoolean(connectionTelemetryPreferenceKey, enabled)
+            putBoolean(CONNECTION_TELEMETRY_NOTICE_SHOWN, true)
+        }
+        mutableConnectionTelemetryEnabled.value = enabled
+        mutableConnectionTelemetryNoticeShown.value = true
+    }
+
     fun setPausedUntilMs(timestampMs: Long) {
         preferences.edit(commit = true) {
             putLong(PAUSED_UNTIL_MS, timestampMs)
@@ -655,6 +681,8 @@ class AppSettings(context: Context) {
         private const val CUSTOM_PROXY_DOMAINS = "custom_proxy_domains"
         private const val WHITELIST_MAP_ENABLED = "whitelist_map_enabled"
         private const val ANONYMOUS_TELEMETRY_ENABLED = "anonymous_telemetry_enabled"
+        private const val CONNECTION_TELEMETRY_ENABLED = "connection_telemetry_enabled"
+        private const val CONNECTION_TELEMETRY_NOTICE_SHOWN = "connection_telemetry_notice_shown"
         private const val PAUSED_UNTIL_MS = "paused_until_ms"
         private const val LAST_NOTIFIED_SUPPORT_REPLY_ID = "last_notified_support_reply_id"
     }

@@ -335,6 +335,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     onAutoConnectBootChanged = viewModel::setAutoConnectOnBoot,
                     onAutoFallbackChanged = viewModel::setAutoFallbackServer,
                     onAnonymousTelemetryChanged = viewModel::setAnonymousTelemetryEnabled,
+                    onConnectionTelemetryChanged = viewModel::setConnectionTelemetryEnabled,
                     onWhitelistMapChanged = viewModel::setWhitelistMapEnabled,
                     onOpenWhitelistMap = viewModel::openWhitelistMap,
                     onShareReferralLink = viewModel::shareReferralLink,
@@ -349,6 +350,13 @@ fun LevikVpnApp(viewModel: AppViewModel) {
             }
         }
     }
+
+    ConnectionTelemetryNoticeDialog(
+        visible = shouldShowConnectionTelemetryNotice(state),
+        requiresConsent = BuildConfig.IS_PLAY_DISTRIBUTION,
+        onOpenDetails = viewModel::openConnectionTelemetryDetails,
+        onAnswer = viewModel::answerConnectionTelemetryNotice,
+    )
 
     DistributionDataDisclosureDialog(
         disclosure = state.optionalDataDisclosure,
@@ -1252,6 +1260,7 @@ private fun MainContent(
     onAutoConnectBootChanged: (Boolean) -> Unit,
     onAutoFallbackChanged: (Boolean) -> Unit,
     onAnonymousTelemetryChanged: (Boolean) -> Unit,
+    onConnectionTelemetryChanged: (Boolean) -> Unit,
     onWhitelistMapChanged: (Boolean) -> Unit,
     onOpenWhitelistMap: () -> Unit,
     onShareReferralLink: (String) -> Unit,
@@ -1400,6 +1409,8 @@ private fun MainContent(
                 onWhitelistMapChanged = onWhitelistMapChanged,
                 onOpenWhitelistMap = onOpenWhitelistMap,
                 onAnonymousTelemetryChanged = onAnonymousTelemetryChanged,
+                connectionTelemetryEnabled = state.connectionTelemetryEnabled,
+                onConnectionTelemetryChanged = onConnectionTelemetryChanged,
                 onShareReferralLink = onShareReferralLink,
                 onOpenPlans = onOpenPlans,
                 onRequestBatteryOptimization = onRequestBatteryOptimization,
@@ -3695,6 +3706,8 @@ private fun ProfileScreen(
     onWhitelistMapChanged: (Boolean) -> Unit,
     onOpenWhitelistMap: () -> Unit,
     onAnonymousTelemetryChanged: (Boolean) -> Unit,
+    connectionTelemetryEnabled: Boolean,
+    onConnectionTelemetryChanged: (Boolean) -> Unit,
     onShareReferralLink: (String) -> Unit,
     onOpenPlans: () -> Unit,
     onRequestBatteryOptimization: () -> Unit,
@@ -4040,6 +4053,41 @@ private fun ProfileScreen(
                     Switch(
                         checked = anonymousTelemetryEnabled,
                         onCheckedChange = onAnonymousTelemetryChanged,
+                        colors = LevikSwitchDefaults.colors(),
+                    )
+                }
+            }
+
+            val connectionTelemetryTitle = stringResource(R.string.connection_telemetry_title)
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                shadowElevation = 1.dp,
+            ) {
+                Row(
+                    modifier = Modifier.padding(18.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = connectionTelemetryTitle,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = stringResource(R.string.connection_telemetry_desc),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Spacer(Modifier.width(14.dp))
+                    Switch(
+                        checked = connectionTelemetryEnabled,
+                        onCheckedChange = onConnectionTelemetryChanged,
+                        modifier = Modifier.semantics { contentDescription = connectionTelemetryTitle },
                         colors = LevikSwitchDefaults.colors(),
                     )
                 }

@@ -10,6 +10,7 @@ import com.leviknet.vpn.LevikVpnApplication
 import com.leviknet.vpn.MainActivity
 import com.leviknet.vpn.R
 import com.leviknet.vpn.core.notification.AppIconArtwork
+import com.leviknet.vpn.core.telemetry.SessionTrigger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -72,7 +73,7 @@ class LevikVpnTileService : TileService() {
                     ) {
                         openApp()
                     } else {
-                        runCatching { container.vpnController.connect() }
+                        runCatching { container.vpnController.connect(SessionTrigger.TILE) }
                             .onFailure { openApp() }
                     }
                 }
