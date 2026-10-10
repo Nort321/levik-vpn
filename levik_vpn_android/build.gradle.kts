@@ -11,7 +11,7 @@ plugins {
 }
 
 group = "com.leviknet"
-version = "2.7.21"
+version = "2.7.22"
 
 allprojects {
     group = rootProject.group
