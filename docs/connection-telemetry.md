@@ -20,9 +20,12 @@ clients send exactly these fields; the server rejects anything else.
 
 ## Controls
 
-- Telemetry is described on the first-run data disclosure screen and can be
-  switched off at any time in Settings → Privacy → "Connection quality
-  statistics". When it is off, nothing is queued or sent.
+- Telemetry is described before anything is recorded: on the first-run data
+  disclosure screen on desktop, and in a one-time notice on Android. Google
+  Play builds of the Android app send nothing until the user allows it there.
+  It can be switched off at any time in Settings → "Connection quality
+  statistics". When it is off, nothing is queued or sent, and the unsent
+  queue is deleted.
 - Support reports with detailed logs are separate. They are sent only when
   the user presses "Report a problem" and are attached to the user's own
   support ticket.
@@ -136,13 +139,25 @@ every platform.
 | Area | Codes |
 | --- | --- |
 | Start | `profile_missing`, `profile_expired`, `subscription_expired`, `device_limit`, `core_unavailable`, `core_start_failed`, `tun_failed`, `permission_denied`, `helper_failed`, `config_invalid` |
-| Handshake | `handshake_timeout`, `tls`, `reality_auth`, `udp_blocked`, `dns`, `refused`, `unreachable`, `reset` |
+| Handshake | `handshake_timeout`, `tls`, `reality_auth`, `udp_blocked`, `dns`, `refused`, `unreachable`, `reset`, and stable engine codes prefixed `tuic_`, `relay_` or `yandex_` |
 | Health checks | `timeout`, `tls`, `dns`, `refused`, `reset`, `http_<status>`, `no_vpn_network`, `other` |
 | Core logs | `dial_timeout`, `dial_refused`, `reality_verify_failed`, `tls_handshake`, `quic_idle_timeout`, `quic_handshake`, `conn_reset`, `closed_pipe`, `dns_failed`, `auth_failed`, `other` |
 | Session end (`end.code`) | `user`, `network_lost`, `permission_revoked`, `auth_deadline`, `subscription_expired`, `relay_terminal`, `core_exited`, `gave_up`, `replaced` (another VPN app took over), `app_update` |
 | Process death (`end.by = os_killed`) | `low_memory`, `excessive_resource`, `freezer`, `crash_native`, `crash`, `anr`, `signaled`, `user_force_stop`, `unknown` |
 
 `end.by` is `user`, `system`, `error`, `os_killed` or `unknown`.
+
+## Platform notes
+
+- Android runs the VPN core in-process and keeps its log disabled, so it
+  sends no `core_log` events. `connected` there means the core started and
+  the tunnel interface is up; the end-to-end check is reported by the
+  following `probe_ok` or `probe_fail`.
+- On Android, `attempt.cause = server_switch` also covers a restart after the
+  subscription or connection settings changed.
+- Android resolves sessions left by a killed process from the exit reason the
+  system recorded (Android 11 and later); older versions report
+  `end.by = unknown`.
 
 ## Retention
 
