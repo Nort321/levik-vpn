@@ -259,7 +259,35 @@ data class CreateOrderRequest(
     val tariffId: String? = null,
     val months: Int? = null,
     val paymentMethodId: String,
-)
+    /** An extra traffic pack such as `traffic_addon_50`; omitted for the base pack. */
+    val addonId: String? = null,
+) {
+    companion object {
+        const val TRAFFIC_ADDON = "traffic_addon"
+        private val TRAFFIC_PACK_ID = Regex("^traffic_addon_[a-z0-9]{1,8}$")
+
+        fun isTrafficPack(id: String): Boolean = id == TRAFFIC_ADDON || TRAFFIC_PACK_ID.matches(id)
+
+        /** Catalog add-on ids double as order kinds in the UI; extra traffic packs become an `addonId`. */
+        fun of(
+            kind: String,
+            subscriptionId: String?,
+            tariffId: String?,
+            months: Int?,
+            paymentMethodId: String,
+        ): CreateOrderRequest {
+            val pack = kind.takeIf { it != TRAFFIC_ADDON && TRAFFIC_PACK_ID.matches(it) }
+            return CreateOrderRequest(
+                kind = if (pack != null) TRAFFIC_ADDON else kind,
+                subscriptionId = subscriptionId,
+                tariffId = tariffId,
+                months = months,
+                paymentMethodId = paymentMethodId,
+                addonId = pack,
+            )
+        }
+    }
+}
 
 @Serializable
 data class CreateOrderResponse(

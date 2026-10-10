@@ -498,7 +498,7 @@ class AppRepository(
         paymentMethodId: String,
     ): OrderSummary = apiClient.createOrder(
         requireToken(),
-        CreateOrderRequest(kind, subscriptionId, tariffId, months, paymentMethodId),
+        CreateOrderRequest.of(kind, subscriptionId, tariffId, months, paymentMethodId),
     ).order
 
     suspend fun invitePreview(code: String): com.leviknet.vpn.core.network.InvitePreview =

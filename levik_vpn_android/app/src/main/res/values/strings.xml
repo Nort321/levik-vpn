@@ -166,6 +166,7 @@
     <string name="subscription_management_order_processing">Processing</string>
     <string name="subscription_buy_slots_btn">Add device slots</string>
     <string name="subscription_buy_traffic_btn">Add traffic</string>
+    <string name="subscription_buy_traffic_pack_btn">+%1$s · %2$d ₽</string>
     <string name="payment_open_failed">Could not open the payment page. Try again from order history.</string>
     <string name="payment_not_available">This invoice is already paid, cancelled, or no longer available. Refresh order history.</string>
     <string name="payment_already_pending">You already have an unfinished invoice. Continue payment from order history.</string>

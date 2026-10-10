@@ -45,6 +45,7 @@ import com.leviknet.vpn.R
 import com.leviknet.vpn.core.network.CatalogPaymentMethod
 import com.leviknet.vpn.core.network.CatalogResponse
 import com.leviknet.vpn.core.network.CatalogTariff
+import com.leviknet.vpn.core.network.CreateOrderRequest
 import com.leviknet.vpn.core.network.MobileAccountResponse
 import com.leviknet.vpn.core.network.OrderSummary
 import com.leviknet.vpn.core.network.SubscriptionSummary
@@ -391,25 +392,41 @@ private fun ManagedSubscriptionCard(
                         }
                     }
                     if (subscription.actions.trafficAddon) {
-                        OutlinedButton(
-                            onClick = {
-                                onPurchase(
-                                    "traffic_addon",
-                                    subscription.uuid,
-                                    null,
-                                    null,
-                                    paymentMethodId,
+                        val packs = catalog?.addons.orEmpty().filter {
+                            it.enabled && it.trafficDeltaBytes > 0 && CreateOrderRequest.isTrafficPack(it.id)
+                        }
+                        val choices = packs.ifEmpty { listOf(null) }
+                        choices.forEach { pack ->
+                            OutlinedButton(
+                                onClick = {
+                                    onPurchase(
+                                        pack?.id ?: CreateOrderRequest.TRAFFIC_ADDON,
+                                        subscription.uuid,
+                                        null,
+                                        null,
+                                        paymentMethodId,
+                                    )
+                                },
+                                enabled = !loading && paymentMethodId.isNotBlank(),
+                            ) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_usage),
+                                    contentDescription = null,
+                                    modifier = Modifier.size(17.dp),
                                 )
-                            },
-                            enabled = !loading && paymentMethodId.isNotBlank(),
-                        ) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_usage),
-                                contentDescription = null,
-                                modifier = Modifier.size(17.dp),
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text(stringResource(R.string.subscription_buy_traffic_btn))
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    if (pack == null) {
+                                        stringResource(R.string.subscription_buy_traffic_btn)
+                                    } else {
+                                        stringResource(
+                                            R.string.subscription_buy_traffic_pack_btn,
+                                            formatBytes(pack.trafficDeltaBytes),
+                                            pack.amountRub,
+                                        )
+                                    },
+                                )
+                            }
                         }
                     }
                 }
