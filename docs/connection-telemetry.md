@@ -102,7 +102,7 @@ The app attaches that token to sessions started on the same network.
 | `ageS` | seconds from session start until this report was sent |
 | `client.platform` | `android`, `windows`, `macos`, `linux` |
 | `client.app` | app version, up to 32 characters |
-| `client.os` | OS major version, up to 32 characters |
+| `client.os` | OS major version (`15`, `11`); on Linux the distribution and its version from os-release (`ubuntu 24.04`). Up to 32 characters |
 | `client.oem` | Android manufacturer in lower case; omitted on desktop |
 | `net.type` | `wifi`, `cellular`, `ethernet`, `other`, `unknown` |
 | `trigger` | `user`, `auto_connect`, `boot`, `always_on`, `tile`, `widget`, `untrusted_wifi`, `resume`, `unknown` |
