@@ -571,4 +571,12 @@
     <string name="yandex_guest_loading">Opening the public document…</string>
     <string name="yandex_guest_instructions">Complete any Yandex verification without signing in. A public editable OnlyOffice document is required.</string>
     <string name="yandex_guest_failed">The editor could not be opened securely. Check your network and link.</string>
+    <string name="notification_channel_announcements">Levik VPN messages</string>
+    <string name="notification_channel_announcements_desc">Service work and important news from Levik VPN</string>
+    <string name="announcement_details">Details</string>
+    <string name="announcement_dismiss">Hide message</string>
+    <string name="profile_cabinet">Personal account</string>
+    <string name="settings_sync_title">Sync settings</string>
+    <string name="settings_sync_desc">Routing, protection and Anti-DPI are the same in all your Levik VPN apps</string>
+    <string name="settings_sync_done">Synced at %1$s</string>
 </resources>

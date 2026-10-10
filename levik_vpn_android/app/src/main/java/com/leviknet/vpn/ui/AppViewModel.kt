@@ -60,7 +60,14 @@ import com.leviknet.vpn.vpn.TunnelEngineKind
 import com.leviknet.vpn.vpn.VpnConnectionState
 import com.leviknet.vpn.vpn.VpnController
 import com.leviknet.vpn.vpn.VpnSnapshot
+import com.leviknet.vpn.core.platform.AppAnnouncement
+import com.leviknet.vpn.core.platform.AppLinks
+import com.leviknet.vpn.core.platform.AppPlatform
+import com.leviknet.vpn.core.platform.CabinetTarget
+import com.leviknet.vpn.core.platform.OpenAppTarget
+import com.leviknet.vpn.core.platform.RemoteConfigPolicy
 import com.leviknet.vpn.vpn.isEligibleForAutomaticSelection
+import com.leviknet.vpn.vpn.telemetryProtocol
 import com.leviknet.vpn.vpn.isAllowlistMobileServer
 import com.leviknet.vpn.vpn.isMobileServer
 import com.leviknet.vpn.vpn.isStandardMobileServer
@@ -104,6 +111,7 @@ class AppViewModel(
     private val trafficHistoryStore: TrafficHistoryStore? = null,
     private val appContext: Context? = null,
     whitelistDetector: WhitelistDetector? = null,
+    private val appPlatform: AppPlatform? = null,
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(AppUiState(yandexSupported = repository.supportsYandex()))
     private val effectChannel = Channel<AppEffect>(Channel.BUFFERED)
@@ -113,6 +121,7 @@ class AppViewModel(
     private var activationAuthorizationJob: Job? = null
     private var yandexSetupJob: Job? = null
     private var updateCheckJob: Job? = null
+    private var cabinetJob: Job? = null
     private var pendingPairingToken: String? = null
     private var pendingOnboardingAction: OnboardingAction? = null
     private var connectionPending = false
@@ -347,6 +356,23 @@ class AppViewModel(
         viewModelScope.launch {
             settings.anonymousTelemetryEnabled.collect { enabled ->
                 mutableState.update { it.copy(anonymousTelemetryEnabled = enabled) }
+            }
+        }
+        appPlatform?.let { platform ->
+            viewModelScope.launch {
+                platform.announcements.collect { items ->
+                    mutableState.update { it.copy(announcements = items) }
+                }
+            }
+            viewModelScope.launch {
+                platform.syncEnabled.collect { enabled ->
+                    mutableState.update { it.copy(settingsSyncEnabled = enabled) }
+                }
+            }
+            viewModelScope.launch {
+                platform.syncedAt.collect { at ->
+                    mutableState.update { it.copy(settingsSyncedAt = at) }
+                }
             }
         }
         viewModelScope.launch {
@@ -1738,8 +1764,15 @@ class AppViewModel(
             .filter { it.id in eligibleServerIds && !it.isMobileServer() }
             .mapTo(mutableSetOf(), TunnelServer::id)
         val preferredServerIds = regularServerIds.ifEmpty { eligibleServerIds }
+        // Protocols that work on the user's operator first, unless none of them answers.
+        val advisedServerIds = RemoteConfigPolicy.candidates(
+            profile.servers.filter { it.id in preferredServerIds },
+            appPlatform?.protocolAdvice(),
+        ) { it.telemetryProtocol().wire }.mapTo(mutableSetOf(), TunnelServer::id)
+        val candidateServerIds = advisedServerIds.takeIf { ids -> ids.any { measured[it] != null } }
+            ?: preferredServerIds
         val selected = measured.entries
-            .filter { it.key in preferredServerIds && it.value != null }
+            .filter { it.key in candidateServerIds && it.value != null }
             .minByOrNull { requireNotNull(it.value) }
             ?.key
             ?: repository.selectedServerId()
@@ -2182,6 +2215,7 @@ class AppViewModel(
 
     fun onAppForegrounded() {
         refreshWhitelistStatus()
+        appPlatform?.onForeground()
         if (mutableState.value.subscriptionManagementOpen) {
             refreshSubscription(showErrors = false)
         }
@@ -2326,6 +2360,10 @@ class AppViewModel(
     }
 
     fun handleDeepLink(uri: android.net.Uri) {
+        AppLinks.openAppTarget(uri.toString())?.let { target ->
+            openAppTarget(target)
+            return
+        }
         when (DeepLinkRouter.route(uri.toString())) {
             DeepLinkDestination.PAIRING -> claimPairingUri(uri.toString())
             DeepLinkDestination.ACTIVATION -> {
@@ -2333,6 +2371,35 @@ class AppViewModel(
             }
             null -> AppLogger.w("AppViewModel", "Rejected unsupported deep link")
         }
+    }
+
+    /** The website's "return to the app" page, for example after a payment. */
+    private fun openAppTarget(target: OpenAppTarget) {
+        selectTab(if (target == OpenAppTarget.HOME) AppTab.HOME else AppTab.PROFILE)
+        if (mutableState.value.session != SessionStatus.Authenticated) return
+        refreshSubscription(showErrors = false)
+        if (target == OpenAppTarget.PLANS) openSubscriptionManagement()
+    }
+
+    /** Opens the website's personal cabinet already signed in to this account. */
+    fun openCabinet(target: CabinetTarget = CabinetTarget.DASHBOARD) {
+        val platform = appPlatform ?: return
+        if (!BuildConfig.EXTERNAL_PURCHASES_ENABLED || cabinetJob?.isActive == true) return
+        cabinetJob = viewModelScope.launch {
+            effectChannel.send(AppEffect.OpenExternal(platform.cabinetUrl(target)))
+        }
+    }
+
+    fun dismissAnnouncement(id: String) {
+        appPlatform?.dismissAnnouncement(id)
+    }
+
+    fun openAnnouncementLink(url: String) {
+        viewModelScope.launch { effectChannel.send(AppEffect.OpenExternal(url)) }
+    }
+
+    fun setSettingsSyncEnabled(enabled: Boolean) {
+        appPlatform?.setSyncEnabled(enabled)
     }
 
     fun getLogs(): List<LogEntry> = AppLogger.getLogs()
@@ -2389,6 +2456,7 @@ class AppViewModel(
                         trafficHistoryStore = container.trafficHistoryStore,
                         appContext = container.appContext,
                         whitelistDetector = container.whitelistDetector,
+                        appPlatform = container.appPlatform,
                     ) as T
                 }
             }
@@ -2577,6 +2645,9 @@ data class AppUiState(
     val isSharingNote: Boolean = false,
     val message: UiMessage? = null,
     val problem: AppProblem? = null,
+    val announcements: List<AppAnnouncement> = emptyList(),
+    val settingsSyncEnabled: Boolean = true,
+    val settingsSyncedAt: Long? = null,
 )
 
 /** The one-time notice waits until the user is signed in and no other dialog is open. */

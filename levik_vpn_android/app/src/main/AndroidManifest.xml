@@ -74,6 +74,15 @@
                     android:scheme="https"
                     android:host="leviknet.org"
                     android:path="/activate" />
+                <!-- The website's "return to the app" page, docs/app-platform.md. -->
+                <data
+                    android:scheme="https"
+                    android:host="leviknet.com"
+                    android:path="/open-app" />
+                <data
+                    android:scheme="https"
+                    android:host="leviknet.org"
+                    android:path="/open-app" />
             </intent-filter>
         </activity>
 

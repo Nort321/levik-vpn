@@ -151,6 +151,8 @@ import com.leviknet.vpn.core.network.MobileAccountResponse
 import com.leviknet.vpn.core.network.SubscriptionSummary
 import com.leviknet.vpn.core.network.TrafficSummary
 import com.leviknet.vpn.core.network.WhitelistMode
+import com.leviknet.vpn.core.platform.AnnouncementLevel
+import com.leviknet.vpn.core.platform.AppAnnouncement
 import com.leviknet.vpn.data.AntiDpiPreset
 import com.leviknet.vpn.data.DailyTraffic
 import com.leviknet.vpn.data.DnsProvider
@@ -346,6 +348,10 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     onContinueOrder = viewModel::continueOrderPayment,
                     onRequestBatteryOptimization = viewModel::requestIgnoreBatteryOptimization,
                     onCheckForUpdates = viewModel::checkForUpdates,
+                    onDismissAnnouncement = viewModel::dismissAnnouncement,
+                    onOpenAnnouncementLink = viewModel::openAnnouncementLink,
+                    onOpenCabinet = { viewModel.openCabinet() },
+                    onSettingsSyncChanged = viewModel::setSettingsSyncEnabled,
                 )
             }
         }
@@ -1271,6 +1277,10 @@ private fun MainContent(
     onContinueOrder: (Long) -> Unit,
     onRequestBatteryOptimization: () -> Unit,
     onCheckForUpdates: () -> Unit,
+    onDismissAnnouncement: (String) -> Unit,
+    onOpenAnnouncementLink: (String) -> Unit,
+    onOpenCabinet: () -> Unit,
+    onSettingsSyncChanged: (Boolean) -> Unit,
 ) {
     val isTelevision = LocalConfiguration.current.uiMode and
         Configuration.UI_MODE_TYPE_MASK == Configuration.UI_MODE_TYPE_TELEVISION
@@ -1304,6 +1314,8 @@ private fun MainContent(
                 onServers = { onTabSelected(AppTab.SERVERS) },
                 onOpenRoutingPreset = onOpenRoutingPreset,
                 onOpenAntiDpi = onOpenAntiDpi,
+                onDismissAnnouncement = onDismissAnnouncement,
+                onOpenAnnouncementLink = onOpenAnnouncementLink,
             )
             AppTab.SERVERS -> ServersScreen(
                 modifier = contentModifier,
@@ -1416,6 +1428,10 @@ private fun MainContent(
                 onRequestBatteryOptimization = onRequestBatteryOptimization,
                 onCheckForUpdates = onCheckForUpdates,
                 onOpenLogs = onOpenLogs,
+                settingsSyncEnabled = state.settingsSyncEnabled,
+                settingsSyncedAt = state.settingsSyncedAt,
+                onSettingsSyncChanged = onSettingsSyncChanged,
+                onOpenCabinet = onOpenCabinet,
             )
             }
         }
@@ -1583,6 +1599,75 @@ private fun AppNavigationBar(
     }
 }
 
+private val AnnouncementWarning = Color(0xFFD97706)
+
+@Composable
+private fun AnnouncementBanner(
+    announcement: AppAnnouncement,
+    onDismiss: () -> Unit,
+    onOpenLink: (String) -> Unit,
+) {
+    val accent = when (announcement.level) {
+        AnnouncementLevel.INFO -> LevikBlue
+        AnnouncementLevel.WARNING -> AnnouncementWarning
+        AnnouncementLevel.CRITICAL -> MaterialTheme.colorScheme.error
+    }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = androidx.compose.foundation.BorderStroke(1.dp, accent.copy(alpha = 0.45f)),
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 14.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.ic_shield),
+                contentDescription = null,
+                modifier = Modifier
+                    .padding(top = 2.dp)
+                    .size(18.dp),
+                tint = accent,
+            )
+            Spacer(Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = announcement.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = announcement.body,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                announcement.linkUrl?.let { url ->
+                    TextButton(
+                        onClick = { onOpenLink(url) },
+                        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp),
+                    ) {
+                        Text(stringResource(R.string.announcement_details), color = accent)
+                    }
+                }
+            }
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier.size(LevikDimensions.IconButtonSize),
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_close),
+                    contentDescription = stringResource(R.string.announcement_dismiss),
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun HomeScreen(
     modifier: Modifier,
@@ -1595,6 +1680,8 @@ private fun HomeScreen(
     onServers: () -> Unit,
     onOpenRoutingPreset: () -> Unit,
     onOpenAntiDpi: () -> Unit,
+    onDismissAnnouncement: (String) -> Unit,
+    onOpenAnnouncementLink: (String) -> Unit,
 ) {
     val selectedServer = state.profile?.servers?.firstOrNull {
         it.id == displayedServerId(state)
@@ -1639,6 +1726,14 @@ private fun HomeScreen(
                     )
                 }
             }
+        }
+        state.announcements.forEach { announcement ->
+            Spacer(Modifier.height(12.dp))
+            AnnouncementBanner(
+                announcement = announcement,
+                onDismiss = { onDismissAnnouncement(announcement.id) },
+                onOpenLink = onOpenAnnouncementLink,
+            )
         }
         if (state.whitelistMode == WhitelistMode.ACTIVE) {
             Spacer(Modifier.height(12.dp))
@@ -3713,6 +3808,10 @@ private fun ProfileScreen(
     onRequestBatteryOptimization: () -> Unit,
     onCheckForUpdates: () -> Unit,
     onOpenLogs: () -> Unit,
+    settingsSyncEnabled: Boolean,
+    settingsSyncedAt: Long?,
+    onSettingsSyncChanged: (Boolean) -> Unit,
+    onOpenCabinet: () -> Unit,
 ) {
     val activeSubscriptions = account?.subscriptions.orEmpty().filter {
         it.isActiveAt(Instant.now())
@@ -4090,6 +4189,51 @@ private fun ProfileScreen(
                         modifier = Modifier.semantics { contentDescription = connectionTelemetryTitle },
                         colors = LevikSwitchDefaults.colors(),
                     )
+                }
+            }
+
+            if (session == SessionStatus.Authenticated) {
+                val settingsSyncTitle = stringResource(R.string.settings_sync_title)
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    shadowElevation = 1.dp,
+                ) {
+                    Row(
+                        modifier = Modifier.padding(18.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                text = settingsSyncTitle,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = stringResource(R.string.settings_sync_desc),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            if (settingsSyncEnabled && settingsSyncedAt != null) {
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    text = stringResource(R.string.settings_sync_done, formatDateTime(settingsSyncedAt)),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
+                        }
+                        Spacer(Modifier.width(14.dp))
+                        Switch(
+                            checked = settingsSyncEnabled,
+                            onCheckedChange = onSettingsSyncChanged,
+                            modifier = Modifier.semantics { contentDescription = settingsSyncTitle },
+                            colors = LevikSwitchDefaults.colors(),
+                        )
+                    }
                 }
             }
 
@@ -4599,6 +4743,28 @@ private fun ProfileScreen(
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(stringResource(R.string.free_proxy_button), fontWeight = FontWeight.SemiBold)
+            }
+            if (BuildConfig.EXTERNAL_PURCHASES_ENABLED && session == SessionStatus.Authenticated) {
+                OutlinedButton(
+                    onClick = onOpenCabinet,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = LevikDimensions.ButtonHeight),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_web),
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.profile_cabinet), fontWeight = FontWeight.SemiBold)
+                }
             }
             OutlinedButton(
                 onClick = onSupport,
@@ -6781,6 +6947,10 @@ private fun formatDuration(seconds: Long): String {
 }
 
 private val DATE_FORMATTER = DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)
+private val DATE_TIME_FORMATTER = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
+
+private fun formatDateTime(epochMs: Long): String =
+    DATE_TIME_FORMATTER.format(Instant.ofEpochMilli(epochMs).atZone(ZoneId.systemDefault()))
 
 internal fun formatDate(iso: String): String = runCatching {
     val instant = Instant.parse(iso)

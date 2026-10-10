@@ -434,6 +434,22 @@ class AppSettings(context: Context) {
         }
     }
 
+    /** Anti-DPI from the user's other apps: the parameters are kept even when it is off. */
+    fun applySyncedAntiDpi(preset: AntiDpiPreset, packets: String, length: String, interval: String) {
+        preferences.edit(commit = true) {
+            putString(ANTI_DPI_PRESET, preset.name)
+            putBoolean(ANTI_DPI_ENABLED, preset != AntiDpiPreset.OFF)
+            putString(ANTI_DPI_PACKETS, packets)
+            putString(ANTI_DPI_LENGTH, length)
+            putString(ANTI_DPI_INTERVAL, interval)
+        }
+        mutableAntiDpiPreset.value = preset
+        mutableAntiDpiEnabled.value = preset != AntiDpiPreset.OFF
+        mutableAntiDpiPackets.value = packets
+        mutableAntiDpiLength.value = length
+        mutableAntiDpiInterval.value = interval
+    }
+
     fun setAutoHealingEnabled(enabled: Boolean) {
         preferences.edit(commit = true) {
             putBoolean(AUTO_HEALING_ENABLED, enabled)

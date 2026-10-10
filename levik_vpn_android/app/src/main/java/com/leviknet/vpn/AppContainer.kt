@@ -114,6 +114,16 @@ class AppContainer(application: Application) {
     val trafficHistoryStore = TrafficHistoryStore(application, json, nativeCleanupScope)
     val vpnController = VpnController(application, secureStore)
 
+    val appPlatform = com.leviknet.vpn.core.platform.AppPlatform(
+        context = application,
+        settings = settings,
+        repository = repository,
+        vpnController = vpnController,
+        directNetwork = whitelistDetector::directNetwork,
+        scope = nativeCleanupScope,
+        json = json,
+    )
+
     private val wifiAutoConnectMonitor = WifiAutoConnectMonitor(
         context = application,
         settings = settings,
@@ -123,6 +133,7 @@ class AppContainer(application: Application) {
 
     init {
         wifiAutoConnectMonitor.start()
+        appPlatform.start()
         nativeCleanupScope.launch {
             settings.whitelistMapEnabled.collect { enabled ->
                 WhitelistMapWorker.configure(application, enabled)

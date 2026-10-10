@@ -479,6 +479,17 @@ class AppRepository(
 
     suspend fun catalog(): CatalogResponse = apiClient.catalog(requireToken())
 
+    suspend fun syncedSettings(): kotlinx.serialization.json.JsonElement = apiClient.settings(requireToken())
+
+    suspend fun updateSyncedSettings(
+        changes: Map<String, kotlinx.serialization.json.JsonPrimitive>,
+    ): kotlinx.serialization.json.JsonElement = apiClient.updateSettings(requireToken(), changes)
+
+    /** A one-time link that opens the website signed in; null when it is not a Levik /handoff link. */
+    suspend fun webHandoffUrl(target: String): String? =
+        apiClient.webHandoff(requireToken(), target).url
+            .takeIf(com.leviknet.vpn.core.platform.AppLinks::isHandoffUrl)
+
     suspend fun createOrder(
         kind: String,
         subscriptionId: String?,

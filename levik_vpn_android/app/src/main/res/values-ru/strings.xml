@@ -571,4 +571,12 @@
     <string name="yandex_guest_loading">Открываем публичный документ…</string>
     <string name="yandex_guest_instructions">Если Яндекс запросит проверку, пройдите её. Не входите в аккаунт. Нужен публичный документ OnlyOffice с разрешением на редактирование.</string>
     <string name="yandex_guest_failed">Не удалось безопасно открыть редактор. Проверьте сеть и ссылку.</string>
+    <string name="notification_channel_announcements">Сообщения Levik VPN</string>
+    <string name="notification_channel_announcements_desc">Работы на серверах и важные новости Levik VPN</string>
+    <string name="announcement_details">Подробнее</string>
+    <string name="announcement_dismiss">Скрыть сообщение</string>
+    <string name="profile_cabinet">Личный кабинет</string>
+    <string name="settings_sync_title">Синхронизация настроек</string>
+    <string name="settings_sync_desc">Маршрутизация, защита и Anti-DPI одинаковы во всех ваших приложениях Levik VPN</string>
+    <string name="settings_sync_done">Синхронизировано в %1$s</string>
 </resources>

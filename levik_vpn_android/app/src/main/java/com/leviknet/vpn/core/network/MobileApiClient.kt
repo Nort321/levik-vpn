@@ -12,6 +12,9 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 
 class MobileApiClient(
     baseUrl: String,
@@ -224,6 +227,40 @@ class MobileApiClient(
         return response
     }
 
+    /** The account's shared settings, docs/app-platform.md. */
+    suspend fun settings(accessToken: String): JsonElement = request(
+        method = METHOD_GET,
+        path = SETTINGS_PATH,
+        body = EMPTY_BODY,
+        accessToken = accessToken,
+        requiresIntegrity = false,
+    )
+
+    /** Sends the changed fields; the server keeps the latest value of each field. */
+    suspend fun updateSettings(accessToken: String, changes: Map<String, JsonPrimitive>): JsonElement {
+        require(changes.isNotEmpty()) { "No settings to send" }
+        val body = json.encodeToString(JsonObject.serializer(), JsonObject(mapOf("changes" to JsonObject(changes))))
+        return request(
+            method = METHOD_PUT,
+            path = SETTINGS_PATH,
+            body = body.encodeToByteArray(),
+            accessToken = accessToken,
+            requiresIntegrity = false,
+        )
+    }
+
+    /** A one-time link that opens the website signed in to the same account. */
+    suspend fun webHandoff(accessToken: String, target: String): WebHandoffResponse {
+        val response = post<WebHandoffRequest, WebHandoffResponse>(
+            path = WEB_HANDOFF_PATH,
+            request = WebHandoffRequest(target),
+            accessToken = accessToken,
+            requiresIntegrity = false,
+        )
+        checkSuccess(response.ok)
+        return response
+    }
+
     suspend fun checkIp(): IpCheckResponse {
         return request<IpCheckResponse>(
             method = METHOD_GET,
@@ -313,6 +350,7 @@ class MobileApiClient(
                 setRequestProperty("Accept-Language", Locale.getDefault().toLanguageTag())
                 setRequestProperty("User-Agent", USER_AGENT)
                 setRequestProperty("X-Levik-App-Version", BuildConfig.VERSION_NAME)
+                setRequestProperty("X-Levik-Client", CLIENT_HEADER)
                 setRequestProperty("X-Levik-Device-Id", signed.deviceId)
                 setRequestProperty("X-Levik-Timestamp", signed.timestamp.toString())
                 setRequestProperty("X-Levik-Nonce", signed.nonce)
@@ -323,7 +361,7 @@ class MobileApiClient(
                 accessToken?.let { token ->
                     setRequestProperty("Authorization", "Bearer $token")
                 }
-                if (method == METHOD_POST) {
+                if (method != METHOD_GET) {
                     doOutput = true
                     setFixedLengthStreamingMode(body.size)
                     setRequestProperty("Content-Type", JSON_MEDIA_TYPE)
@@ -335,7 +373,7 @@ class MobileApiClient(
         }
 
         try {
-            if (method == METHOD_POST) {
+            if (method != METHOD_GET) {
                 connection.outputStream.use { output ->
                     output.write(body)
                     output.flush()
@@ -440,14 +478,19 @@ class MobileApiClient(
         private const val STATUS_PATH = "/api/status"
         private const val FREE_PROXY_PATH = "/api/free-proxy"
         private const val BROWSER_CHECKS_PATH = "/api/monitor/v1/browser-checks"
+        private const val SETTINGS_PATH = "/api/mobile/v1/settings"
+        private const val WEB_HANDOFF_PATH = "/api/mobile/v1/web-handoff"
         private const val METHOD_GET = "GET"
         private const val METHOD_POST = "POST"
+        private const val METHOD_PUT = "PUT"
         private const val JSON_MEDIA_TYPE = "application/json"
         private const val CONNECT_TIMEOUT_MS = 15_000
         private const val READ_TIMEOUT_MS = 30_000
         private const val MAX_RESPONSE_BYTES = 4 * 1024 * 1024
         private val EMPTY_BODY = ByteArray(0)
         private val EMPTY_JSON_BODY = "{}".toByteArray(StandardCharsets.UTF_8)
+        /** Platform and version only, docs/app-platform.md. */
+        internal val CLIENT_HEADER = "android/${BuildConfig.VERSION_NAME}"
         private val USER_AGENT =
             "LevikVPN-Android/${BuildConfig.VERSION_NAME} (${BuildConfig.APPLICATION_ID})"
     }

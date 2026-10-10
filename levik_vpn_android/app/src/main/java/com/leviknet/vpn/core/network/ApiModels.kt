@@ -333,6 +333,18 @@ data class SimpleSuccessResponse(
 )
 
 @Serializable
+data class WebHandoffRequest(
+    val target: String,
+)
+
+@Serializable
+data class WebHandoffResponse(
+    val ok: Boolean,
+    val url: String,
+    val expiresAt: String,
+)
+
+@Serializable
 data class MobileAuthorizeActivationRequest(
     val code: String,
 )
