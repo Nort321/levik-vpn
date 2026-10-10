@@ -250,15 +250,6 @@ class MobileApiClient(
         requiresIntegrity = false,
     )
 
-    suspend fun createSupportNote(noteRequest: CreateNoteRequest): CreateNoteResponse {
-        return post<CreateNoteRequest, CreateNoteResponse>(
-            path = NOTES_PATH,
-            request = noteRequest,
-            accessToken = null,
-            requiresIntegrity = false,
-        )
-    }
-
     suspend fun reportCensorshipTelemetry(telemetry: BrowserCheckReportRequest) {
         runCatching {
             post<BrowserCheckReportRequest, ApiFailureResponse>(
@@ -448,7 +439,6 @@ class MobileApiClient(
         private const val CHECK_IP_PATH = "/api/check"
         private const val STATUS_PATH = "/api/status"
         private const val FREE_PROXY_PATH = "/api/free-proxy"
-        private const val NOTES_PATH = "/api/notes"
         private const val BROWSER_CHECKS_PATH = "/api/monitor/v1/browser-checks"
         private const val METHOD_GET = "GET"
         private const val METHOD_POST = "POST"

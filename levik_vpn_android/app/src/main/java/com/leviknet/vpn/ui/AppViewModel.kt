@@ -29,6 +29,7 @@ import com.leviknet.vpn.core.network.LevikStatusSnapshot
 import com.leviknet.vpn.core.network.MobileAccountResponse
 import com.leviknet.vpn.core.network.MAX_SUPPORT_NOTE_BYTES
 import com.leviknet.vpn.core.network.NetworkDiagnostics
+import com.leviknet.vpn.core.network.SupportNoteClient
 import com.leviknet.vpn.core.network.supportNoteText
 import com.leviknet.vpn.core.network.SubscriptionSummary
 import com.leviknet.vpn.core.network.TrafficSummary
@@ -106,6 +107,7 @@ class AppViewModel(
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(AppUiState(yandexSupported = repository.supportsYandex()))
     private val effectChannel = Channel<AppEffect>(Channel.BUFFERED)
+    private val supportNotes = SupportNoteClient()
     private var loginStartJob: Job? = null
     private var loginPollJob: Job? = null
     private var activationAuthorizationJob: Job? = null
@@ -2290,7 +2292,7 @@ class AppViewModel(
                 val text = withContext(Dispatchers.IO) {
                     supportNoteText(report.toFormattedString(), AppLogger.readDiskLog(MAX_SUPPORT_NOTE_BYTES))
                 }
-                val noteUrl = NetworkDiagnostics.createEncryptedSupportNote(text, apiClient)
+                val noteUrl = supportNotes.create(text)
                 mutableState.update { it.copy(supportNoteUrl = noteUrl, isSharingNote = false) }
             } catch (e: Exception) {
                 AppLogger.e("AppViewModel", "Failed to share note", e)

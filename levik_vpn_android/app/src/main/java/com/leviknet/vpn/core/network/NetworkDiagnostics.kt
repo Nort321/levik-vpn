@@ -7,14 +7,7 @@ import com.leviknet.vpn.vpn.VpnSnapshot
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.charset.StandardCharsets
-import java.security.MessageDigest
-import java.security.SecureRandom
 import java.time.Instant
-import java.util.Base64
-import java.util.UUID
-import javax.crypto.Cipher
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.SecretKeySpec
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -159,42 +152,6 @@ object NetworkDiagnostics {
         }
 
         report
-    }
-
-    suspend fun createEncryptedSupportNote(
-        reportText: String,
-        apiClient: MobileApiClient,
-    ): String = withContext(Dispatchers.IO) {
-        val random = SecureRandom()
-        val keyBytes = ByteArray(32).also(random::nextBytes)
-        val ivBytes = ByteArray(12).also(random::nextBytes)
-
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        val keySpec = SecretKeySpec(keyBytes, "AES")
-        val gcmSpec = GCMParameterSpec(128, ivBytes)
-        cipher.init(Cipher.ENCRYPT_MODE, keySpec, gcmSpec)
-        val ciphertext = cipher.doFinal(reportText.toByteArray(StandardCharsets.UTF_8))
-
-        val keyCommitment = MessageDigest.getInstance("SHA-256").digest(keyBytes)
-
-        val b64u = Base64.getUrlEncoder().withoutPadding()
-        val noteId = UUID.randomUUID().toString()
-
-        val response = apiClient.createSupportNote(
-            CreateNoteRequest(
-                id = noteId,
-                keyCommitment = b64u.encodeToString(keyCommitment),
-                iv = b64u.encodeToString(ivBytes),
-                ciphertext = b64u.encodeToString(ciphertext),
-                expiresInDays = 7,
-            ),
-        )
-
-        if (!response.ok) {
-            throw IllegalStateException(response.message ?: "Failed to create secure note")
-        }
-
-        "${BuildConfig.CABINET_BASE_URL}/notes/$noteId#${b64u.encodeToString(keyBytes)}"
     }
 
     private fun checkService(id: String, name: String, targetUrl: String): DiagnosticServiceCheck {
