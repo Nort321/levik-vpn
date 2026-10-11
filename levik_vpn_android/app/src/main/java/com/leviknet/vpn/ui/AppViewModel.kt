@@ -29,6 +29,7 @@ import com.leviknet.vpn.core.network.LevikStatusSnapshot
 import com.leviknet.vpn.core.network.MobileAccountResponse
 import com.leviknet.vpn.core.network.MAX_SUPPORT_NOTE_BYTES
 import com.leviknet.vpn.core.network.NetworkDiagnostics
+import com.leviknet.vpn.core.network.ServiceEndpoints
 import com.leviknet.vpn.core.network.SupportNoteClient
 import com.leviknet.vpn.core.network.supportNoteText
 import com.leviknet.vpn.core.network.SubscriptionSummary
@@ -2271,7 +2272,7 @@ class AppViewModel(
 
     fun openWhitelistMap() {
         viewModelScope.launch {
-            effectChannel.send(AppEffect.OpenExternal("https://leviknet.org/whitelist-map"))
+            effectChannel.send(AppEffect.OpenExternal(ServiceEndpoints.webUrl("/whitelist-map")))
         }
     }
 
@@ -2442,8 +2443,8 @@ class AppViewModel(
         )
         private const val SUPPORT_URL = "https://t.me/leviksupportbot"
         private const val FREE_PROXY_BOT_URL = "https://t.me/levikvpnbot"
-        private const val ACCOUNT_DELETION_URL = "https://leviknet.org/account/delete"
-        private const val PRIVACY_POLICY_URL = "https://leviknet.org/legal/privacy"
+        private val ACCOUNT_DELETION_URL: String get() = ServiceEndpoints.webUrl("/account/delete")
+        private val PRIVACY_POLICY_URL: String get() = ServiceEndpoints.webUrl("/legal/privacy")
         private val ACTIVE_TUNNEL_STATES = setOf(
             VpnConnectionState.CONNECTED,
             VpnConnectionState.CONNECTING,
@@ -2582,7 +2583,8 @@ enum class ServerFilterType {
 
 enum class OptionalDataDisclosure { MAP, DIAGNOSTICS, WIFI }
 
-private const val CONNECTION_TELEMETRY_DETAILS_URL = "https://leviknet.org/legal/privacy#connection-telemetry"
+private val CONNECTION_TELEMETRY_DETAILS_URL: String
+    get() = ServiceEndpoints.webUrl("/legal/privacy#connection-telemetry")
 
 data class AppUiState(
     val session: SessionStatus = SessionStatus.Loading,

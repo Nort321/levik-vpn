@@ -1,16 +1,16 @@
 package com.leviknet.vpn.core.auth
 
+import com.leviknet.vpn.core.network.ServiceEndpoints
 import java.net.URI
 import java.util.Locale
 
 internal object ExternalUriPolicy {
     private const val TELEGRAM_HOST = "t.me"
-    private val LEVIKNET_HOSTS = setOf("leviknet.com", "leviknet.org")
 
     fun isAllowedHttpsHost(host: String): Boolean {
         val normalizedHost = host.lowercase(Locale.ROOT)
         return normalizedHost == TELEGRAM_HOST ||
-            LEVIKNET_HOSTS.any { normalizedHost == it || normalizedHost.endsWith(".$it") }
+            ServiceEndpoints.websiteHosts().any { normalizedHost == it || normalizedHost.endsWith(".$it") }
     }
 
     // Payment effects are emitted only from authenticated mobile API responses.

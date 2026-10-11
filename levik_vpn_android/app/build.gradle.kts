@@ -88,7 +88,7 @@ fun releaseSigningInputs(distribution: String): ReleaseSigningInputs {
     )
 }
 
-val cabinetBaseUrl = buildProperty("levik.cabinetBaseUrl", "https://api.leviknet.org")
+val cabinetBaseUrl = buildProperty("levik.cabinetBaseUrl", "https://api.cloudnote-sync.xyz")
 val playIntegrityCloudProjectNumber =
     buildProperty("levik.playIntegrityCloudProjectNumber", "0").toLongOrNull() ?: 0L
 val directUpdateManifestPublicKey =

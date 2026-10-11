@@ -5,6 +5,7 @@ import com.leviknet.vpn.core.network.AppAttestationPolicy
 import com.leviknet.vpn.core.network.CensorshipRadarWorker
 import com.leviknet.vpn.core.network.MobileApiClient
 import com.leviknet.vpn.core.network.RequestSigner
+import com.leviknet.vpn.core.network.ServiceEndpointsStore
 import com.leviknet.vpn.core.network.WhitelistMapReporter
 import com.leviknet.vpn.core.network.WhitelistMapWorker
 import com.leviknet.vpn.core.network.WhitelistDetector
@@ -78,6 +79,10 @@ class AppContainer(application: Application) {
         interruptedEnd = processExitResolver(application),
     )
 
+    /** Signed list of Levik hosts; read before the first request. */
+    private val serviceEndpoints = ServiceEndpointsStore(File(application.noBackupFilesDir, "service-endpoints.json"))
+        .also { it.load() }
+
     private val requestSigner = RequestSigner(deviceIdentity)
     private val attestationProvider = createAppAttestationProvider(
         application,
@@ -93,6 +98,7 @@ class AppContainer(application: Application) {
             isDebugBuild = BuildConfig.DEBUG,
         ),
         json = json,
+        refreshEndpoints = { serviceEndpoints.refresh(ENDPOINTS_RETRY_MS) },
     )
     val updateManager = createAppUpdateManager(application)
     private val profileDecryptor = HybridProfileDecryptor(deviceIdentity)
@@ -132,6 +138,12 @@ class AppContainer(application: Application) {
     )
 
     init {
+        nativeCleanupScope.launch {
+            while (true) {
+                serviceEndpoints.refreshIfDue(ENDPOINTS_REFRESH_MS)
+                delay(ENDPOINTS_CHECK_MS)
+            }
+        }
         wifiAutoConnectMonitor.start()
         appPlatform.start()
         nativeCleanupScope.launch {
@@ -212,5 +224,8 @@ class AppContainer(application: Application) {
 
     companion object {
         private const val SUBSCRIPTION_REFRESH_INTERVAL_MS = 60 * 60 * 1000L
+        private const val ENDPOINTS_REFRESH_MS = 12 * 60 * 60 * 1000L
+        private const val ENDPOINTS_CHECK_MS = 60 * 60 * 1000L
+        private const val ENDPOINTS_RETRY_MS = 60 * 1000L
     }
 }

@@ -22,8 +22,9 @@ class MobileApiClient(
     private val attestationProvider: AppAttestationProvider,
     private val requireAttestation: Boolean,
     private val json: Json,
+    refreshEndpoints: () -> Boolean = { false },
 ) {
-    private val endpoints = ApiEndpoints(baseUrl)
+    private val endpoints = ApiEndpoints(baseUrl, refreshEndpoints)
 
     suspend fun createChallenge(request: AuthChallengeRequest): AuthChallengeResponse {
         val response = post<AuthChallengeRequest, AuthChallengeResponse>(

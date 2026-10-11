@@ -13,6 +13,7 @@ import com.leviknet.vpn.BuildConfig
 import com.leviknet.vpn.MainActivity
 import com.leviknet.vpn.R
 import com.leviknet.vpn.core.logger.AppLogger
+import com.leviknet.vpn.core.network.ServiceEndpoints
 import com.leviknet.vpn.core.notification.AppIconArtwork
 import com.leviknet.vpn.data.AppIconManager
 import com.leviknet.vpn.data.AppRepository
@@ -389,10 +390,12 @@ class AppPlatform(
  */
 class RemoteConfigClient(private val version: String) {
     suspend fun fetch(network: Network?): Pair<JsonElement, RemoteConfig>? = withContext(Dispatchers.IO) {
-        for (origin in ORIGINS) {
+        for (origin in ServiceEndpoints.current().apiOrigins) {
             val reply = runCatching { request(URL("$origin/api/app/v1/config"), network) }.getOrNull() ?: continue
             val (status, text) = reply
-            // A rejected request would be rejected by the other domain too.
+            // A host that does not serve the config yet: ask the next one.
+            if (status == 404) continue
+            // A rejected request would be rejected by the other domains too.
             if (status in 400..499) return@withContext null
             if (status != 200 || text == null) continue
             val response = runCatching { Json.parseToJsonElement(text) }.getOrNull() ?: return@withContext null
@@ -434,7 +437,6 @@ class RemoteConfigClient(private val version: String) {
     }
 
     private companion object {
-        val ORIGINS = listOf("https://leviknet.org", "https://leviknet.com")
         const val TIMEOUT_MS = 15_000
         const val MAX_RESPONSE_BYTES = 64 * 1024
     }

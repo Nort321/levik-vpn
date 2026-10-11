@@ -7,6 +7,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.PowerManager
+import com.leviknet.vpn.core.network.ServiceEndpoints
 import java.net.HttpURLConnection
 import java.net.Proxy
 import java.net.URL
@@ -17,7 +18,6 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 
-private val TELEMETRY_ORIGINS = listOf("https://leviknet.org", "https://leviknet.com")
 private const val MAX_TOKEN_RESPONSE_BYTES = 1_024
 
 /**
@@ -27,7 +27,7 @@ private const val MAX_TOKEN_RESPONSE_BYTES = 1_024
 class HttpTelemetryTransport : TelemetryTransport {
     override suspend fun send(body: String): SendOutcome = withContext(Dispatchers.IO) {
         val bytes = body.toByteArray(Charsets.UTF_8)
-        for (origin in TELEMETRY_ORIGINS) {
+        for (origin in ServiceEndpoints.current().apiOrigins) {
             val status = runCatching {
                 request(URL("$origin/api/telemetry/v1/sessions"), null, bytes, 15_000) { it.responseCode }
             }.getOrNull() ?: continue
@@ -45,7 +45,7 @@ class HttpTelemetryTransport : TelemetryTransport {
      * physical network; through the tunnel the server answers with null.
      */
     suspend fun networkToken(network: Network): NetworkToken? = withContext(Dispatchers.IO) {
-        for (origin in TELEMETRY_ORIGINS) {
+        for (origin in ServiceEndpoints.current().apiOrigins) {
             val text = runCatching {
                 request(URL("$origin/api/telemetry/v1/network"), network, null, 4_000) { connection ->
                     if (connection.responseCode != 200) return@request null

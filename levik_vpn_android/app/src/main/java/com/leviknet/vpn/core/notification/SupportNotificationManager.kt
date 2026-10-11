@@ -11,13 +11,14 @@ import com.leviknet.vpn.R
 import com.leviknet.vpn.core.logger.AppLogger
 import com.leviknet.vpn.core.network.MobileSupportReply
 import com.leviknet.vpn.core.network.MobileSupportSummary
+import com.leviknet.vpn.core.network.ServiceEndpoints
 import com.leviknet.vpn.data.AppIconManager
 import com.leviknet.vpn.data.AppSettings
 
 object SupportNotificationManager {
     const val CHANNEL_ID = "levik_support_alerts"
     const val NOTIFICATION_ID = 2005
-    const val DEFAULT_SUPPORT_URL = "https://leviknet.org/dashboard/support"
+    val DEFAULT_SUPPORT_URL: String get() = ServiceEndpoints.webUrl("/dashboard/support")
     private const val LOG_TAG = "SupportNotifManager"
 
     fun ensureChannel(context: Context) {

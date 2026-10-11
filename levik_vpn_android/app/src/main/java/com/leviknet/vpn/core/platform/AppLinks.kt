@@ -1,5 +1,6 @@
 package com.leviknet.vpn.core.platform
 
+import com.leviknet.vpn.core.network.ServiceEndpoints
 import java.net.URI
 
 /** Screens the website's "return to the app" page can ask for. */
@@ -22,7 +23,6 @@ enum class CabinetTarget(val path: String) {
 }
 
 object AppLinks {
-    private val SITE_HOSTS = setOf("leviknet.org", "leviknet.com")
     private const val OPEN_APP_PATH = "/open-app"
     private val HANDOFF_QUERY = Regex("^token=[A-Za-z0-9_-]{43}$")
     private const val MAX_URI_LENGTH = 300
@@ -58,13 +58,13 @@ object AppLinks {
     }
 
     /** Where a page opens when the app cannot sign the browser in. */
-    fun cabinetFallbackUrl(target: CabinetTarget): String = "https://leviknet.org${target.path}"
+    fun cabinetFallbackUrl(target: CabinetTarget): String = ServiceEndpoints.webUrl(target.path)
 
     private fun siteUri(rawUri: String): URI? {
         if (rawUri.length > MAX_URI_LENGTH) return null
         val uri = runCatching { URI(rawUri) }.getOrNull() ?: return null
         if (!uri.scheme.equals("https", ignoreCase = true)) return null
-        if (SITE_HOSTS.none { uri.host.equals(it, ignoreCase = true) }) return null
+        if (ServiceEndpoints.websiteHosts().none { uri.host.equals(it, ignoreCase = true) }) return null
         if (uri.port != -1 || uri.rawUserInfo != null || uri.rawFragment != null) return null
         return uri
     }

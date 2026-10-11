@@ -4,10 +4,14 @@ import java.io.IOException
 import java.net.URL
 import javax.net.ssl.HttpsURLConnection
 
-internal const val DEFAULT_API_ORIGIN = "https://api.leviknet.org"
+internal const val DEFAULT_API_ORIGIN = "https://api.cloudnote-sync.xyz"
 
-internal class ApiEndpoints(baseUrl: String) {
-    private val origins: List<URL>
+internal class ApiEndpoints(
+    baseUrl: String,
+    private val refreshEndpoints: () -> Boolean = { false },
+) {
+    /** Null in production: the hosts come from the signed endpoints document. */
+    private val fixed: URL?
     private var selected: URL? = null
     private var verifiedUntilNanos = 0L
 
@@ -18,11 +22,9 @@ internal class ApiEndpoints(baseUrl: String) {
             (origin.path.isEmpty() || origin.path == "/")) {
             "Mobile API requires an HTTPS origin without credentials, path, query or fragment"
         }
-        origins = if (baseUrl == DEFAULT_API_ORIGIN) {
-            listOf(DEFAULT_API_ORIGIN, "https://leviknet.org", "https://leviknet.com").map(::URL)
-        } else {
-            listOf(origin)
-        }
+        // An explicit development override must never receive production
+        // credentials through an implicit cross-origin retry.
+        fixed = if (baseUrl == DEFAULT_API_ORIGIN) null else origin
     }
 
     @Synchronized
@@ -33,9 +35,16 @@ internal class ApiEndpoints(baseUrl: String) {
 
     @Synchronized
     fun resolve(): URL {
-        if (origins.size == 1) return origins.first()
+        fixed?.let { return it }
         selected?.let { if (System.nanoTime() < verifiedUntilNanos) return it }
-        for (origin in origins) {
+        probe()?.let { return it }
+        // When every known host fails, a newer signed document may name working ones.
+        if (refreshEndpoints()) probe()?.let { return it }
+        throw IOException("Levik API is unavailable")
+    }
+
+    private fun probe(): URL? {
+        for (origin in ServiceEndpoints.current().apiOrigins.map(::URL)) {
             val connection = URL(origin, "/api/health").openConnection() as HttpsURLConnection
             try {
                 // Probe without session credentials before sending a mutation.
@@ -53,11 +62,11 @@ internal class ApiEndpoints(baseUrl: String) {
                     return origin
                 }
             } catch (_: IOException) {
-                // Only the built-in HTTPS origins can receive signed requests.
+                // Only signed or built-in HTTPS origins can receive signed requests.
             } finally {
                 connection.disconnect()
             }
         }
-        throw IOException("Levik API is unavailable")
+        return null
     }
 }
