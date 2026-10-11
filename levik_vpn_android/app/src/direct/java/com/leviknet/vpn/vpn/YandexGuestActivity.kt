@@ -33,7 +33,11 @@ import java.io.ByteArrayInputStream
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 
-/** Private guest process and separate WebView storage; no JavaScript interface or cookie export. */
+/**
+ * Private guest process and separate WebView storage; no JavaScript interface or cookie export.
+ * Yandex requires a signed-in editor since 2026-10, so the login persists only in this process's
+ * cookie store. Only the temporary editor token leaves it.
+ */
 internal class YandexGuestActivity : Activity() {
     private var webView: WebView? = null
     private lateinit var status: TextView
@@ -70,7 +74,10 @@ internal class YandexGuestActivity : Activity() {
         val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         status = TextView(this).apply { setText(R.string.yandex_guest_loading); setPadding(24, 16, 24, 16) }
         layout.addView(status)
-        layout.addView(Button(this).apply { setText(R.string.cancel); setOnClickListener { finish() } })
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        actions.addView(Button(this).apply { setText(R.string.cancel); setOnClickListener { finish() } })
+        actions.addView(Button(this).apply { setText(R.string.yandex_guest_sign_out); setOnClickListener { signOut() } })
+        layout.addView(actions)
         val view = WebView(this)
         WebView.setWebContentsDebuggingEnabled(false)
         webView = view
@@ -139,13 +146,22 @@ internal class YandexGuestActivity : Activity() {
         CookieManager.getInstance().apply {
             setAcceptCookie(true)
             setAcceptThirdPartyCookies(view, false)
-            removeAllCookies {
-                if (!isFinishing) {
-                    WebStorage.getInstance().deleteAllData()
-                    view.loadUrl(documentUrl)
-                    handler.postDelayed(poll, 1000)
-                }
-            }
+        }
+        WebStorage.getInstance().deleteAllData()
+        view.loadUrl(documentUrl)
+        handler.postDelayed(poll, 1000)
+    }
+
+    /** Forgets the Yandex login kept in this guest process and reopens the document. */
+    private fun signOut() {
+        val view = webView ?: return
+        view.stopLoading()
+        WebStorage.getInstance().deleteAllData()
+        CookieManager.getInstance().removeAllCookies {
+            if (isFinishing || webView !== view) return@removeAllCookies
+            CookieManager.getInstance().flush()
+            view.clearHistory()
+            view.loadUrl(documentUrl)
         }
     }
 
@@ -153,6 +169,7 @@ internal class YandexGuestActivity : Activity() {
         "disk.yandex.ru" -> "disk"
         "docs.yandex.ru" -> "docs"
         "yandex.ru", "smartcaptcha.yandexcloud.net" -> "challenge"
+        in loginHosts -> "login"
         else -> "other"
     }
 
@@ -208,6 +225,7 @@ internal class YandexGuestActivity : Activity() {
             "docs.yandex.ru" -> isYandexGuestEditorPath(uri.path.orEmpty()) ||
                 isYandexFastGuestChallengePath(uri.path.orEmpty()) ||
                 uri.path in setOf("/showcaptcha", "/checkcaptcha")
+            in loginHosts -> true
             "yandex.ru" -> uri.path?.let {
                 it.startsWith("/showcaptcha") || it.startsWith("/checkcaptcha") || it.startsWith("/captcha")
             } == true
@@ -218,8 +236,7 @@ internal class YandexGuestActivity : Activity() {
     private fun allowedResource(uri: Uri): Boolean {
         if (uri.scheme != "https" || uri.userInfo != null || uri.port !in setOf(-1, 443)) return false
         val host = uri.host ?: return false
-        // Provider assets and CAPTCHA only; account login, local files and custom schemes stay blocked.
-        if (host == "passport.yandex.ru" || host.startsWith("passport.")) return false
+        // Provider assets, CAPTCHA and Yandex login only; local files and custom schemes stay blocked.
         return host == "yandex.ru" || host.endsWith(".yandex.ru") ||
             host == "yandex.net" || host.endsWith(".yandex.net") ||
             host == "yastatic.net" || host.endsWith(".yastatic.net") ||
@@ -237,16 +254,21 @@ internal class YandexGuestActivity : Activity() {
         webView = null
         if (ownsGuestProcess) {
             WebStorage.getInstance().deleteAllData()
-            CookieManager.getInstance().removeAllCookies {
-                val reset = !networkBound || managerResetNetwork()
-                if (reset) {
-                    networkBound = false
-                    ownsGuestProcess = false
-                    YandexGuestProcessCoordinator.release(this)
-                }
+            // Keep the login for the next refresh; it stays in this process's private store.
+            CookieManager.getInstance().flush()
+            val reset = !networkBound || managerResetNetwork()
+            if (reset) {
+                networkBound = false
+                ownsGuestProcess = false
+                YandexGuestProcessCoordinator.release(this)
             }
         }
         super.onDestroy()
+    }
+
+    private companion object {
+        /** Yandex ID pages a person needs to sign in; the editor still runs only on docs.yandex.ru. */
+        val loginHosts = setOf("passport.yandex.ru", "sso.passport.yandex.ru", "sso.yandex.ru")
     }
 
     private fun managerResetNetwork(): Boolean = runCatching {

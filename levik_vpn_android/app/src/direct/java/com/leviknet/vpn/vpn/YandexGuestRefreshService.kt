@@ -36,7 +36,7 @@ import java.net.URI
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 
-/** Bound, private guest process. One fresh anonymous request; no background activity or cookie export. */
+/** Bound, private guest process. One request reusing the visible window's login; no background activity or cookie export. */
 internal class YandexGuestRefreshService : Service() {
     private val main = Handler(Looper.getMainLooper())
     private val messenger = Messenger(Handler(Looper.getMainLooper()) { message -> handle(message); true })
@@ -151,14 +151,11 @@ internal class YandexGuestRefreshService : Service() {
             CookieManager.getInstance().apply {
                 setAcceptCookie(true)
                 setAcceptThirdPartyCookies(view, false)
-                removeAllCookies {
-                    if (!current(request)) return@removeAllCookies
-                    WebStorage.getInstance().deleteAllData()
-                    view.clearCache(true)
-                    view.loadUrl(document)
-                    poll(request)
-                }
             }
+            WebStorage.getInstance().deleteAllData()
+            view.clearCache(true)
+            view.loadUrl(document)
+            poll(request)
         } catch (_: Throwable) { diagnostic("guest startup failed"); finish(null) }
     }
 
@@ -203,21 +200,20 @@ internal class YandexGuestRefreshService : Service() {
         // Leave the WebView callback before destroying its native renderer.
         main.post {
             destroyWebView()
-            // Keep the slot occupied until the shared guest cookie store is cleared.
-            main.postDelayed({ complete(request, null, cookiesCleared = false) }, 2000)
-            try { CookieManager.getInstance().removeAllCookies { complete(request, auth) } }
-            catch (_: Throwable) { complete(request, null, cookiesCleared = false) }
             runCatching { WebStorage.getInstance().deleteAllData() }
+            // The Yandex login stays in this process's private cookie store for the next refresh.
+            runCatching { CookieManager.getInstance().flush() }
+            complete(request, auth)
         }
     }
 
-    private fun complete(request: GuestRequest, auth: YandexProviderAuth?, cookiesCleared: Boolean = true) {
+    private fun complete(request: GuestRequest, auth: YandexProviderAuth?) {
         if (active !== request) return
         main.removeCallbacksAndMessages(null)
         active = null
         runCatching { request.reply.binder.unlinkToDeath(request.death, 0) }
-        val reset = resetNetworkBinding(releaseOwner = cookiesCleared)
-        diagnostic("cleanup networkReset=$reset cookiesCleared=$cookiesCleared")
+        val reset = resetNetworkBinding()
+        diagnostic("cleanup networkReset=$reset")
         reply(request.reply, request.id, if (reset) auth else null)
     }
 
@@ -250,17 +246,15 @@ internal class YandexGuestRefreshService : Service() {
         diagnostic("renderer destroyed")
     }
 
-    private fun resetNetworkBinding(releaseOwner: Boolean = true): Boolean {
+    private fun resetNetworkBinding(): Boolean {
         val owner = coordinatorOwner ?: return true
         val reset = !bindingAttempted || runCatching {
             getSystemService(ConnectivityManager::class.java).bindProcessToNetwork(null)
         }.getOrDefault(false)
         if (reset) {
             bindingAttempted = false
-            if (releaseOwner) {
-                coordinatorOwner = null
-                YandexGuestProcessCoordinator.release(owner)
-            }
+            coordinatorOwner = null
+            YandexGuestProcessCoordinator.release(owner)
         }
         return reset
     }
@@ -272,12 +266,8 @@ internal class YandexGuestRefreshService : Service() {
         active = null
         destroyWebView()
         if (coordinatorOwner != null) {
-            // Do not erase a later activity's guest store after normal completion released our slot.
-            resetNetworkBinding(releaseOwner = false)
-            runCatching {
-                CookieManager.getInstance().removeAllCookies { resetNetworkBinding() }
-                WebStorage.getInstance().deleteAllData()
-            }
+            runCatching { WebStorage.getInstance().deleteAllData() }
+            resetNetworkBinding()
         }
         super.onDestroy()
     }
@@ -300,7 +290,7 @@ internal object YandexGuestProcessCoordinator {
     @Synchronized fun release(candidate: Any) { if (owner === candidate) owner = null }
 }
 
-/** No account/login or interactive challenge. Provider fast admission has the job's fixed deadline. */
+/** Never shows Yandex login or an interactive challenge: an expired login needs the visible window. */
 internal object YandexGuestRefreshPolicy {
     private val onlyOfficeHost = Regex("(?:[a-z0-9_-]{1,63}\\.)?onlyoffice\\.disk\\.yandex\\.net")
     private fun uri(value: String): URI? = runCatching {

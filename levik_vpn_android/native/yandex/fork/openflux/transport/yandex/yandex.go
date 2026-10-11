@@ -543,15 +543,21 @@ func (t *YandexDocsTransport) writerLoop() {
 			continue
 		}
 
-		payload := base64.StdEncoding.EncodeToString(pending)
-		msg := fmt.Sprintf(`42["message",{"type":"cursor","cursor":"18;%s"}]`, payload)
-		if err := session.safeWrite(websocket.TextMessage, []byte(msg)); err != nil {
+		if err := session.safeWrite(websocket.TextMessage, cursorFrame(pending)); err != nil {
 			utils.Debugf("[YDOCS] Write error: %v", err)
 			time.Sleep(15 * time.Millisecond)
 			continue // keep pending; the reconnect will bring up a new conn
 		}
 		pending = nil
 	}
+}
+
+// cursorFrame carries one packet in a transient cursor message. The numeric
+// prefix must be the real binary packet length: since 2026-10-10 Yandex Disk
+// does not relay a cursor whose declared length differs from its payload, and
+// the former constant "18" silently dropped every packet (upstream #165).
+func cursorFrame(packet []byte) []byte {
+	return []byte(fmt.Sprintf(`42["message",{"type":"cursor","cursor":"%d;%s"}]`, len(packet), base64.StdEncoding.EncodeToString(packet)))
 }
 
 func (t *YandexDocsTransport) keepAliveLoop() {

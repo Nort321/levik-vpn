@@ -117,13 +117,14 @@ class YandexProfileTest {
         }
     }
 
-    @Test fun `guest config refuses account identity ownership read only and other editors`() {
+    @Test fun `guest config accepts signed in editors and refuses read only and other editors`() {
         val config = """{"user":{},"officeActionData":{"is_owner":false,"balancer_url":"${auth.balancerUrl}","editor_config":{"token":"$token","document":{"permissions":{"edit":true}}}}}"""
         assertEquals(auth, parseYandexGuestConfig(config, now))
-        listOf(config.replace("\"user\":{}", "\"user\":{\"auth\":true}"),
-            config.replace("\"user\":{}", "\"user\":{\"uid\":123}"),
-            config.replace("\"is_owner\":false", "\"is_owner\":true"),
-            config.replace("\"edit\":true", "\"edit\":false"),
+        // Yandex now requires a signed-in editor; the owner's own session is valid too.
+        assertEquals(auth, parseYandexGuestConfig(config
+            .replace("\"user\":{}", "\"user\":{\"auth\":true,\"uid\":\"123\"}")
+            .replace("\"is_owner\":false", "\"is_owner\":true"), now))
+        listOf(config.replace("\"edit\":true", "\"edit\":false"),
             config.replace("officeActionData", "volgaConfig")).forEach {
             assertThrows(IllegalArgumentException::class.java) { parseYandexGuestConfig(it, now) }
         }
