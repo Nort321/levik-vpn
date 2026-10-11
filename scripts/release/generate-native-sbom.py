@@ -359,6 +359,7 @@ def make_inventory(
                 {"name": "levik.native.embeddedGoVersion", "value": go_version},
                 {"name": "levik.source.localPath", "value": yandex["sourceDirectory"]},
                 {"name": "levik.source.commit", "value": yandex["upstreamCommit"]},
+                {"name": "levik.source.telemostCommit", "value": yandex["telemostUpstreamCommit"]},
             ],
         })
         component_refs.add(ref)

@@ -29,12 +29,14 @@ build_abi() {
   local destination="${output_dir}/${abi}/liblevikyandex.so"
   test -x "${toolchain}/bin/${compiler}"
   mkdir -p "$(dirname "${destination}")"
+  # Pion uses pinned anet for Android interface discovery; its documented
+  # Go 1.23+ linkname compatibility flag is required for the Telemost carrier.
   (
     cd "${source_dir}"
     env GOOS=android GOARCH="${goarch}" GOARM="${goarm}" GOTOOLCHAIN=local \
       GOFLAGS=-mod=readonly CGO_ENABLED=1 CC="${toolchain}/bin/${compiler}" \
       "${go_bin}" build -buildvcs=false -buildmode=pie -trimpath \
-      -ldflags='-s -w -buildid= -linkmode=external -extldflags=-Wl,-z,max-page-size=16384' \
+      -ldflags='-checklinkname=0 -s -w -buildid= -linkmode=external -extldflags=-Wl,-z,max-page-size=16384' \
       -o "${destination}" ./cmd/levik-yandex-android
   )
   local elf_header program_headers go_metadata

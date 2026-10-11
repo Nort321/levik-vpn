@@ -28,6 +28,21 @@ class YandexProfileTest {
         now.toString(), now.plusSeconds(86400).toString(), yandexBootstrap = bootstrap, routing = TunnelRouting())
     private val parser = TunnelProfileParser(Json { ignoreUnknownKeys = true }, Clock.fixed(now, ZoneOffset.UTC))
 
+    @Test fun `Telemost profile4 is exclusive and device bound`() {
+        val conference = TelemostBootstrap(1, deviceId, "https://telemost.yandex.ru/j/12345678901234", bootstrap.leaseRef, bootstrap.sharedKey, now.epochSecond + 900)
+        val telemost = profile.copy(version = 4, yandexBootstrap = null, telemostBootstrap = conference)
+        assertEquals(telemost, parse(telemost))
+        for (bad in listOf(telemost.copy(version = 3), telemost.copy(yandexBootstrap = bootstrap),
+            telemost.copy(telemostBootstrap = conference.copy(deviceId = "b".repeat(64))),
+            telemost.copy(telemostBootstrap = conference.copy(conferenceUrl = conference.conferenceUrl + "?x=1")),
+            telemost.copy(telemostBootstrap = conference.copy(expiresAt = now.epochSecond)))) {
+            assertThrows(IllegalArgumentException::class.java) { parse(bad) }
+        }
+        val aad = listOf("levik-mobile-telemost-profile-v4", deviceId, "123e4567-e89b-42d3-a456-426614174001", subscription, conference.leaseRef, profile.profileId).joinToString("\n")
+        validateYandexProfileBinding(Base64.getUrlEncoder().withoutPadding().encodeToString(aad.toByteArray()), telemost, deviceId)
+        assertThrows(IllegalArgumentException::class.java) { validateYandexProfileBinding(Base64.getUrlEncoder().withoutPadding().encodeToString(aad.replace("telemost-profile-v4", "yandex-profile-v3").toByteArray()), telemost, deviceId) }
+    }
+
     @Test fun `cached guest access must leave enough time for proactive refresh`() {
         val server = TunnelServer("yandex:document", "yandex:document", "Через Яндекс", "NL", JsonObject(emptyMap()),
             engine = TunnelEngineKind.LEVIK_YANDEX, yandexConfig = YandexServerConfig(bootstrap))
@@ -64,7 +79,7 @@ class YandexProfileTest {
         )))
         assertEquals(YandexProfileRefreshMode.HOT_REFRESH, yandexProfileRefreshMode(current, next))
         assertEquals(YandexProfileRefreshMode.RECONNECT, yandexProfileRefreshMode(current,
-            next.copy(bootstrap = next.bootstrap.copy(sharedKey = "c".repeat(64)))))
+            next.copy(bootstrap = requireNotNull(next.bootstrap).copy(sharedKey = "c".repeat(64)))))
         for (foreign in listOf(bootstrap.copy(deviceId = "c".repeat(64)),
             bootstrap.copy(leaseRef = "B".repeat(43)), bootstrap.copy(version = 2),
             bootstrap.copy(documentUrl = "https://disk.yandex.ru/i/another-document"))) {

@@ -25,6 +25,24 @@ object YandexContract {
         return value
     }
 
+    fun validateConferenceUrl(value: String): String {
+        require(value.length <= 128 && value.matches(Regex("https://telemost\\.yandex\\.(ru|com)/j/[0-9]{10,64}"))) {
+            "Use a public Telemost conference link"
+        }
+        return value
+    }
+
+    fun validateTelemostBootstrap(bootstrap: TelemostBootstrap, deviceId: String, issuedAt: Instant, subscriptionExpiresAt: Instant?, now: Instant = Instant.now()) {
+        require(bootstrap.version == 1 && bootstrap.deviceId == deviceId && deviceId.matches(Regex("[0-9a-f]{64}")))
+        validateConferenceUrl(bootstrap.conferenceUrl)
+        require(bootstrap.leaseRef.matches(Regex("[A-Za-z0-9_-]{43}")) &&
+            Base64.getUrlEncoder().withoutPadding().encodeToString(Base64.getUrlDecoder().decode(bootstrap.leaseRef)) == bootstrap.leaseRef &&
+            bootstrap.sharedKey.matches(Regex("[0-9a-f]{64}")))
+        require(bootstrap.expiresAt > now.epochSecond && bootstrap.expiresAt > issuedAt.epochSecond &&
+            bootstrap.expiresAt <= issuedAt.epochSecond + 3600 &&
+            (subscriptionExpiresAt == null || bootstrap.expiresAt <= subscriptionExpiresAt.epochSecond))
+    }
+
     fun validateProviderAuth(auth: YandexProviderAuth, now: Instant = Instant.now()) {
         require(auth.balancerUrl.length in 32..256) { "Invalid Yandex editor endpoint" }
         val uri = URI(auth.balancerUrl)
@@ -118,8 +136,13 @@ internal fun yandexAuthRefreshDelayMillis(remainingMillis: Long, attempted: Bool
 
 /** Provider sessions may change; authenticated VPN ownership/routing may not. */
 internal fun yandexProfileRefreshMode(current: YandexServerConfig, next: YandexServerConfig): YandexProfileRefreshMode {
-    val first = current.bootstrap
-    val second = next.bootstrap
+    if (current.isTelemost || next.isTelemost) {
+        val first = current.telemost ?: return YandexProfileRefreshMode.REJECT
+        val second = next.telemost ?: return YandexProfileRefreshMode.REJECT
+        return if (first.deviceId == second.deviceId && first.conferenceUrl == second.conferenceUrl && first.leaseRef == second.leaseRef && current.routing == next.routing) YandexProfileRefreshMode.RECONNECT else YandexProfileRefreshMode.REJECT
+    }
+    val first = requireNotNull(current.bootstrap)
+    val second = requireNotNull(next.bootstrap)
     if (first.version != second.version || first.deviceId != second.deviceId ||
         first.documentUrl != second.documentUrl || first.leaseRef != second.leaseRef || current.routing != next.routing
     ) return YandexProfileRefreshMode.REJECT

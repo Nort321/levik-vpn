@@ -59,7 +59,7 @@ internal data class YandexEventWire(
     val data: JsonElement? = null,
 )
 
-internal class YandexControlCodec {
+internal class YandexControlCodec(private val telemost: Boolean = false) {
     private val json = Json {
         ignoreUnknownKeys = false
         isLenient = false
@@ -89,6 +89,13 @@ internal class YandexControlCodec {
                 proxyPassword = init.proxyPassword,
             ),
         )
+    }
+
+    fun encodeTelemostInit(bootstrap: TelemostBootstrap, socket: String, username: String, password: String): String {
+        if (!telemost || !SOCKET_NAME.matches(socket) || !PROXY_USER.matches(username) || !PROXY_PASSWORD.matches(password)) failure("yandex_init_invalid")
+        YandexContract.validateTelemostBootstrap(bootstrap, bootstrap.deviceId, Instant.now(), null)
+        return encode(TelemostInitWire(conferenceUrl = bootstrap.conferenceUrl, leaseRef = bootstrap.leaseRef, sharedKey = bootstrap.sharedKey,
+            leaseExpiresAt = bootstrap.expiresAt, protectFdSocket = socket, proxyUsername = username, proxyPassword = password))
     }
 
     fun encodeStop(): String = encode(YandexCommandWire(type = "STOP"))
@@ -123,7 +130,7 @@ internal class YandexControlCodec {
                 val status = element<YandexStatusWire>(event.data)
                 if (status.state !in setOf("connecting", "running") || status.bytesUp < 0 || status.bytesDown < 0 ||
                     status.protectedExternalSockets < 0 || status.resolvedProviderHosts < 0 ||
-                    status.carrierPacketsUp < 0 || status.carrierPacketsDown < 0 ||
+                    status.carrierPacketsUp < 0 || status.carrierPacketsDown < 0 || status.mediaPacketsUp < 0 || status.mediaSendErrors < 0 ||
                     status.proxy.let { it.connections < 0 || it.rejected < 0 || it.udpAssociations < 0 } ||
                     status.dataPath.let { it.dataSent < 0 || it.dataReceived < 0 || it.dataDropped < 0 ||
                         it.decodeErrors < 0 || it.cryptoRejected < 0 || it.batchSendErrors < 0 }
@@ -167,9 +174,15 @@ internal class YandexControlCodec {
                 ) failure("yandex_protocol_protect")
                 YandexNetworkRequest.Protect(request.requestId)
             }
+            "PROTECT_DATAGRAM" -> {
+                if (!telemost || request.host != null || request.network != "udp4" || request.address == null) failure("yandex_protocol_protect")
+                val parts = request.address.split(':')
+                if (parts.size != 2 || !literalAddress(parts[0]) || parts[1].toIntOrNull() !in 0..65535) failure("yandex_protocol_protect")
+                YandexNetworkRequest.Protect(request.requestId)
+            }
             "RESOLVE_HOST" -> {
                 if (request.network != null || request.address != null || request.host == null ||
-                    !PROVIDER_HOST.matches(request.host)
+                    !(PROVIDER_HOST.matches(request.host) || (telemost && TELEMOST_HOST.matches(request.host)))
                 ) failure("yandex_protocol_resolve")
                 YandexNetworkRequest.Resolve(request.requestId, request.host)
             }
@@ -274,6 +287,7 @@ internal class YandexControlCodec {
         val PROXY_USER = Regex("[A-Za-z0-9_-]{16,64}")
         val PROXY_PASSWORD = Regex("[A-Za-z0-9_-]{32,128}")
         val PROVIDER_HOST = Regex("(?:[a-z0-9_-]{1,63}\\.)?onlyoffice\\.disk\\.yandex\\.net")
+        val TELEMOST_HOST = Regex("(?:cloud-api\\.yandex\\.ru|telemost\\.yandex\\.(?:ru|com)|(?:[a-z0-9-]{1,63}\\.)+(?:telemost\\.yandex\\.(?:ru|net)|(?:strm|rtc)\\.yandex\\.net))")
         val READY_PHASES = setOf("control", "PROTECT_CHANNEL_LISTENING", "PROTECT_CHANNEL_READY", "RUNNING", "STOPPED")
         val ERROR_CODES = setOf("invalid_init", "lease_expired", "provider_auth_expired", "invalid_provider_auth", "network_channel_failed", "provider_authorization_failed", "session_configuration_failed", "strict_handshake_failed", "proxy_failed", "control_channel_failed", "bad_command", "transport_failed")
         val REFRESH_CODES = setOf("invalid_refresh", "refresh_busy", "refresh_not_running", "refresh_authorization_failed", "refresh_expired")
@@ -335,9 +349,15 @@ private fun failure(code: String): Nothing = throw YandexProtocolException(code)
 @Serializable private data class YandexRefreshWire(val magic: String = YANDEX_CONTROL_MAGIC, val version: Int = YANDEX_CONTROL_VERSION, val type: String = "REFRESH", val requestId: Long, val leaseExpiresAt: Long, val providerAuth: YandexProviderAuth)
 @Serializable private data class YandexProxyWire(val address: String, val port: Int)
 @Serializable private data class YandexRunningWire(val protocolVersion: Int)
-@Serializable internal data class YandexStatusWire(val state: String, val strictSession: Boolean, val bytesUp: Long, val bytesDown: Long, val protectedExternalSockets: Long, val resolvedProviderHosts: Long, val carrierPacketsUp: Long = 0, val carrierPacketsDown: Long = 0, val dataPath: YandexDataPathWire = YandexDataPathWire(), val proxy: YandexProxyDiagnosticsWire = YandexProxyDiagnosticsWire())
+@Serializable internal data class YandexStatusWire(val state: String, val strictSession: Boolean, val bytesUp: Long, val bytesDown: Long, val protectedExternalSockets: Long, val resolvedProviderHosts: Long, val carrierPacketsUp: Long = 0, val carrierPacketsDown: Long = 0, val mediaPacketsUp: Long = 0, val mediaSendErrors: Long = 0, val dataPath: YandexDataPathWire = YandexDataPathWire(), val proxy: YandexProxyDiagnosticsWire = YandexProxyDiagnosticsWire())
 @Serializable internal data class YandexProxyDiagnosticsWire(val connections: Long = 0, val rejected: Long = 0, val udpAssociations: Long = 0)
 @Serializable internal data class YandexDataPathWire(val dataSent: Long = 0, val dataReceived: Long = 0, val dataDropped: Long = 0, val decodeErrors: Long = 0, val cryptoRejected: Long = 0, val batchSendErrors: Long = 0)
 @Serializable private data class YandexNetworkWire(val magic: String, val version: Int, val type: String, val requestId: Long, val network: String? = null, val address: String? = null, val host: String? = null)
 @Serializable private data class YandexProtectAckWire(val magic: String = YANDEX_CONTROL_MAGIC, val version: Int = YANDEX_CONTROL_VERSION, val type: String = "PROTECT_SOCKET_ACK", val requestId: Long, val ok: Boolean, val code: String? = null)
 @Serializable private data class YandexResolveAckWire(val magic: String = YANDEX_CONTROL_MAGIC, val version: Int = YANDEX_CONTROL_VERSION, val type: String = "RESOLVE_HOST_ACK", val requestId: Long, val ok: Boolean, val addresses: List<String>, val code: String? = null)
+
+@Serializable private data class TelemostInitWire(
+    val magic: String = YANDEX_CONTROL_MAGIC, val version: Int = YANDEX_CONTROL_VERSION, val type: String = "init",
+    val conferenceUrl: String, val leaseRef: String, val sharedKey: String, val leaseExpiresAt: Long,
+    val protectFdSocket: String, val proxyUsername: String, val proxyPassword: String,
+)

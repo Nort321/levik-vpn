@@ -135,6 +135,67 @@ class AppRepository(
         }
     }
 
+    suspend fun savedTelemostUrl(): String? = withContext(Dispatchers.IO) {
+        val bytes = secureStore.get(SecureFileStore.YANDEX_TELEMOST) ?: return@withContext null
+        try { runCatching { YandexContract.validateConferenceUrl(bytes.decodeToString()) }.getOrNull() } finally { bytes.fill(0) }
+    }
+
+    suspend fun saveTelemostUrl(url: String) = withContext(Dispatchers.IO) {
+        val bytes = YandexContract.validateConferenceUrl(url).encodeToByteArray()
+        try { secureStore.put(SecureFileStore.YANDEX_TELEMOST, bytes) } finally { bytes.fill(0) }
+    }
+
+    suspend fun prepareTelemostTunnel(
+        subscriptionId: String,
+        conferenceUrl: String,
+        selectAfterPreparation: Boolean = true,
+    ): PreparedTunnelProfile = profileMutex.withLock {
+        require(supportsYandex()) { "Yandex is unavailable in this build" }
+        val subscription = _account.value?.subscriptions?.firstOrNull { it.uuid == subscriptionId }
+        require(subscription?.capabilities?.yandexRelay == true && subscription.isActiveAt(Instant.now())) {
+            "Yandex access is unavailable for this subscription"
+        }
+        YandexContract.validateConferenceUrl(conferenceUrl)
+        val token = requireToken()
+        val expectedDeviceId = withContext(Dispatchers.IO) { deviceIdentity.deviceId() }
+        val envelope = try {
+            apiClient.telemostTunnelProfile(token, subscriptionId, conferenceUrl)
+        } catch (error: ApiException.Unauthorized) {
+            clearAuthentication(expectedToken = token)
+            throw error
+        }
+        val plaintext = withContext(Dispatchers.IO) { profileDecryptor.decrypt(envelope) }
+        val yandex = try {
+            withContext(Dispatchers.Default) {
+                val profile = profileParser.parse(plaintext, subscriptionId, expectedDeviceId)
+                require(profile.version == 4 && profile.engine == TunnelEngineKind.LEVIK_YANDEX)
+                val bootstrap = requireNotNull(profile.telemostBootstrap)
+                require(bootstrap.conferenceUrl == conferenceUrl) { "Telemost link does not match the request" }
+                validateYandexProfileBinding(envelope.aad, profile, expectedDeviceId)
+                tunnelProfilePreparer.prepare(profile)
+            }
+        } finally {
+            plaintext.fill(0)
+        }
+        sessionCacheMutex.withLock {
+            requireCurrentSession(token)
+            val currentSubscription = _account.value?.subscriptions?.firstOrNull { it.uuid == subscriptionId }
+            require(currentSubscription?.capabilities?.yandexRelay == true && currentSubscription.isActiveAt(Instant.now())) {
+                "Yandex access is unavailable for this subscription"
+            }
+            val cached = _tunnelProfile.value ?: withContext(Dispatchers.IO) { cachedTunnelBlocking() }
+            val prepared = mergeYandexProfile(cached?.takeIf { it.subscriptionId == subscriptionId }, yandex)
+            persistPreparedTunnel(prepared)
+            withContext(Dispatchers.IO) {
+                val encoded = conferenceUrl.encodeToByteArray()
+                try { secureStore.put(SecureFileStore.YANDEX_TELEMOST, encoded) } finally { encoded.fill(0) }
+            }
+            if (selectAfterPreparation) selectServer("yandex:telemost")
+            _tunnelProfile.value = prepared
+            prepared
+        }
+    }
+
     suspend fun initialize() {
         retryPendingRevocation()
         val token = readToken()
@@ -699,10 +760,7 @@ class AppRepository(
 }
 
 internal fun TunnelServer.hasUsableYandexAuth(now: Instant = Instant.now()): Boolean =
-    yandexConfig?.bootstrap?.let {
-        it.expiresAt > now.epochSecond + YANDEX_AUTH_REFRESH_LEAD_SECONDS &&
-            it.providerAuth.validUntil > now.epochSecond + YANDEX_AUTH_REFRESH_LEAD_SECONDS
-    } == true
+    yandexConfig?.let { it.expiresAt > now.epochSecond + YANDEX_AUTH_REFRESH_LEAD_SECONDS } == true
 
 internal fun mergeYandexProfile(base: PreparedTunnelProfile?, yandex: PreparedTunnelProfile): PreparedTunnelProfile {
     require(yandex.servers.size == 1 && yandex.servers.single().engine == TunnelEngineKind.LEVIK_YANDEX)

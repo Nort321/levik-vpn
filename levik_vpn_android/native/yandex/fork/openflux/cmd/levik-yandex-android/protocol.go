@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/p1neappleXpress/OpenFlux/transport"
+	"github.com/p1neappleXpress/OpenFlux/transport/egresspolicy"
 	"github.com/p1neappleXpress/OpenFlux/transport/yandex"
 )
 
@@ -37,7 +38,8 @@ type initWire struct {
 	Magic           string        `json:"magic"`
 	Version         int           `json:"version"`
 	Type            string        `json:"type"`
-	DocumentURL     string        `json:"documentUrl"`
+	DocumentURL     string        `json:"documentUrl,omitempty"`
+	ConferenceURL   string        `json:"conferenceUrl,omitempty"`
 	LeaseRef        string        `json:"leaseRef"`
 	SharedKey       string        `json:"sharedKey"`
 	LeaseExpiresAt  int64         `json:"leaseExpiresAt"`
@@ -200,7 +202,7 @@ func validEnvelope(magic string, version int) bool {
 	return magic == protocolMagic && version == protocolVersion
 }
 
-func validateInit(init initWire, now time.Time) (*yandex.YandexDocsTransport, time.Time, string) {
+func validateInit(init initWire, now time.Time) (yandex.ManagedCarrier, time.Time, string) {
 	leaseBytes, leaseErr := base64.RawURLEncoding.DecodeString(init.LeaseRef)
 	if !validEnvelope(init.Magic, init.Version) || init.Type != "init" || !socketPattern.MatchString(init.ProtectFDSocket) ||
 		!leaseRefPattern.MatchString(init.LeaseRef) || !sharedKeyPattern.MatchString(init.SharedKey) ||
@@ -210,6 +212,16 @@ func validateInit(init initWire, now time.Time) (*yandex.YandexDocsTransport, ti
 	}
 	if init.LeaseExpiresAt <= now.Unix() || init.LeaseExpiresAt > now.Add(24*time.Hour).Unix() {
 		return nil, time.Time{}, "lease_expired"
+	}
+	if init.ConferenceURL != "" {
+		if init.DocumentURL != "" || init.ProviderAuth != (bootstrapWire{}) {
+			return nil, time.Time{}, "invalid_init"
+		}
+		t, e := yandex.NewRestrictedTelemost(init.ConferenceURL, false, egresspolicy.NetworkHooks{})
+		if e != nil {
+			return nil, time.Time{}, "invalid_init"
+		}
+		return t, now.Add(time.Unix(init.LeaseExpiresAt, 0).Sub(now)), ""
 	}
 	auth := init.ProviderAuth
 	if auth.ValidUntil <= now.Unix() {

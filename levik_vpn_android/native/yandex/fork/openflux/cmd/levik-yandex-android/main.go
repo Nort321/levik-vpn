@@ -87,6 +87,8 @@ func (d tunnelDialer) DialUDP(address string) (net.Conn, error) {
 }
 
 type helperStatus struct {
+	MediaPacketsUp           uint64                       `json:"mediaPacketsUp"`
+	MediaSendErrors          uint64                       `json:"mediaSendErrors"`
 	State                    string                       `json:"state"`
 	StrictSession            bool                         `json:"strictSession"`
 	BytesUp                  int64                        `json:"bytesUp"`
@@ -122,7 +124,7 @@ func run(parent context.Context, socketName string) string {
 		return code
 	}
 	expiryCode := "provider_auth_expired"
-	if init.LeaseExpiresAt <= init.ProviderAuth.ValidUntil {
+	if init.ConferenceURL != "" || init.LeaseExpiresAt <= init.ProviderAuth.ValidUntil {
 		expiryCode = "lease_expired"
 	}
 	expiry := newCredentialLease(deadline, expiryCode, cancel)
@@ -141,6 +143,9 @@ func run(parent context.Context, socketName string) string {
 		out := status
 		if diagnostics != nil {
 			out.DataPath = diagnostics()
+		}
+		if media, ok := raw.(interface{ MediaStats() (uint64, uint64) }); ok {
+			out.MediaPacketsUp, out.MediaSendErrors = media.MediaStats()
 		}
 		carrier := raw.Stats()
 		out.CarrierPacketsUp, out.CarrierPacketsDown = uint64(carrier.PacketsSent), uint64(carrier.PacketsRecv)
@@ -173,6 +178,7 @@ func run(parent context.Context, socketName string) string {
 		return finish(control, ctx, "network_channel_failed")
 	}
 	netChannel := newNetworkChannel(networkConn, func() { cancel(errNetworkChannel) })
+	netChannel.allowDatagrams = init.ConferenceURL != ""
 	defer netChannel.close()
 	statusMu.Lock()
 	network = netChannel
@@ -191,7 +197,16 @@ func run(parent context.Context, socketName string) string {
 		cancel(errors.New(code))
 	})
 	session, err := transport.NewSession(transport.PeerParameters{Capabilities: transport.CapabilityIPv4 | transport.CapabilityTCP | transport.CapabilityUDP, MaxPacketSize: 1500}, false)
-	if err != nil || session.RequirePeerLiveness() != nil || session.AddTransport("yandex", raw, init.SharedKey, "levik-yandex-v1:"+init.LeaseRef, 1) != nil {
+	if err != nil {
+		return finish(control, ctx, "session_configuration_failed")
+	}
+	name, contextID := "yandex", "levik-yandex-v1:"+init.LeaseRef
+	if init.ConferenceURL != "" {
+		_ = session.SetHandshakeTimeout(60 * time.Second)
+		name = "telemost"
+		contextID = "levik-telemost-v1:" + init.LeaseRef
+	}
+	if err != nil || session.RequirePeerLiveness() != nil || session.AddTransport(name, raw, init.SharedKey, contextID, 1) != nil {
 		return finish(control, ctx, "session_configuration_failed")
 	}
 	defer session.Stop()
@@ -211,14 +226,26 @@ func run(parent context.Context, socketName string) string {
 	}
 	started := make(chan error, 1)
 	go func() { started <- session.Start() }()
-	select {
-	case err := <-started:
-		if err != nil {
-			return finish(control, ctx, "strict_handshake_failed")
+	prepareStats := time.NewTicker(5 * time.Second)
+	defer prepareStats.Stop()
+waitForSession:
+	for {
+		select {
+		case err := <-started:
+			if err != nil {
+				_ = control.emit("status", "", "", snapshot())
+				return finish(control, ctx, "strict_handshake_failed")
+			}
+			break waitForSession
+		case <-prepareStats.C:
+			if control.emit("status", "", "", snapshot()) != nil {
+				return finish(control, ctx, "control_channel_failed")
+			}
+		case <-ctx.Done():
+			return finish(control, ctx, "")
 		}
-	case <-ctx.Done():
-		return finish(control, ctx, "")
 	}
+	prepareStats.Stop()
 	if !session.IsConnected() {
 		return finish(control, ctx, "strict_handshake_failed")
 	}

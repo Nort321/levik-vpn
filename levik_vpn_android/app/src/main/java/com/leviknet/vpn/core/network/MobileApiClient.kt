@@ -173,6 +173,17 @@ class MobileApiClient(
         return response.profile
     }
 
+    suspend fun telemostTunnelProfile(accessToken: String, subscriptionId: String, conferenceUrl: String): TunnelProfileEnvelope {
+        com.leviknet.vpn.vpn.YandexContract.validateConferenceUrl(conferenceUrl)
+        val response = post<TunnelProfileRequest, TunnelProfileResponse>(
+            path = TUNNEL_PROFILE_PATH,
+            request = TunnelProfileRequest(subscriptionId, "levik-yandex", transport = "telemost", conferenceUrl = conferenceUrl),
+            accessToken = accessToken, requiresIntegrity = true,
+        )
+        checkSuccess(response.ok)
+        return response.profile
+    }
+
     suspend fun logout(accessToken: String) {
         val response = request<LogoutResponse>(
             method = METHOD_POST,

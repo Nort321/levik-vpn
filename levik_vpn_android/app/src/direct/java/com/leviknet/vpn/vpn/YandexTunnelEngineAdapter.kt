@@ -245,7 +245,7 @@ private class AndroidYandexNativeSession(
     private val config: YandexServerConfig,
     private val environment: TunnelEngineEnvironment,
 ) : YandexNativeSession {
-    private val codec = YandexControlCodec()
+    private val codec = YandexControlCodec(telemost = config.isTelemost)
     private val machine = YandexControlStateMachine(codec)
     private val stopping = AtomicBoolean(false)
     private val closed = AtomicBoolean(false)
@@ -262,7 +262,7 @@ private class AndroidYandexNativeSession(
     private val password = credential(32)
     @Volatile private var deadline = runCatching {
         MonotonicCredentialDeadline.create(
-            Instant.ofEpochSecond(minOf(config.bootstrap.expiresAt, config.bootstrap.providerAuth.validUntil)),
+            Instant.ofEpochSecond(config.expiresAt),
             Instant.now(),
             SystemClock.elapsedRealtime(),
         )
@@ -291,7 +291,7 @@ private class AndroidYandexNativeSession(
                 dnsExecutor = Executors.newSingleThreadExecutor { task -> Thread(task, "levik-yandex-dns").apply { isDaemon = true } }
                 process?.let { native -> pool.submit { discard(native.inputStream) }; pool.submit { discard(native.errorStream) } }
             }
-            val prepareDeadline = minOf(deadline.deadlineElapsedMs, after(60_000))
+            val prepareDeadline = minOf(deadline.deadlineElapsedMs, after(if (config.isTelemost) 90_000 else 60_000))
             val socket = connect(controlName, minOf(prepareDeadline, after(10_000)))
             synchronized(lifecycleLock) {
                 if (stopping.get()) { socket.close(); yandexEngineFailure("yandex_session_stopping") }
@@ -299,7 +299,7 @@ private class AndroidYandexNativeSession(
                 controlReader = YandexLocalSocketFrameReader(socket, YANDEX_MAX_CONTROL_BYTES)
             }
             synchronized(writeLock) {
-                writeFrame(socket, codec.encodeInit(YandexNativeInit(config.bootstrap, networkName, username, password)), YANDEX_MAX_CONTROL_BYTES)
+                writeFrame(socket, config.telemost?.let { codec.encodeTelemostInit(it, networkName, username, password) } ?: codec.encodeInit(YandexNativeInit(requireNotNull(config.bootstrap), networkName, username, password)), YANDEX_MAX_CONTROL_BYTES)
             }
             var proxy: LocalProxyEndpoint? = null
             while (proxy == null) {
@@ -368,15 +368,15 @@ private class AndroidYandexNativeSession(
             !sameYandexSessionBinding(this@AndroidYandexNativeSession.config, config)
         ) return@withContext false
         val next = runCatching {
-            val bootstrap = config.bootstrap
+            val bootstrap = config.bootstrap ?: return@withContext false
             YandexContract.validateProviderAuth(bootstrap.providerAuth)
             MonotonicCredentialDeadline.create(Instant.ofEpochSecond(minOf(bootstrap.expiresAt, bootstrap.providerAuth.validUntil)), Instant.now(), SystemClock.elapsedRealtime())
         }.getOrNull() ?: return@withContext false
-        val pending = PendingYandexRefresh(refreshSequence.incrementAndGet(), config.bootstrap, next)
+        val pending = PendingYandexRefresh(refreshSequence.incrementAndGet(), requireNotNull(config.bootstrap), next)
         if (!pendingRefresh.compareAndSet(null, pending)) return@withContext false
         var submitted = false
         try {
-            val frame = codec.encodeRefresh(pending.id, config.bootstrap)
+            val frame = codec.encodeRefresh(pending.id, requireNotNull(config.bootstrap))
             synchronized(writeLock) {
                 if (stopping.get()) return@synchronized
                 checkDeadline()
@@ -421,11 +421,12 @@ private class AndroidYandexNativeSession(
         if (!stopping.compareAndSet(false, true)) return
         pendingRefresh.getAndSet(null)?.result?.complete(false)
         synchronized(lifecycleLock) {
-            runCatching { control?.let { synchronized(writeLock) { writeFrame(it, codec.encodeStop(), YANDEX_MAX_CONTROL_BYTES) } } }
+            // Termination must not wait for an IPC writer or a blocked LocalSocket reader.
+            // SIGTERM cancels the helper's context and tears down its provider sockets.
             process?.let { native ->
+                native.destroy()
                 if (native.isAlive && !waitFor(native, 1500)) {
-                    native.destroy()
-                    if (native.isAlive && !waitFor(native, 500)) { native.destroyForcibly(); waitFor(native, 500) }
+                    native.destroyForcibly(); waitFor(native, 500)
                 }
             }
             if (!closed.compareAndSet(false, true)) return
@@ -506,7 +507,7 @@ private class AndroidYandexNativeSession(
             AppLogger.d("YandexTunnel", "Carrier session=${status.strictSession} " +
                 "proxyBytes=${status.bytesUp}/${status.bytesDown} " +
                 "proxy=${status.proxy.connections}/${status.proxy.udpAssociations}/${status.proxy.rejected} " +
-                "carrierPackets=${status.carrierPacketsUp}/${status.carrierPacketsDown} " +
+                "carrierPackets=${status.carrierPacketsUp}/${status.carrierPacketsDown} media=${status.mediaPacketsUp}/${status.mediaSendErrors} " +
                 "protected=${status.protectedExternalSockets} resolved=${status.resolvedProviderHosts} " +
                 "ip=${status.dataPath.dataSent}/${status.dataPath.dataReceived} " +
                 "drops=${status.dataPath.dataDropped} decode=${status.dataPath.decodeErrors} " +
@@ -543,12 +544,14 @@ private class AndroidYandexNativeSession(
     private fun failBackground(code: String) {
         if (stopping.get()) return
         val first = backgroundFailure.compareAndSet(null, TunnelEngineFailureException(code))
+        if (BuildConfig.DEBUG && first) AppLogger.d("YandexTunnel", "Native background failure: $code")
         pendingRefresh.getAndSet(null)?.result?.complete(false)
+        // Wake peer-dependent readers before LocalSocket.close takes their monitor.
+        runCatching { process?.destroyForcibly() }
         runCatching { network?.close() }
         runCatching { control?.close() }
         networkReader?.closePendingDescriptors()
         controlReader?.closePendingDescriptors()
-        runCatching { process?.destroy() }
         if (first && machine.running) environment.terminalFailureHandler(code)
     }
     private fun checkFailure() { backgroundFailure.get()?.let { throw it } }

@@ -89,6 +89,9 @@ func encodeBatch(pkts [][]byte) []byte {
 
 // decodeBatch reverses encodeBatch, returning the original packets.
 // Only wire-v2 frames are accepted; anything else is rejected.
+// EncodeBatchFrame exposes the existing codec to the Telemost media carrier.
+func EncodeBatchFrame(pkts [][]byte) []byte { return encodeBatch(pkts) }
+
 func decodeBatch(data []byte) ([][]byte, error) {
 	if len(data) > maxFrameBytes+2 {
 		return nil, fmt.Errorf("batch frame exceeds size limit")

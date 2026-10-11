@@ -323,6 +323,18 @@ func (s *Session) RequirePeerLiveness() error {
 	return nil
 }
 
+// SetHandshakeTimeout gives slow-starting managed carriers a bounded admission window.
+// It must be set before Start; it never enables classic fallback.
+func (s *Session) SetHandshakeTimeout(timeout time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.started || s.stopped || timeout < time.Second || timeout > 90*time.Second {
+		return errors.New("invalid handshake timeout")
+	}
+	s.handshakeTimeout = timeout
+	return nil
+}
+
 func (s *Session) Start() error {
 	s.mu.Lock()
 	if s.stopped || s.started {

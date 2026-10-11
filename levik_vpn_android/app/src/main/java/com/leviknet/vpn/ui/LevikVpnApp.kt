@@ -480,6 +480,8 @@ fun LevikVpnApp(viewModel: AppViewModel) {
     if (state.showYandexSetup) {
         YandexSetupDialog(
             initialUrl = state.yandexDocumentUrl,
+            telemost = state.yandexSetupTelemost,
+            onSaveTelemost = viewModel::saveTelemostLink,
             onDismiss = viewModel::dismissYandexSetup,
             onOpenGuest = { documentUrl ->
                 val intent = createYandexGuestIntent(context, documentUrl)
@@ -1270,7 +1272,7 @@ private fun MainContent(
     onOpenPauseVpn: () -> Unit,
     onResumeVpn: () -> Unit,
     onServerSelected: (String) -> Unit,
-    onYandexSetup: () -> Unit,
+    onYandexSetup: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onSupport: () -> Unit,
     onFreeProxy: () -> Unit,
@@ -2719,7 +2721,7 @@ private fun ServersScreen(
     connectionState: VpnConnectionState,
     loading: Boolean,
     onServerSelected: (String) -> Unit,
-    onYandexSetup: () -> Unit,
+    onYandexSetup: (Boolean) -> Unit,
     yandexAvailable: Boolean,
     automaticServer: Boolean,
     onAutomaticServer: () -> Unit,
@@ -2749,7 +2751,7 @@ private fun ServersScreen(
     val onServerSelection: (String) -> Unit = { id ->
         val server = servers.firstOrNull { it.id == id }
         if (server?.engine == TunnelEngineKind.LEVIK_YANDEX && !server.hasUsableYandexAuth()) {
-            onYandexSetup()
+            onServerSelected(id)
         } else onServerSelected(id)
     }
     Column(modifier.fillMaxSize()) {
@@ -3141,7 +3143,7 @@ private fun ServerGroupCard(
     isDark: Boolean,
     onServerSelected: (String) -> Unit,
     onToggleFavorite: (String) -> Unit,
-    onYandexSetup: (() -> Unit)?,
+    onYandexSetup: ((Boolean) -> Unit)?,
 ) {
     val server = group.active(selectedServerId)
     val favoriteIds = group.variants.map(TunnelServer::id).filter(favoriteServerIds::contains)
@@ -3172,7 +3174,7 @@ private fun ServerItemCard(
     isDark: Boolean,
     onServerSelected: (String) -> Unit,
     onToggleFavorite: (String) -> Unit,
-    onYandexSetup: (() -> Unit)? = null,
+    onYandexSetup: ((Boolean) -> Unit)? = null,
     protocolVariants: List<TunnelServer> = emptyList(),
 ) {
     var showGuide by remember(server.id) { mutableStateOf(false) }
@@ -3304,8 +3306,23 @@ private fun ServerItemCard(
                 }
             }
             if (server.engine == TunnelEngineKind.LEVIK_YANDEX && onYandexSetup != null) {
-                TextButton(onClick = onYandexSetup) {
-                    Text(stringResource(R.string.yandex_manage_document))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(false to R.string.yandex_documents, true to R.string.yandex_telemost).forEach { (telemost, label) ->
+                        val active = (server.id == "yandex:telemost") == telemost
+                        Surface(
+                            modifier = Modifier.selectable(selected = active, role = Role.RadioButton,
+                                onClick = { onServerSelected(if (telemost) "yandex:telemost" else "yandex:document") }),
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (active) LevikBlue else MaterialTheme.colorScheme.surface,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, if (active) LevikBlue else MaterialTheme.colorScheme.outline),
+                        ) {
+                            Text(stringResource(label), Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                fontSize = 13.sp, color = if (active) Color.White else MaterialTheme.colorScheme.onSurface)
+                        }
+                    }
+                }
+                TextButton(onClick = { onYandexSetup(server.id == "yandex:telemost") }) {
+                    Text(stringResource(R.string.yandex_manage_link))
                 }
             }
             Row(

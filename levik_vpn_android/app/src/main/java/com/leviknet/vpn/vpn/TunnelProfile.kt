@@ -17,6 +17,7 @@ data class TunnelProfile(
     val source: TunnelProfileSource? = null,
     val bootstrap: RelayBootstrap? = null,
     val yandexBootstrap: YandexBootstrap? = null,
+    val telemostBootstrap: TelemostBootstrap? = null,
     val routing: TunnelRouting? = null,
 )
 
@@ -147,6 +148,16 @@ data class YandexBootstrap(
     val providerAuth: YandexProviderAuth,
 )
 
+@Serializable
+data class TelemostBootstrap(
+    val version: Int,
+    val deviceId: String,
+    val conferenceUrl: String,
+    val leaseRef: String,
+    val sharedKey: String,
+    val expiresAt: Long,
+)
+
 /** TUIC endpoint issued by the Levik profile; the CA is pinned, system roots are never used. */
 @Serializable
 data class TuicServerConfig(
@@ -163,9 +174,13 @@ data class TuicServerConfig(
 
 @Serializable
 data class YandexServerConfig(
-    val bootstrap: YandexBootstrap,
+    val bootstrap: YandexBootstrap? = null,
     val routing: TunnelRouting? = null,
-)
+    val telemost: TelemostBootstrap? = null,
+) {
+    val expiresAt: Long get() = telemost?.expiresAt ?: requireNotNull(bootstrap).let { minOf(it.expiresAt, it.providerAuth.validUntil) }
+    val isTelemost: Boolean get() = telemost != null
+}
 
 @Serializable
 data class PreparedTunnelProfile(

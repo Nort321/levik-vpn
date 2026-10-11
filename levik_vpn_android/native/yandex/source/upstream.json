@@ -17,5 +17,16 @@
     "github.com/p1neappleXpress/OpenFlux/tunnel/l3",
     "github.com/p1neappleXpress/OpenFlux/tunnel",
     "github.com/p1neappleXpress/OpenFlux/cmd/levik-yandex-android"
-  ]
+  ],
+  "telemostTransport": {
+    "version": "v0.5.1",
+    "commit": "1adc1fe1f4ac8180952779d4d580ee82a34abe98",
+    "scope": [
+      "transport/striped*.go",
+      "transport/yandex/telemost*.go",
+      "transport/yandex/canvas*.go",
+      "transport/yandex/fragment*.go"
+    ],
+    "localAdaptations": "Managed authentication, restricted networking, lifecycle and carrier padding"
+  }
 }

@@ -103,11 +103,12 @@
   },
   "yandexArtifact": {
     "name": "liblevikyandex.so",
-    "version": "levik-yandex-android-v1",
+    "version": "levik-yandex-android-v2-telemost-v0.5.1",
     "embeddedGoVersion": "go1.26.8",
     "license": "GPL-3.0-or-later",
     "sourceDirectory": "levik_vpn_android/native/yandex/fork/openflux",
-    "upstreamCommit": "74cac6d47bf4c27947348ee957538a2c0728a485"
+    "upstreamCommit": "74cac6d47bf4c27947348ee957538a2c0728a485",
+    "telemostUpstreamCommit": "1adc1fe1f4ac8180952779d4d580ee82a34abe98"
   },
   "tuicArtifact": {
     "name": "libleviktuic.so",

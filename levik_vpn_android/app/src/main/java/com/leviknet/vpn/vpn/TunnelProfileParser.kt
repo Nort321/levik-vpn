@@ -28,11 +28,12 @@ class TunnelProfileParser(
         val encodedProfile = plaintext.decodeToString()
         val profile = try {
             val compatible = json.decodeFromString<TunnelProfile>(encodedProfile)
-            if (compatible.version == RELAY_VERSION || compatible.version == YANDEX_VERSION) {
+            if (compatible.version == RELAY_VERSION || compatible.version == YANDEX_VERSION || compatible.version == TELEMOST_VERSION) {
                 strictRelayJson.decodeFromString<TunnelProfile>(encodedProfile).also {
                     val envelope = strictRelayJson.parseToJsonElement(encodedProfile).jsonObject
                     if (compatible.version == RELAY_VERSION) validateRelayEnvelopeShape(envelope)
-                    else validateYandexEnvelopeShape(envelope)
+                    else if (compatible.version == YANDEX_VERSION) validateYandexEnvelopeShape(envelope)
+                    else require(envelope.keys == REQUIRED_YANDEX_ENVELOPE_FIELDS - "yandexBootstrap" + "telemostBootstrap")
                 }
             } else {
                 compatible
@@ -79,6 +80,7 @@ class TunnelProfileParser(
         subscriptionExpiresAt: Instant?,
         now: Instant,
     ) {
+        require(profile.version == TELEMOST_VERSION || profile.telemostBootstrap == null)
         when (profile.version) {
             LEGACY_VERSION -> {
                 require(profile.engine == TunnelEngineKind.XRAY) {
@@ -107,6 +109,10 @@ class TunnelProfileParser(
                     subscriptionExpiresAt = subscriptionExpiresAt,
                     now = now,
                 )
+            }
+            TELEMOST_VERSION -> {
+                require(profile.engine == TunnelEngineKind.LEVIK_YANDEX && profile.source == null && profile.bootstrap == null && profile.yandexBootstrap == null)
+                YandexContract.validateTelemostBootstrap(requireNotNull(profile.telemostBootstrap), requireNotNull(expectedDeviceId), issuedAt, subscriptionExpiresAt, now)
             }
             YANDEX_VERSION -> {
                 require(profile.engine == TunnelEngineKind.LEVIK_YANDEX &&
@@ -301,7 +307,8 @@ class TunnelProfileParser(
         private const val LEGACY_VERSION = 1
         private const val RELAY_VERSION = 2
         private const val YANDEX_VERSION = 3
-        private val SUPPORTED_VERSIONS = setOf(LEGACY_VERSION, RELAY_VERSION, YANDEX_VERSION)
+        private const val TELEMOST_VERSION = 4
+        private val SUPPORTED_VERSIONS = setOf(LEGACY_VERSION, RELAY_VERSION, YANDEX_VERSION, TELEMOST_VERSION)
         private val REQUIRED_YANDEX_ENVELOPE_FIELDS = setOf(
             "version", "engine", "profileId", "subscriptionId", "issuedAt",
             "subscriptionExpiresAt", "yandexBootstrap", "routing",

@@ -970,11 +970,68 @@ class AppViewModel(
         }
     }
 
-    fun openYandexSetup() {
+    fun openYandexSetup(telemost: Boolean = false) {
         if (!repository.supportsYandex() || mutableState.value.refreshing) return
         viewModelScope.launch {
-            val documentUrl = repository.savedYandexDocumentUrl().orEmpty()
-            mutableState.update { it.copy(showYandexSetup = true, yandexDocumentUrl = documentUrl) }
+            val documentUrl = (if (telemost) repository.savedTelemostUrl() else repository.savedYandexDocumentUrl()).orEmpty()
+            mutableState.update { it.copy(showYandexSetup = true, yandexDocumentUrl = documentUrl, yandexSetupTelemost = telemost) }
+        }
+    }
+
+    fun saveTelemostLink(url: String) {
+        viewModelScope.launch {
+            try {
+                repository.saveTelemostUrl(url)
+                mutableState.update { it.copy(showYandexSetup = false) }
+                // Editing settings never revokes an active connection.
+                if (vpnController.state.value.state !in ACTIVE_TUNNEL_STATES) selectYandexTransport(true)
+            } catch (error: CancellationException) { throw error
+            } catch (error: Throwable) {
+                mutableState.update { it.copy(problem = error.toAppProblem(ProblemOperation.SERVERS)) }
+            }
+        }
+    }
+
+    private fun selectYandexTransport(telemost: Boolean) {
+        if (mutableState.value.refreshing) return
+        viewModelScope.launch {
+            val url = if (telemost) repository.savedTelemostUrl() else repository.savedYandexDocumentUrl()
+            if (url == null) { openYandexSetup(telemost); return@launch }
+            val id = if (telemost) "yandex:telemost" else "yandex:document"
+            val cached = mutableState.value.profile?.servers?.firstOrNull { it.id == id }
+            val sameLink = if (telemost) cached?.yandexConfig?.telemost?.conferenceUrl == url else cached?.yandexConfig?.bootstrap?.documentUrl == url
+            if (sameLink && cached?.hasUsableYandexAuth() == true) { selectServerNow(id); return@launch }
+            val subscription = mutableState.value.account?.let {
+                activeSubscription(it, settings.selectedSubscriptionId.value ?: mutableState.value.profile?.subscriptionId)
+            } ?: return@launch
+            mutableState.update { it.copy(refreshing = true) }
+            val wasActive = vpnController.state.value.state in ACTIVE_TUNNEL_STATES
+            try {
+                val previousIsYandex = mutableState.value.profile?.servers?.firstOrNull { it.id == vpnController.state.value.serverId }?.engine == TunnelEngineKind.LEVIK_YANDEX
+                if (wasActive && previousIsYandex) {
+                    vpnController.disconnect(SessionEnd(EndBy.SYSTEM, null))
+                    withTimeout(10_000) { vpnController.state.first { it.state in setOf(VpnConnectionState.DISCONNECTED, VpnConnectionState.ERROR, VpnConnectionState.LOCKDOWN) } }
+                }
+                val prepared = if (telemost) prepareTelemostWithRetry(subscription.uuid, url) else {
+                    val context = appContext
+                    val network = context?.let(::selectYandexGuestNetwork)
+                    val auth = if (context != null && network != null) refreshYandexGuest(context, url, network) else null
+                    if (auth == null) {
+                        mutableState.update { it.copy(showYandexSetup = true, yandexDocumentUrl = url, yandexSetupTelemost = false) }
+                        return@launch
+                    }
+                    prepareYandexWithRetry(subscription.uuid, url, auth)
+                }
+                settings.setAutomaticServer(false)
+                ensureSelectedSubscription(subscription.uuid)
+                mutableState.update { it.copy(profile = prepared, selectedServerId = id, automaticServer = false) }
+                if (wasActive) {
+                    if (previousIsYandex) vpnController.connect() else vpnController.switchServer(id)
+                }
+            } catch (error: CancellationException) { throw error
+            } catch (error: Throwable) {
+                mutableState.update { it.copy(problem = error.toAppProblem(ProblemOperation.SERVERS, subscription.uuid)) }
+            } finally { mutableState.update { it.copy(refreshing = false) } }
         }
     }
 
@@ -1004,8 +1061,8 @@ class AppViewModel(
                 val auth = kotlinx.serialization.json.Json.decodeFromString<YandexProviderAuth>(encodedAuth)
                 val replacingActiveDocument = vpnController.state.value.let { vpn ->
                     vpn.state in ACTIVE_TUNNEL_STATES && mutableState.value.profile?.servers
-                        ?.firstOrNull { it.id == vpn.serverId }?.yandexConfig?.bootstrap?.documentUrl
-                        ?.let { it != documentUrl } == true
+                        ?.firstOrNull { it.id == vpn.serverId }?.yandexConfig
+                        ?.let { it.isTelemost || it.bootstrap?.documentUrl != documentUrl } == true
                 }
                 if (replacingActiveDocument) {
                     // The backend revokes the old document before admitting its replacement.
@@ -1075,10 +1132,17 @@ class AppViewModel(
                     cached?.servers?.firstOrNull { it.id == mutableState.value.selectedServerId }
                         ?.engine == TunnelEngineKind.LEVIK_YANDEX
                 var refreshedYandex: PreparedTunnelProfile? = null
-                if (yandexSelected && cached?.servers?.firstOrNull {
-                        it.id == mutableState.value.selectedServerId
-                    }?.hasUsableYandexAuth() != true
+                val selectedYandex = cached?.servers?.firstOrNull { it.id == mutableState.value.selectedServerId }
+                val savedConference = repository.savedTelemostUrl()
+                val changedConference = selectedYandex?.yandexConfig?.telemost?.let {
+                    savedConference != null && savedConference != it.conferenceUrl
+                } == true
+                if (yandexSelected && (selectedYandex?.hasUsableYandexAuth() != true || changedConference)
                 ) {
+                    val telemost = selectedYandex?.yandexConfig?.telemost
+                    if (telemost != null) {
+                        refreshedYandex = prepareTelemostWithRetry(subscription?.uuid ?: requireNotNull(cached).subscriptionId, savedConference ?: telemost.conferenceUrl)
+                    } else {
                     val document = cached?.servers?.firstNotNullOfOrNull {
                         it.yandexConfig?.bootstrap?.documentUrl
                     }.orEmpty()
@@ -1092,6 +1156,7 @@ class AppViewModel(
                         return@launch
                     }
                     refreshedYandex = prepareYandexWithRetry(subscription.uuid, document, auth)
+                    }
                 }
                 val profile = if (yandexSelected || subscription == null) {
                     refreshedYandex ?: requireNotNull(cached)
@@ -1223,7 +1288,10 @@ class AppViewModel(
         }
     }
 
-    fun selectServer(serverId: String) = selectServer(serverId, showIntroduction = true)
+    fun selectServer(serverId: String) {
+        if (serverId == "yandex:telemost" || serverId == "yandex:document") selectYandexTransport(serverId == "yandex:telemost")
+        else selectServer(serverId, showIntroduction = true)
+    }
 
     private fun selectServer(serverId: String, showIntroduction: Boolean) {
         val profile = mutableState.value.profile ?: return
@@ -1733,6 +1801,17 @@ class AppViewModel(
                 if (error is CancellationException) throw error
                 val wait = profileLoadRetryDelayMillis(error, failedAttempts++) ?: throw error
                 delay(wait)
+            }
+        }
+    }
+
+    private suspend fun prepareTelemostWithRetry(subscriptionId: String, url: String): PreparedTunnelProfile {
+        var attempts = 0
+        while (true) {
+            try { return repository.prepareTelemostTunnel(subscriptionId, url) }
+            catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                delay(profileLoadRetryDelayMillis(error, attempts++) ?: throw error)
             }
         }
     }
@@ -2609,6 +2688,7 @@ data class AppUiState(
     val yandexSupported: Boolean = false,
     val showYandexSetup: Boolean = false,
     val yandexDocumentUrl: String = "",
+    val yandexSetupTelemost: Boolean = false,
     val showLteWhitelistWarning: Boolean = false,
     val showAllowlistRequiredWarning: Boolean = false,
     val whitelistMode: WhitelistMode = WhitelistMode.UNKNOWN,

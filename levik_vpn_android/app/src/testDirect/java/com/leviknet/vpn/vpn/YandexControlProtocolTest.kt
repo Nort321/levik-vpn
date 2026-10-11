@@ -13,6 +13,24 @@ class YandexControlProtocolTest {
     private val codec = YandexControlCodec()
     private val envelope = "\"magic\":\"LEVIK_YANDEX_ANDROID\",\"version\":2"
 
+    @Test fun `Telemost admits protected UDP and provider DNS only when explicitly enabled`() {
+        val telemost = YandexControlCodec(telemost = true)
+        val udp = """{$envelope,"type":"PROTECT_DATAGRAM","requestId":1,"network":"udp4","address":"192.168.1.5:0"}"""
+        assertThrows(YandexProtocolException::class.java) { codec.decodeNetworkRequest(udp) }
+        assertEquals(YandexNetworkRequest.Protect(1), telemost.decodeNetworkRequest(udp))
+        for (host in listOf("cloud-api.yandex.ru", "goloom.strm.yandex.net")) {
+            val dns = """{$envelope,"type":"RESOLVE_HOST","requestId":2,"host":"$host"}"""
+            assertThrows(YandexProtocolException::class.java) { codec.decodeNetworkRequest(dns) }
+            assertEquals(YandexNetworkRequest.Resolve(2, host), telemost.decodeNetworkRequest(dns))
+        }
+        assertThrows(YandexProtocolException::class.java) { telemost.decodeNetworkRequest("""{$envelope,"type":"RESOLVE_HOST","requestId":2,"host":"goloom.strm.yandex.net.evil.test"}""") }
+        val now = Instant.now().epochSecond
+        val frame = telemost.encodeTelemostInit(TelemostBootstrap(1, "a".repeat(64), "https://telemost.yandex.ru/j/12345678901234", "a".repeat(42) + "A", "b".repeat(64), now + 600), "@levik_ydx_" + "n".repeat(24), "u".repeat(24), "p".repeat(43))
+        assertTrue(frame.contains("conferenceUrl"))
+        assertFalse(frame.contains("documentUrl"))
+        assertFalse(frame.contains("providerAuth"))
+    }
+
     @Test fun `status diagnostics stay optional and reject negative or private fields`() {
         val common = "\"state\":\"running\",\"strictSession\":true,\"bytesUp\":1,\"bytesDown\":2,\"protectedExternalSockets\":1,\"resolvedProviderHosts\":1"
         assertEquals(YandexDataPathWire(), codec.status(event("\"type\":\"stats\",\"data\":{$common}")).dataPath)
@@ -130,14 +148,14 @@ class YandexControlProtocolTest {
         val config = YandexServerConfig(bootstrap)
         val next = config.copy(bootstrap = bootstrap.copy(expiresAt = now + 1800, providerAuth = bootstrap.providerAuth.copy(validUntil = now + 700)))
         assertTrue(sameYandexSessionBinding(config, next))
-        assertTrue(codec.encodeRefresh(1, next.bootstrap).contains("\"type\":\"REFRESH\""))
+        assertTrue(codec.encodeRefresh(1, requireNotNull(next.bootstrap)).contains("\"type\":\"REFRESH\""))
         for (changed in listOf(
             bootstrap.copy(documentUrl = "https://disk.yandex.ru/i/different-document"),
             bootstrap.copy(deviceId = "c".repeat(64)), bootstrap.copy(sharedKey = "d".repeat(64)),
             bootstrap.copy(leaseRef = "B".repeat(43)), bootstrap.copy(version = 2),
         )) assertFalse(sameYandexSessionBinding(config, config.copy(bootstrap = changed)))
-        assertThrows(YandexProtocolException::class.java) { codec.encodeRefresh(0, next.bootstrap) }
-        assertThrows(YandexProtocolException::class.java) { codec.encodeRefresh(1, next.bootstrap.copy(expiresAt = now + 7200)) }
+        assertThrows(YandexProtocolException::class.java) { codec.encodeRefresh(0, requireNotNull(next.bootstrap)) }
+        assertThrows(YandexProtocolException::class.java) { codec.encodeRefresh(1, requireNotNull(next.bootstrap).copy(expiresAt = now + 7200)) }
     }
 
     private fun runningState(): YandexControlStateMachine = YandexControlStateMachine(codec).apply {

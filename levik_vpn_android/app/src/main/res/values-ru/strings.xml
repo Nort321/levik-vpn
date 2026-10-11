@@ -666,4 +666,12 @@
     <string name="growth_error_account_required">Войдите в аккаунт Levik, чтобы продолжить.</string>
     <string name="growth_error_network">Нет связи с сервером. Проверьте интернет и повторите.</string>
     <string name="growth_error_generic">Не получилось. Попробуйте ещё раз или напишите в поддержку.</string>
+    <string name="yandex_documents">Документы</string>
+    <string name="yandex_telemost">Телемост</string>
+    <string name="yandex_manage_link">Настройки подключения</string>
+    <string name="telemost_guide">Вставьте свою ссылку на встречу Телемоста с доступом для гостей. Сохраните её, затем выберите Телемост для подключения.</string>
+    <string name="telemost_link_label">Ссылка на встречу</string>
+    <string name="telemost_link_hint">https://telemost.yandex.ru/j/…</string>
+    <string name="telemost_privacy">Ссылка хранится на этом устройстве и передаётся VPN-серверу для подключения. Вход в аккаунт Яндекса не требуется. Чтобы остановить соединение, отключите VPN в LevikVPN.</string>
+    <string name="telemost_save">Сохранить ссылку</string>
 </resources>

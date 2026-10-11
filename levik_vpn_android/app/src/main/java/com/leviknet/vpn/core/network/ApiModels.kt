@@ -327,6 +327,8 @@ data class TunnelProfileRequest(
     val engine: String? = null,
     val documentUrl: String? = null,
     val providerAuth: com.leviknet.vpn.vpn.YandexProviderAuth? = null,
+    val transport: String? = null,
+    val conferenceUrl: String? = null,
 )
 
 @Serializable

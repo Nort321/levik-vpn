@@ -12,7 +12,7 @@ import (
 func initFixture() initWire {
 	encode := base64.RawURLEncoding.EncodeToString
 	token := encode([]byte(`{"alg":"HS256","typ":"JWT"}`)) + "." + encode([]byte(`{"document":{"key":"fixture-key","fileType":"docx","url":"http://localhost:12701/fixture","permissions":{"edit":true}},"editorConfig":{"user":{"id":"fixture-guest"}}}`)) + "." + encode(make([]byte, 32))
-	return initWire{protocolMagic, protocolVersion, "init", "https://disk.yandex.ru/i/fixture-document", strings.Repeat("a", 42) + "A", strings.Repeat("b", 64), time.Now().Add(time.Hour).Unix(), bootstrapWire{"https://fixture_guest.onlyoffice.disk.yandex.net", token, time.Now().Add(10 * time.Minute).Unix()}, "@levik_ydx_" + strings.Repeat("n", 24), strings.Repeat("u", 24), strings.Repeat("p", 43)}
+	return initWire{protocolMagic, protocolVersion, "init", "https://disk.yandex.ru/i/fixture-document", "", strings.Repeat("a", 42) + "A", strings.Repeat("b", 64), time.Now().Add(time.Hour).Unix(), bootstrapWire{"https://fixture_guest.onlyoffice.disk.yandex.net", token, time.Now().Add(10 * time.Minute).Unix()}, "@levik_ydx_" + strings.Repeat("n", 24), strings.Repeat("u", 24), strings.Repeat("p", 43)}
 }
 
 func TestInitIsBoundedStrictAndCarriesNoAccountOptions(t *testing.T) {
@@ -82,6 +82,36 @@ func TestTunnelDestinationRequiresPublicIPv4Literal(t *testing.T) {
 	for _, address := range []string{"example.com:443", "localhost:80", "127.0.0.1:443", "10.0.0.1:443", "169.254.169.254:80", "[2606:4700::1111]:443", "1.1.1.1:0", "1.1.1.1:65536"} {
 		if validateTunnelDestination(address) == nil {
 			t.Fatal("nonpublic or locally resolved destination accepted")
+		}
+	}
+}
+
+func TestTelemostInitIsExclusiveAndUsesLeaseDeadline(t *testing.T) {
+	init := initFixture()
+	init.DocumentURL = ""
+	init.ProviderAuth = bootstrapWire{}
+	init.ConferenceURL = "https://telemost.yandex.ru/j/12345678901234"
+	carrier, deadline, code := validateInit(init, time.Now())
+	if code != "" {
+		t.Fatalf("valid Telemost init failed: %s", code)
+	}
+	defer carrier.Stop()
+	if !deadline.Equal(time.Unix(init.LeaseExpiresAt, 0)) {
+		t.Fatal("wrong lease deadline")
+	}
+	for _, change := range []func(*initWire){
+		func(i *initWire) { i.DocumentURL = "https://disk.yandex.ru/i/fixture-document" },
+		func(i *initWire) { i.ProviderAuth = initFixture().ProviderAuth },
+		func(i *initWire) { i.ConferenceURL = "https://127.0.0.1/j/12345678901234" },
+	} {
+		bad := init
+		change(&bad)
+		c, _, code := validateInit(bad, time.Now())
+		if c != nil {
+			c.Stop()
+		}
+		if code == "" {
+			t.Fatal("mixed or untrusted init accepted")
 		}
 	}
 }

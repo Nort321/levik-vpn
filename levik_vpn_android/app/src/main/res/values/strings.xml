@@ -666,4 +666,12 @@
     <string name="growth_error_account_required">Sign in to your Levik account to continue.</string>
     <string name="growth_error_network">No connection to the server. Check the internet and retry.</string>
     <string name="growth_error_generic">Something went wrong. Try again or contact support.</string>
+    <string name="yandex_documents">Documents</string>
+    <string name="yandex_telemost">Telemost</string>
+    <string name="yandex_manage_link">Connection settings</string>
+    <string name="telemost_guide">Paste your own Telemost meeting link with guest access. Save it, then select Telemost to connect.</string>
+    <string name="telemost_link_label">Meeting link</string>
+    <string name="telemost_link_hint">https://telemost.yandex.ru/j/…</string>
+    <string name="telemost_privacy">The link is stored on this device and sent to the VPN server to connect. Signing in to Yandex is not required. Disconnect in LevikVPN to stop the connection.</string>
+    <string name="telemost_save">Save link</string>
 </resources>

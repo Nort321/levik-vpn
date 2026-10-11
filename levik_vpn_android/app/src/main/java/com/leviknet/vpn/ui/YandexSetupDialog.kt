@@ -26,7 +26,7 @@ import com.leviknet.vpn.R
 import com.leviknet.vpn.vpn.YandexContract
 
 @Composable
-internal fun YandexSetupDialog(initialUrl: String, onDismiss: () -> Unit, onOpenGuest: (String) -> Unit) {
+internal fun YandexSetupDialog(initialUrl: String, telemost: Boolean = false, onSaveTelemost: (String) -> Unit = {}, onDismiss: () -> Unit, onOpenGuest: (String) -> Unit) {
     var documentUrl by remember { mutableStateOf(initialUrl) }
     var invalid by remember { mutableStateOf(false) }
     AlertDialog(
@@ -35,11 +35,11 @@ internal fun YandexSetupDialog(initialUrl: String, onDismiss: () -> Unit, onOpen
         text = {
             Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Text(stringResource(R.string.yandex_guide))
+                Text(stringResource(if (telemost) R.string.telemost_guide else R.string.yandex_guide))
                 OutlinedTextField(
                     value = documentUrl,
                     onValueChange = { if (it.length <= 256) { documentUrl = it; invalid = false } },
-                    label = { Text(stringResource(R.string.yandex_document_label)) },
+                    label = { Text(stringResource(if (telemost) R.string.telemost_link_label else R.string.yandex_document_label)) },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(
                         capitalization = KeyboardCapitalization.None,
@@ -47,16 +47,16 @@ internal fun YandexSetupDialog(initialUrl: String, onDismiss: () -> Unit, onOpen
                         keyboardType = KeyboardType.Uri,
                     ),
                     isError = invalid,
-                    supportingText = { Text(stringResource(R.string.yandex_document_hint)) },
+                    supportingText = { Text(stringResource(if (telemost) R.string.telemost_link_hint else R.string.yandex_document_hint)) },
                 )
-                Text(stringResource(R.string.yandex_privacy), style = MaterialTheme.typography.bodySmall)
+                Text(stringResource(if (telemost) R.string.telemost_privacy else R.string.yandex_privacy), style = MaterialTheme.typography.bodySmall)
             }
         },
         confirmButton = {
             Button(onClick = {
-                val valid = runCatching { YandexContract.validateDocumentUrl(documentUrl.trim()) }.getOrNull()
-                if (valid == null) invalid = true else onOpenGuest(valid)
-            }) { Text(stringResource(R.string.yandex_open_guest)) }
+                val valid = runCatching { if (telemost) YandexContract.validateConferenceUrl(documentUrl.trim()) else YandexContract.validateDocumentUrl(documentUrl.trim()) }.getOrNull()
+                if (valid == null) invalid = true else if (telemost) onSaveTelemost(valid) else onOpenGuest(valid)
+            }) { Text(stringResource(if (telemost) R.string.telemost_save else R.string.yandex_open_guest)) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
     )

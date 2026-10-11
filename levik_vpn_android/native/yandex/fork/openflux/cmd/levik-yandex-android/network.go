@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/p1neappleXpress/OpenFlux/transport/egresspolicy"
+	"github.com/p1neappleXpress/OpenFlux/transport/yandex"
 	"golang.org/x/sys/unix"
 )
 
@@ -58,14 +59,15 @@ type resolveACK struct {
 }
 
 type networkChannel struct {
-	conn      *net.UnixConn
-	reader    *bufio.Reader
-	gate      chan struct{}
-	nextID    atomic.Uint64
-	protected atomic.Uint64
-	resolved  atomic.Uint64
-	closeOnce sync.Once
-	onFailure func()
+	allowDatagrams bool
+	conn           *net.UnixConn
+	reader         *bufio.Reader
+	gate           chan struct{}
+	nextID         atomic.Uint64
+	protected      atomic.Uint64
+	resolved       atomic.Uint64
+	closeOnce      sync.Once
+	onFailure      func()
 }
 
 func newNetworkChannel(conn *net.UnixConn, onFailure func()) *networkChannel {
@@ -181,7 +183,7 @@ func (n *networkChannel) exchange(ctx context.Context, request networkRequest, f
 func (n *networkChannel) lookup(ctx context.Context, host string) ([]net.IPAddr, error) {
 	// Only provider endpoints may reach Android's selected-network DNS. User
 	// traffic destinations are IPv4 literals and cannot use this channel.
-	if _, err := egresspolicy.ValidateProviderURL("https://"+host+"/", false); err != nil {
+	if _, err := egresspolicy.ValidateProviderURL("https://"+host+"/", false); err != nil && !(n.allowDatagrams && yandex.IsTelemostProviderURL("https://"+host+"/")) {
 		return nil, egresspolicy.ErrProviderURL
 	}
 	var ack resolveACK
@@ -206,8 +208,9 @@ func (n *networkChannel) lookup(ctx context.Context, host string) ([]net.IPAddr,
 func (n *networkChannel) protect(ctx context.Context, network, address string, raw syscall.RawConn) error {
 	host, port, err := net.SplitHostPort(address)
 	ip := net.ParseIP(host)
-	if err != nil || port != "443" || ip == nil || !egresspolicy.IsPublicIP(ip) ||
-		(network != "tcp4" && network != "tcp6") || (network == "tcp4") != (ip.To4() != nil) {
+	datagram := err == nil && n.allowDatagrams && network == "udp4" && ip != nil && ip.To4() != nil
+	if !datagram && (err != nil || port != "443" || ip == nil || !egresspolicy.IsPublicIP(ip) ||
+		(network != "tcp4" && network != "tcp6") || (network == "tcp4") != (ip.To4() != nil)) {
 		return egresspolicy.ErrDestination
 	}
 	fd := -1
@@ -217,7 +220,11 @@ func (n *networkChannel) protect(ctx context.Context, network, address string, r
 	}
 	defer unix.Close(fd)
 	var ack protectACK
-	if err := n.exchange(ctx, networkRequest{Type: "PROTECT_SOCKET", Network: network, Address: address}, fd, &ack); err != nil {
+	kind := "PROTECT_SOCKET"
+	if datagram {
+		kind = "PROTECT_DATAGRAM"
+	}
+	if err := n.exchange(ctx, networkRequest{Type: kind, Network: network, Address: address}, fd, &ack); err != nil {
 		return err
 	}
 	n.protected.Add(1)
