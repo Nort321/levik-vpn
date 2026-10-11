@@ -20,6 +20,9 @@ const (
 	defaultMaxBatchCount = 64
 	defaultLingerMs      = 5
 	batchQueueDepth      = 256 // At most 16 MiB of queued packet data.
+	// A paced carrier moves a few batches a second; a deep queue there only
+	// adds seconds of delay that TCP reads as a dead path, so keep ~2 s.
+	pacedQueueDepth = 32
 )
 
 // BatchedTransport replaces the old per-packet CompressedTransport. It queues
@@ -39,6 +42,9 @@ type BatchedTransport struct {
 	lingerMs      int
 	maxBatchBytes int
 	maxBatchCount int
+	// minInterval spaces inner sends for carriers that relay a limited number
+	// of messages per second; packets arriving meanwhile join the next batch.
+	minInterval time.Duration
 
 	running    atomic.Bool
 	lifecycle  sync.Mutex
@@ -57,6 +63,30 @@ func envInt(name string, def int) int {
 		}
 	}
 	return def
+}
+
+// PacedTransport is a carrier whose provider relays only a limited number of
+// messages per second, so batches must be spaced and may be larger.
+type PacedTransport interface {
+	SendPacing() (minInterval time.Duration, maxBatchBytes int)
+}
+
+// SetPacing spaces batches at least minInterval apart and lets each carry up
+// to maxBatchBytes. Call it before Start; both peers keep the same wire format.
+func (b *BatchedTransport) SetPacing(minInterval time.Duration, maxBatchBytes int) {
+	b.lifecycle.Lock()
+	defer b.lifecycle.Unlock()
+	if b.running.Load() {
+		return
+	}
+	if minInterval > 0 {
+		b.minInterval = minInterval
+		b.queue = make(chan []byte, pacedQueueDepth)
+	}
+	if maxBatchBytes > 0 {
+		b.maxBatchBytes = min(maxBatchBytes, maxFrameBytes-65537)
+		b.maxBatchCount = maxFrameRecords - 1
+	}
 }
 
 func NewBatchedTransport(inner Transport) *BatchedTransport {
@@ -95,7 +125,7 @@ func (b *BatchedTransport) Start() error {
 		return err
 	}
 	b.running.Store(true)
-	go b.flushLoop()
+	go b.flushLoop(b.minInterval)
 	utils.Debugf("[BATCH] Start: OK")
 	return nil
 }
@@ -188,20 +218,36 @@ func (b *BatchedTransport) recordSendError(err error) {
 	utils.Debugf("[BATCH] send error (total=%d): %v", b.sendErrors.Load(), err)
 }
 
-func (b *BatchedTransport) flushLoop() {
+func (b *BatchedTransport) flushLoop(minInterval time.Duration) {
 	utils.Debugf("[BATCH] flushLoop: started")
+	var lastSend time.Time
+	// carry holds a packet that did not fit the previous batch, so a batch
+	// never exceeds maxBatchBytes (paced carriers drop oversized messages).
+	var carry []byte
 	for b.running.Load() {
-		var first []byte
-		select {
-		case <-b.stopCh:
-			utils.Debugf("[BATCH] flushLoop: stop signal, exiting")
-			return
-		case first = <-b.queue:
-			utils.Debugf("[BATCH] flushLoop: dequeued first packet size=%d (queue %d/%d)",
-				len(first), len(b.queue), cap(b.queue))
+		first := carry
+		carry = nil
+		if first == nil {
+			select {
+			case <-b.stopCh:
+				utils.Debugf("[BATCH] flushLoop: stop signal, exiting")
+				return
+			case first = <-b.queue:
+				utils.Debugf("[BATCH] flushLoop: dequeued first packet size=%d (queue %d/%d)",
+					len(first), len(b.queue), cap(b.queue))
+			}
 		}
 		batch := [][]byte{first}
 		size := 2 + len(first)
+		add := func(p []byte) bool {
+			if size+2+len(p) > b.maxBatchBytes {
+				carry = p
+				return false
+			}
+			batch = append(batch, p)
+			size += 2 + len(p)
+			return true
+		}
 
 		// Phase 1: absorb everything already queued (burst coalescing). This
 		// alone collapses a window's worth of segments into one message.
@@ -209,8 +255,9 @@ func (b *BatchedTransport) flushLoop() {
 		for size < b.maxBatchBytes && len(batch) < b.maxBatchCount {
 			select {
 			case p := <-b.queue:
-				batch = append(batch, p)
-				size += 2 + len(p)
+				if !add(p) {
+					break drainNow
+				}
 			default:
 				break drainNow
 			}
@@ -219,9 +266,14 @@ func (b *BatchedTransport) flushLoop() {
 
 		// Phase 2: brief linger to catch stragglers arriving just after the
 		// burst. Negligible next to the channel RTT, but it fills batches
-		// during steady bulk transfer.
-		if b.lingerMs > 0 && size < b.maxBatchBytes && len(batch) < b.maxBatchCount {
-			timer := time.NewTimer(time.Duration(b.lingerMs) * time.Millisecond)
+		// during steady bulk transfer. A paced carrier lingers until its next
+		// send slot instead, so an idle link still sends the first packet at once.
+		linger := time.Duration(b.lingerMs) * time.Millisecond
+		if minInterval > 0 {
+			linger = max(linger, time.Until(lastSend.Add(minInterval)))
+		}
+		if linger > 0 && carry == nil && size < b.maxBatchBytes && len(batch) < b.maxBatchCount {
+			timer := time.NewTimer(linger)
 		linger:
 			for size < b.maxBatchBytes && len(batch) < b.maxBatchCount {
 				select {
@@ -230,8 +282,9 @@ func (b *BatchedTransport) flushLoop() {
 					utils.Debugf("[BATCH] flushLoop: stop during linger, exiting")
 					return
 				case p := <-b.queue:
-					batch = append(batch, p)
-					size += 2 + len(p)
+					if !add(p) {
+						break linger
+					}
 				case <-timer.C:
 					break linger
 				}
@@ -241,6 +294,17 @@ func (b *BatchedTransport) flushLoop() {
 				len(batch), size)
 		}
 
+		if minInterval > 0 {
+			// A full batch still waits for its slot; later packets queue.
+			if wait := time.Until(lastSend.Add(minInterval)); wait > 0 {
+				select {
+				case <-b.stopCh:
+					return
+				case <-time.After(wait):
+				}
+			}
+			lastSend = time.Now()
+		}
 		encoded := encodeBatch(batch)
 		utils.Debugf("[BATCH] flushLoop: sending batch of %d packets (%d raw -> %d wire bytes)",
 			len(batch), size, len(encoded))

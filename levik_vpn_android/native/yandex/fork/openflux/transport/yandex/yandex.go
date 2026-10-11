@@ -552,6 +552,22 @@ func (t *YandexDocsTransport) writerLoop() {
 	}
 }
 
+// Yandex Disk relays at most about 8 cursor messages a second per editor
+// connection (more are delayed, dropped, then the socket is closed) and drops
+// any cursor whose string exceeds about 4096 characters, i.e. ~3060 binary
+// bytes. Measured live on 2026-10-11: 8/s both ways 100%, 12/s 78%, 16/s
+// disconnect; 3054 wire bytes 100%, 3072 bytes 0%. The batching layer packs
+// tunnel packets into messages within both limits (~20 KB/s each way).
+const (
+	cursorSendInterval = 125 * time.Millisecond
+	cursorBatchBytes   = 2950
+)
+
+// SendPacing implements transport.PacedTransport.
+func (t *YandexDocsTransport) SendPacing() (time.Duration, int) {
+	return cursorSendInterval, cursorBatchBytes
+}
+
 // cursorFrame carries one packet in a transient cursor message. The numeric
 // prefix must be the real binary packet length: since 2026-10-10 Yandex Disk
 // does not relay a cursor whose declared length differs from its payload, and

@@ -198,6 +198,9 @@ func (s *Session) newLink(name string, raw Transport, secret, context string, pr
 		batched:   NewBatchedTransport(enc),
 		priority:  priority,
 	}
+	if paced, ok := raw.(PacedTransport); ok {
+		link.batched.SetPacing(paced.SendPacing())
+	}
 	if classic != ClassicOff {
 		link.classicCodec = NewCodecTransport(d.side(false), codec, !s.exit)
 		link.classicEnc = enc.SharingKeys(link.classicCodec)

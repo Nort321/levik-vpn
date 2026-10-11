@@ -6,7 +6,23 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/p1neappleXpress/OpenFlux/transport"
 )
+
+var _ transport.PacedTransport = (*YandexDocsTransport)(nil)
+
+// A full batch plus encryption (header, nonce, tag) and batch framing must stay
+// under Yandex's ~4096-character cursor string, or the provider drops it.
+func TestCursorBatchFitsTheProviderCursorLimit(t *testing.T) {
+	const encryptionAndFraming = 64
+	frame := cursorFrame(make([]byte, cursorBatchBytes+encryptionAndFraming))
+	cursor := ExtractBase64(string(frame))
+	declared := strconv.Itoa(cursorBatchBytes+encryptionAndFraming) + ";"
+	if n := len(declared) + len(cursor); n > 4096 {
+		t.Fatalf("cursor string is %d characters, above the 4096 the provider relays", n)
+	}
+}
 
 func TestCursorFrameDeclaresTheRealPacketLength(t *testing.T) {
 	for _, size := range []int{1, 16, 18, 69, 102, 512, 1500} {
