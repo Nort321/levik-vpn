@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.random.Random
 
 class TunnelHealthPolicyTest {
     @Test
@@ -92,5 +93,15 @@ class TunnelHealthPolicyTest {
         policy.onUnderlyingNetworkChanged(2_000L)
 
         assertTrue(policy.isCandidateEligible("server-b", 2_001L))
+    }
+
+    @Test
+    fun `rechecks a failed probe within seconds`() {
+        val random = Random(42)
+        repeat(50) {
+            assertTrue(autoHealingDelayMs(failedRounds = 0, random = random) in 25_000L..45_000L)
+            assertTrue(autoHealingDelayMs(failedRounds = 1, random = random) in 8_000L..12_000L)
+            assertTrue(autoHealingDelayMs(failedRounds = 2, random = random) in 8_000L..12_000L)
+        }
     }
 }

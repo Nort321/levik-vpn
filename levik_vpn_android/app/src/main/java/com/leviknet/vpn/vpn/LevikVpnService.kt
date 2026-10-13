@@ -58,7 +58,6 @@ import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import kotlin.coroutines.coroutineContext
-import kotlin.random.Random
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -1735,17 +1734,14 @@ class LevikVpnService : VpnService() {
         autoHealingJob?.cancel()
         if (!container.settings.autoHealingEnabled.value) return
         autoHealingJob = serviceScope.launch {
+            var failedRounds = 0
             while (coreRunning) {
-                delay(
-                    Random.nextLong(
-                        AUTO_HEALING_MIN_INTERVAL_MS,
-                        AUTO_HEALING_MAX_INTERVAL_MS + 1,
-                    ),
-                )
+                delay(autoHealingDelayMs(failedRounds))
                 if (!coreRunning) break
                 val probe = checkConnectivity()
                 val nowMs = SystemClock.elapsedRealtime()
                 val decision = tunnelHealthPolicy.evaluateProbe(probe.isAlive, nowMs)
+                failedRounds = if (decision.assessment == TunnelHealthAssessment.DEGRADED) decision.consecutiveFailures else 0
                 when {
                     probe.isAlive -> telemetry.record { it.probeSucceeded() }
                     // Failures right after a network change are expected and not counted.
@@ -2336,8 +2332,6 @@ class LevikVpnService : VpnService() {
         private const val MOBILE_AUTOMATION_INTERVAL_MS = 30_000L
         private const val AUTOMATIC_SWITCH_ROLLBACK_DELAY_MS = 1_000L
         private const val STATS_INTERVAL_MS = 1_000L
-        private const val AUTO_HEALING_MIN_INTERVAL_MS = 25_000L
-        private const val AUTO_HEALING_MAX_INTERVAL_MS = 45_000L
         private const val AUTO_HEALING_FAILURE_ROUNDS = 3
         private const val AUTO_HEALING_NETWORK_GRACE_MS = 20_000L
         private const val AUTO_HEALING_RECOVERY_COOLDOWN_MS = 5 * 60_000L

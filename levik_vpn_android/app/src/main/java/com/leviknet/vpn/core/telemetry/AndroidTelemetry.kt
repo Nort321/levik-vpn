@@ -162,6 +162,13 @@ fun exitReasonEnd(reason: Int): SessionEnd = when (reason) {
     ApplicationExitInfo.REASON_USER_REQUESTED -> SessionEnd(EndBy.OS_KILLED, "user_force_stop")
     ApplicationExitInfo.REASON_PACKAGE_UPDATED -> SessionEnd(EndBy.SYSTEM, "app_update")
     ApplicationExitInfo.REASON_USER_STOPPED -> SessionEnd(EndBy.SYSTEM, null)
+    ApplicationExitInfo.REASON_PERMISSION_CHANGE -> SessionEnd(EndBy.SYSTEM, "permission_change")
+    ApplicationExitInfo.REASON_PACKAGE_STATE_CHANGE -> SessionEnd(EndBy.SYSTEM, "package_state_change")
     ApplicationExitInfo.REASON_UNKNOWN, ApplicationExitInfo.REASON_EXIT_SELF -> SessionEnd(EndBy.UNKNOWN, null)
-    else -> SessionEnd(EndBy.OS_KILLED, "unknown")
+    // OEM task killers (ColorOS, OxygenOS, MIUI) report REASON_OTHER.
+    ApplicationExitInfo.REASON_OTHER -> SessionEnd(EndBy.OS_KILLED, "other")
+    ApplicationExitInfo.REASON_DEPENDENCY_DIED -> SessionEnd(EndBy.OS_KILLED, "dependency_died")
+    ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> SessionEnd(EndBy.OS_KILLED, "init_failure")
+    // Reasons added in later Android versions keep their number.
+    else -> SessionEnd(EndBy.OS_KILLED, "reason_$reason")
 }

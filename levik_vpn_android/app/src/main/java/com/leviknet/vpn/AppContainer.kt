@@ -156,7 +156,10 @@ class AppContainer(application: Application) {
             combine(
                 settings.connectionTelemetryEnabled,
                 settings.connectionTelemetryNoticeShown,
-            ) { enabled, noticeShown -> enabled && noticeShown }
+            ) { enabled, noticeShown ->
+                // Debug builds are the developer's test runs, not users' connections.
+                !BuildConfig.DEBUG && enabled && noticeShown
+            }
                 .collect(connectionTelemetry::setEnabled)
         }
         CensorshipRadarWorker.configure(

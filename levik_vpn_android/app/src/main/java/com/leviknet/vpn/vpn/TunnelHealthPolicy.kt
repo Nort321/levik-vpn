@@ -1,5 +1,7 @@
 package com.leviknet.vpn.vpn
 
+import kotlin.random.Random
+
 internal enum class TunnelHealthAssessment {
     HEALTHY,
     GRACE_PERIOD,
@@ -106,3 +108,20 @@ internal class TunnelHealthPolicy(
     private fun saturatedAdd(value: Long, increment: Long): Long =
         if (value > Long.MAX_VALUE - increment) Long.MAX_VALUE else value + increment
 }
+
+/**
+ * Delay before the next health probe. After a failed round the tunnel is
+ * re-checked within seconds, so a dead one is replaced in about half a minute
+ * instead of the two to three minutes the regular interval adds up to.
+ */
+internal fun autoHealingDelayMs(failedRounds: Int, random: Random = Random.Default): Long =
+    if (failedRounds > 0) {
+        random.nextLong(AUTO_HEALING_RECHECK_MIN_MS, AUTO_HEALING_RECHECK_MAX_MS + 1)
+    } else {
+        random.nextLong(AUTO_HEALING_MIN_INTERVAL_MS, AUTO_HEALING_MAX_INTERVAL_MS + 1)
+    }
+
+private const val AUTO_HEALING_MIN_INTERVAL_MS = 25_000L
+private const val AUTO_HEALING_MAX_INTERVAL_MS = 45_000L
+private const val AUTO_HEALING_RECHECK_MIN_MS = 8_000L
+private const val AUTO_HEALING_RECHECK_MAX_MS = 12_000L

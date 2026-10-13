@@ -334,7 +334,10 @@ class ConnectionTelemetryFacadeTest {
         assertEquals(SessionEnd(EndBy.OS_KILLED, "user_force_stop"), exitReasonEnd(ApplicationExitInfo.REASON_USER_REQUESTED))
         assertEquals(SessionEnd(EndBy.SYSTEM, "app_update"), exitReasonEnd(ApplicationExitInfo.REASON_PACKAGE_UPDATED))
         assertEquals(SessionEnd(EndBy.UNKNOWN, null), exitReasonEnd(ApplicationExitInfo.REASON_UNKNOWN))
-        assertEquals(SessionEnd(EndBy.OS_KILLED, "unknown"), exitReasonEnd(ApplicationExitInfo.REASON_DEPENDENCY_DIED))
+        assertEquals(SessionEnd(EndBy.OS_KILLED, "dependency_died"), exitReasonEnd(ApplicationExitInfo.REASON_DEPENDENCY_DIED))
+        assertEquals(SessionEnd(EndBy.OS_KILLED, "other"), exitReasonEnd(ApplicationExitInfo.REASON_OTHER))
+        assertEquals(SessionEnd(EndBy.SYSTEM, "permission_change"), exitReasonEnd(ApplicationExitInfo.REASON_PERMISSION_CHANGE))
+        assertEquals(SessionEnd(EndBy.OS_KILLED, "reason_99"), exitReasonEnd(99))
     }
 
     @Test
