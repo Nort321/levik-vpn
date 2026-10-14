@@ -128,7 +128,7 @@ data, only what to fetch again:
 | `config` | fetches the remote configuration (an announcement or switch changed) |
 
 Unknown events are ignored. The server pings every 25 seconds and ends a
-stream after 15 minutes or when the session is revoked; apps reconnect after
+stream after 14 minutes or when the session is revoked; apps reconnect after
 the `retry` delay (5 s), back off up to a minute while the server is
 unreachable and drop a stream that stayed silent for 70 seconds. Desktop apps
 keep the stream while signed in; Android keeps it while the app is visible or
