@@ -17,6 +17,8 @@ import com.leviknet.vpn.core.auth.AuthorizationChallengePolicy
 import com.leviknet.vpn.core.auth.ChallengeAuthorization
 import com.leviknet.vpn.core.auth.DeepLinkDestination
 import com.leviknet.vpn.core.auth.DeepLinkRouter
+import com.leviknet.vpn.core.auth.LoginApproval
+import com.leviknet.vpn.core.auth.PendingApproval
 import com.leviknet.vpn.core.logger.AppLogger
 import com.leviknet.vpn.core.logger.LogEntry
 import com.leviknet.vpn.core.network.ApiException
@@ -383,6 +385,11 @@ class AppViewModel(
                     mutableState.update { it.copy(settingsSyncedAt = at) }
                 }
             }
+            viewModelScope.launch {
+                platform.approvals.collect { approvals ->
+                    mutableState.update { it.copy(pendingApprovals = approvals) }
+                }
+            }
         }
         viewModelScope.launch {
             settings.sharePresence.collect { enabled ->
@@ -695,10 +702,21 @@ class AppViewModel(
                 ) {
                     "Authentication challenge does not contain a supported authorization target."
                 }
-                mutableState.update {
-                    it.copy(login = LoginUiState.Waiting(challenge, authorization, showQr))
-                }
-                if (!showQr) openChallengeAuthorization(authorization)
+                val matchNumber = LoginApproval.matchNumber(challenge.matchNumber)
+                    ?.takeIf { !BuildConfig.IS_PLAY_DISTRIBUTION }
+                val waiting = LoginUiState.Waiting(
+                    challenge = challenge,
+                    authorization = authorization,
+                    showQr = showQr,
+                    matchNumber = matchNumber,
+                    approvalRequested = matchNumber != null && challenge.approvalRequested,
+                    telegramUri = challenge.telegramUriComplete
+                        ?.takeIf { !BuildConfig.IS_PLAY_DISTRIBUTION }
+                        ?.let(AuthorizationChallengePolicy::telegramStartUri),
+                )
+                mutableState.update { it.copy(login = waiting) }
+                // The user's other apps were asked: the browser opens only on request.
+                if (!showQr && !waiting.approvalRequested) openChallengeAuthorization(authorization)
                 pollChallenge(challenge, activateLteTrialAfterLogin)
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
@@ -740,6 +758,34 @@ class AppViewModel(
         val waiting = mutableState.value.login as? LoginUiState.Waiting ?: return
         viewModelScope.launch {
             openChallengeAuthorization(waiting.authorization)
+        }
+    }
+
+    fun openLoginTelegram() {
+        val uri = (mutableState.value.login as? LoginUiState.Waiting)?.telegramUri ?: return
+        viewModelScope.launch { effectChannel.send(AppEffect.OpenExternal(uri)) }
+    }
+
+    /** "Later": the request stays pending on the server and in the other apps. */
+    fun hideApproval(id: String) {
+        mutableState.update { it.copy(hiddenApprovals = it.hiddenApprovals + id) }
+    }
+
+    /** [number] is the one picked, null answers "this is not me". */
+    fun answerApproval(id: String, number: Int?) {
+        val platform = appPlatform ?: return
+        if (mutableState.value.answeringApproval) return
+        mutableState.update { it.copy(answeringApproval = true) }
+        viewModelScope.launch {
+            val message = try {
+                if (platform.answerApproval(id, number)) UiMessage.APPROVAL_CONFIRMED else UiMessage.APPROVAL_DECLINED
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                if (error is ApiException.Rejected && error.status == 404) UiMessage.APPROVAL_GONE else UiMessage.GENERIC_ERROR
+            }
+            mutableState.update {
+                it.copy(answeringApproval = false, hiddenApprovals = it.hiddenApprovals + id, message = message)
+            }
         }
     }
 
@@ -1692,6 +1738,12 @@ class AppViewModel(
                 LoginPollResult.Denied -> {
                     mutableState.update {
                         it.copy(login = LoginUiState.Idle, message = UiMessage.LOGIN_DENIED)
+                    }
+                    return
+                }
+                LoginPollResult.Declined -> {
+                    mutableState.update {
+                        it.copy(login = LoginUiState.Idle, message = UiMessage.LOGIN_DECLINED)
                     }
                     return
                 }
@@ -2758,7 +2810,14 @@ data class AppUiState(
     val settingsSyncEnabled: Boolean = true,
     val settingsSyncedAt: Long? = null,
     val sharePresence: Boolean = true,
-)
+    val pendingApprovals: List<PendingApproval> = emptyList(),
+    val hiddenApprovals: Set<String> = emptySet(),
+    val answeringApproval: Boolean = false,
+) {
+    /** The sign-in to ask about now: not hidden with "Later" and not expired. */
+    fun approvalPrompt(now: java.time.Instant): PendingApproval? =
+        pendingApprovals.firstOrNull { it.id !in hiddenApprovals && it.expiresAt.isAfter(now) }
+}
 
 /** The one-time notice waits until the user is signed in and no other dialog is open. */
 internal fun shouldShowConnectionTelemetryNotice(state: AppUiState): Boolean =
@@ -2812,6 +2871,12 @@ sealed interface LoginUiState {
         val challenge: AuthChallengeResponse,
         val authorization: ChallengeAuthorization,
         val showQr: Boolean = false,
+        /** Shown large; the user picks it on a device that is already signed in (Direct builds). */
+        val matchNumber: Int? = null,
+        /** The remembered account's apps and Telegram were asked to approve. */
+        val approvalRequested: Boolean = false,
+        /** tg:// link to the bot, which asks for the number. */
+        val telegramUri: String? = null,
     ) : LoginUiState
     data object Expired : LoginUiState
 }
@@ -2828,6 +2893,10 @@ enum class UiMessage {
     NOTIFICATION_PERMISSION_DENIED,
     LOCATION_PERMISSION_DENIED,
     LOGIN_DENIED,
+    LOGIN_DECLINED,
+    APPROVAL_CONFIRMED,
+    APPROVAL_DECLINED,
+    APPROVAL_GONE,
     ATTESTATION_UNAVAILABLE,
     SUBSCRIPTION_UPDATED,
     SERVER_PING_UNAVAILABLE,

@@ -260,6 +260,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     onLteTrial = viewModel::activateLteTrial,
                     onFreeProxy = viewModel::openFreeProxyBot,
                     onOpenAgain = viewModel::openLoginUriAgain,
+                    onOpenTelegram = viewModel::openLoginTelegram,
                     onRetry = viewModel::retryLogin,
                     onPrivacyPolicy = viewModel::openPrivacyPolicy,
                 )
@@ -706,6 +707,17 @@ fun LevikVpnApp(viewModel: AppViewModel) {
         )
     }
 
+    if (state.session == SessionStatus.Authenticated) {
+        state.approvalPrompt(java.time.Instant.now())?.let { approval ->
+            SignInApprovalDialog(
+                approval = approval,
+                answering = state.answeringApproval,
+                onAnswer = { number -> viewModel.answerApproval(approval.id, number) },
+                onLater = { viewModel.hideApproval(approval.id) },
+            )
+        }
+    }
+
     if (showPauseDialog) {
         PauseVpnDialog(
             onDismiss = { showPauseDialog = false },
@@ -920,10 +932,12 @@ private fun LoginScreen(
     onLteTrial: () -> Unit,
     onFreeProxy: () -> Unit,
     onOpenAgain: () -> Unit,
+    onOpenTelegram: () -> Unit,
     onRetry: () -> Unit,
     onPrivacyPolicy: () -> Unit,
 ) {
     var showTrialChoice by remember { mutableStateOf(false) }
+    val waitingForApproval = (login as? LoginUiState.Waiting)?.approvalRequested == true
     val waitingForWebsite =
         (login as? LoginUiState.Waiting)?.authorization is ChallengeAuthorization.AccountActivation
     val waitingForQr = (login as? LoginUiState.Waiting)?.showQr == true
@@ -1043,6 +1057,8 @@ private fun LoginScreen(
                     is LoginUiState.Waiting -> stringResource(
                         if (waitingForQr) {
                             R.string.login_waiting_qr
+                        } else if (waitingForApproval) {
+                            R.string.login_waiting_approval
                         } else if (waitingForWebsite) {
                             R.string.login_waiting_website
                         } else {
@@ -1062,6 +1078,8 @@ private fun LoginScreen(
                     stringResource(
                         if (waitingForQr) {
                             R.string.login_waiting_qr_description
+                        } else if (waitingForApproval) {
+                            R.string.login_waiting_approval_description
                         } else if (waitingForWebsite) {
                             R.string.login_waiting_website_description
                         } else {
@@ -1093,6 +1111,15 @@ private fun LoginScreen(
                     )
                     Spacer(Modifier.height(12.dp))
                 }
+                login.matchNumber?.let { number ->
+                    LoginMatchNumber(
+                        number = number,
+                        hint = stringResource(
+                            if (waitingForApproval) R.string.login_waiting_approval_description else R.string.login_match_hint,
+                        ),
+                    )
+                    Spacer(Modifier.height(12.dp))
+                }
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = MaterialTheme.colorScheme.surfaceVariant,
@@ -1120,25 +1147,44 @@ private fun LoginScreen(
             Spacer(Modifier.height(28.dp))
             when (login) {
                 LoginUiState.Loading -> CircularProgressIndicator()
-                is LoginUiState.Waiting -> if (!waitingForQr) OutlinedButton(
-                    onClick = onOpenAgain,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = LevikDimensions.ButtonHeight),
-                    shape = RoundedCornerShape(14.dp),
-                ) {
-                    Text(
-                        stringResource(
-                            if (waitingForWebsite) {
-                                R.string.login_open_website_again
-                            } else {
-                                R.string.login_open_telegram_again
-                            },
-                        ),
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                } else Unit
+                is LoginUiState.Waiting -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (login.telegramUri != null) OutlinedButton(
+                        onClick = onOpenTelegram,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = LevikDimensions.ButtonHeight),
+                        shape = RoundedCornerShape(14.dp),
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_telegram),
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.login_match_telegram), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    if (!waitingForQr) OutlinedButton(
+                        onClick = onOpenAgain,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = LevikDimensions.ButtonHeight),
+                        shape = RoundedCornerShape(14.dp),
+                    ) {
+                        Text(
+                            stringResource(
+                                if (waitingForApproval) {
+                                    R.string.login_confirm_website
+                                } else if (waitingForWebsite) {
+                                    R.string.login_open_website_again
+                                } else {
+                                    R.string.login_open_telegram_again
+                                },
+                            ),
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
                 LoginUiState.Expired -> Button(
                     onClick = onRetry,
                     modifier = Modifier
@@ -7082,6 +7128,10 @@ private fun UiMessage.localized(): String = stringResource(
         UiMessage.NOTIFICATION_PERMISSION_DENIED -> R.string.notification_permission_denied
         UiMessage.LOCATION_PERMISSION_DENIED -> R.string.location_permission_denied
         UiMessage.LOGIN_DENIED -> R.string.login_denied
+        UiMessage.LOGIN_DECLINED -> R.string.login_declined
+        UiMessage.APPROVAL_CONFIRMED -> R.string.approval_confirmed
+        UiMessage.APPROVAL_DECLINED -> R.string.approval_declined
+        UiMessage.APPROVAL_GONE -> R.string.approval_gone
         UiMessage.ATTESTATION_UNAVAILABLE -> R.string.attestation_unavailable
         UiMessage.SUBSCRIPTION_UPDATED -> R.string.subscription_updated
         UiMessage.SERVER_PING_UNAVAILABLE -> R.string.server_ping_unavailable

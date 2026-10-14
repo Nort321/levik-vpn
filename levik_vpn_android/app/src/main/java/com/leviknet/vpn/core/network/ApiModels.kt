@@ -13,6 +13,9 @@ data class AuthChallengeRequest(
     val appVersion: String,
     val requestSigningAlgorithm: String,
     val profileEncryptionAlgorithm: String,
+    /** Direct builds only; null fields are left out of the request. */
+    val numberMatchSupported: Boolean? = null,
+    val accountHint: String? = null,
 )
 
 @Serializable
@@ -38,6 +41,9 @@ data class AuthChallengeResponse(
     val verificationUriComplete: String? = null,
     val pollIntervalSeconds: Int,
     val expiresAt: String,
+    val matchNumber: Int? = null,
+    val approvalRequested: Boolean = false,
+    val telegramUriComplete: String? = null,
 )
 
 @Serializable
@@ -52,6 +58,29 @@ data class AuthStatusResponse(
     val pollIntervalSeconds: Int = 2,
     val accessToken: String? = null,
     val expiresAt: String? = null,
+    val accountHint: String? = null,
+)
+
+/** One entry of GET /api/mobile/v1/approvals; core/auth/LoginApproval.kt checks every field. */
+@Serializable
+data class PendingApprovalWire(
+    val id: String? = null,
+    val deviceName: String? = null,
+    val platformLabel: String? = null,
+    val choices: List<Int>? = null,
+    val expiresAt: String? = null,
+)
+
+@Serializable
+data class PendingApprovalsResponse(
+    val ok: Boolean,
+    val approvals: List<PendingApprovalWire> = emptyList(),
+)
+
+@Serializable
+data class ApprovalDecisionResponse(
+    val ok: Boolean,
+    val state: String,
 )
 
 @Serializable
@@ -494,6 +523,7 @@ enum class LoginState {
     AUTHENTICATED,
     EXPIRED,
     DENIED,
+    DECLINED,
     ;
 
     companion object {
@@ -502,6 +532,7 @@ enum class LoginState {
             "authenticated" -> AUTHENTICATED
             "expired" -> EXPIRED
             "denied" -> DENIED
+            "declined" -> DECLINED
             else -> throw ApiException.InvalidResponse("Unknown authentication state")
         }
     }

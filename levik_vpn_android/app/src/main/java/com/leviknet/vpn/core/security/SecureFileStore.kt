@@ -141,6 +141,8 @@ class SecureFileStore(context: Context) {
 
     companion object {
         const val SESSION_TOKEN = "session_token"
+        /** Opaque, from the server; kept after sign-out for number-matching sign-ins. */
+        const val ACCOUNT_HINT = "account_hint"
         const val PENDING_REVOCATION_TOKEN = "pending_revocation_token"
         const val TUNNEL_PROFILE = "tunnel_profile"
         const val YANDEX_DOCUMENT = "yandex_document"

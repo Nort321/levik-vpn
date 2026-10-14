@@ -20,9 +20,13 @@ class LiveEventsTest {
             ": ping", "",
             "event: settings", "data: {}", "",
             "event: wipe", "data: {}", "",
+            "event: approvals", "data: {}", "",
             "data: {}", "",
         )
-        assertEquals(listOf(LiveEvent.READY, LiveEvent.SETTINGS), lines.mapNotNull(parser::line))
+        assertEquals(
+            listOf(LiveEvent.READY, LiveEvent.SETTINGS, LiveEvent.APPROVALS),
+            lines.mapNotNull(parser::line),
+        )
     }
 
     private val germany = TunnelServer(

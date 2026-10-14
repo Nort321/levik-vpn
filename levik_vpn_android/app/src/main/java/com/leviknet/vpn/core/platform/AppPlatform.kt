@@ -12,6 +12,8 @@ import androidx.core.content.edit
 import com.leviknet.vpn.BuildConfig
 import com.leviknet.vpn.MainActivity
 import com.leviknet.vpn.R
+import com.leviknet.vpn.core.auth.LoginApproval
+import com.leviknet.vpn.core.auth.PendingApproval
 import com.leviknet.vpn.core.logger.AppLogger
 import com.leviknet.vpn.core.network.ApiException
 import com.leviknet.vpn.core.network.ServiceEndpoints
@@ -28,10 +30,13 @@ import java.net.HttpURLConnection
 import java.net.Proxy
 import java.net.URL
 import java.security.SecureRandom
+import java.time.Duration
+import java.time.Instant
 import kotlin.random.Random
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -89,6 +94,14 @@ class AppPlatform(
     @Volatile
     private var sentPresence: PresenceReport? = null
 
+    private val approvalsMutex = Mutex()
+    private var approvalsExpiry: Job? = null
+
+    private val mutableApprovals = MutableStateFlow<List<PendingApproval>>(emptyList())
+
+    /** Sign-ins on the user's other devices waiting for this phone (Direct builds). */
+    val approvals: StateFlow<List<PendingApproval>> = mutableApprovals.asStateFlow()
+
     private val mutableAnnouncements = MutableStateFlow<List<AppAnnouncement>>(emptyList())
     val announcements: StateFlow<List<AppAnnouncement>> = mutableAnnouncements.asStateFlow()
 
@@ -120,7 +133,10 @@ class AppPlatform(
             repository.session.collect { status ->
                 when (status) {
                     SessionStatus.Authenticated -> syncSettings()
-                    SessionStatus.SignedOut -> forgetSyncState()
+                    SessionStatus.SignedOut -> {
+                        forgetSyncState()
+                        forgetApprovals()
+                    }
                     SessionStatus.Loading -> Unit
                 }
             }
@@ -485,12 +501,105 @@ class AppPlatform(
                 refreshConfig()
                 syncSettings()
                 refreshAccountQuietly()
+                refreshApprovals()
             }
+            LiveEvent.APPROVALS -> scope.launch { refreshApprovals() }
             LiveEvent.SETTINGS -> scope.launch { syncSettings() }
             LiveEvent.CONFIG -> scope.launch { refreshConfig() }
             LiveEvent.DEVICES -> scope.launch { refreshAccountQuietly() }
             LiveEvent.PRESENCE -> Unit
         }
+    }
+
+    /**
+     * Fetches the sign-ins waiting for approval. A new one posts a notification
+     * while the app is not on the screen; on the screen it shows a dialog.
+     */
+    suspend fun refreshApprovals() = approvalsMutex.withLock {
+        if (!LIVE_ENABLED || repository.session.value != SessionStatus.Authenticated) return@withLock
+        val fresh = try {
+            repository.pendingApprovals()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            AppLogger.d(TAG, "Pending approvals failed: ${error.javaClass.simpleName}")
+            return@withLock
+        }
+        val known = mutableApprovals.value.map(PendingApproval::id).toSet()
+        mutableApprovals.value = fresh
+        val pending = fresh.map(PendingApproval::id).toSet()
+        (known - pending).forEach(::cancelApprovalNotification)
+        if (!foreground.value) fresh.filter { it.id !in known }.forEach(::postApprovalNotification)
+        scheduleApprovalExpiry(fresh)
+    }
+
+    /** True when the sign-in was approved, false when it was declined. */
+    suspend fun answerApproval(id: String, number: Int?): Boolean {
+        val approval = mutableApprovals.value.firstOrNull { it.id == id }
+        require(approval != null && LoginApproval.isAnswer(approval, number)) { "Unknown sign-in approval" }
+        try {
+            return repository.decideApproval(id, number)
+        } finally {
+            mutableApprovals.value = mutableApprovals.value.filterNot { it.id == id }
+            cancelApprovalNotification(id)
+            scope.launch { refreshApprovals() }
+        }
+    }
+
+    /** Drops each request when it expires, even without another event. */
+    private fun scheduleApprovalExpiry(approvals: List<PendingApproval>) {
+        approvalsExpiry?.cancel()
+        val next = approvals.minOfOrNull(PendingApproval::expiresAt) ?: return
+        val waitMs = Duration.between(Instant.now(), next).toMillis().coerceAtLeast(0L) + APPROVAL_EXPIRY_SLACK_MS
+        approvalsExpiry = scope.launch {
+            delay(waitMs)
+            refreshApprovals()
+        }
+    }
+
+    private fun forgetApprovals() {
+        approvalsExpiry?.cancel()
+        mutableApprovals.value.forEach { cancelApprovalNotification(it.id) }
+        mutableApprovals.value = emptyList()
+    }
+
+    private fun approvalNotificationId(id: String) = APPROVAL_NOTIFICATION_ID_BASE + (id.hashCode() and 0xff)
+
+    private fun postApprovalNotification(approval: PendingApproval) {
+        if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        manager.createNotificationChannel(
+            NotificationChannel(
+                APPROVAL_CHANNEL_ID,
+                context.getString(R.string.notification_channel_sign_in),
+                NotificationManager.IMPORTANCE_HIGH,
+            ).apply { description = context.getString(R.string.notification_channel_sign_in_desc) },
+        )
+        val launch = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val notificationId = approvalNotificationId(approval.id)
+        val pendingIntent = PendingIntent.getActivity(
+            context, notificationId, launch, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val body = context.getString(R.string.approval_notification_body, approval.platformLabel, approval.deviceName)
+        val notification = NotificationCompat.Builder(context, APPROVAL_CHANNEL_ID)
+            .setSmallIcon(AppIconArtwork.smallIcon(context, AppIconManager(context).current()))
+            .setContentTitle(context.getString(R.string.approval_notification_title))
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setTimeoutAfter(Duration.between(Instant.now(), approval.expiresAt).toMillis().coerceAtLeast(1L))
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .build()
+        runCatching { manager.notify(notificationId, notification) }
+            .onFailure { AppLogger.w(TAG, "Could not show a sign-in approval") }
+    }
+
+    private fun cancelApprovalNotification(id: String) {
+        runCatching { NotificationManagerCompat.from(context).cancel(approvalNotificationId(id)) }
     }
 
     private suspend fun refreshAccountQuietly() {
@@ -573,6 +682,9 @@ class AppPlatform(
         const val NOTIFIED = "notified_announcements"
         const val CHANNEL_ID = "levik_announcements"
         const val NOTIFICATION_ID_BASE = 3000
+        const val APPROVAL_CHANNEL_ID = "levik_sign_in"
+        const val APPROVAL_NOTIFICATION_ID_BASE = 5000
+        const val APPROVAL_EXPIRY_SLACK_MS = 1_000L
         const val MAX_REMEMBERED = 200
         const val MAX_EXCHANGES = 2
         const val DEFAULT_REFRESH_S = 15 * 60L

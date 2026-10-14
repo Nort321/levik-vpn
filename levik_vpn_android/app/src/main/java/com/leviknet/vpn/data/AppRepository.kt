@@ -2,6 +2,8 @@ package com.leviknet.vpn.data
 
 import android.os.Build
 import com.leviknet.vpn.BuildConfig
+import com.leviknet.vpn.core.auth.LoginApproval
+import com.leviknet.vpn.core.auth.PendingApproval
 import com.leviknet.vpn.core.network.ApiException
 import com.leviknet.vpn.core.network.AuthChallengeRequest
 import com.leviknet.vpn.core.network.AuthChallengeResponse
@@ -243,10 +245,19 @@ class AppRepository(
                     appVersion = BuildConfig.VERSION_NAME,
                     requestSigningAlgorithm = deviceIdentity.requestSigningAlgorithm(),
                     profileEncryptionAlgorithm = deviceIdentity.profileEncryptionAlgorithm(),
-                )
+                ).withNumberMatch(accountActivationSupported)
             }
             apiClient.createChallenge(request)
         }
+
+    /** Direct builds ask to be approved by number on the user's other devices; Google Play builds do not. */
+    private fun AuthChallengeRequest.withNumberMatch(accountActivationSupported: Boolean): AuthChallengeRequest {
+        if (BuildConfig.IS_PLAY_DISTRIBUTION || !accountActivationSupported) return this
+        val hint = secureStore.get(SecureFileStore.ACCOUNT_HINT)
+            ?.let { bytes -> String(bytes, Charsets.UTF_8).also { bytes.fill(0) } }
+            ?.takeIf(LoginApproval::isAccountHint)
+        return copy(numberMatchSupported = true, accountHint = hint)
+    }
 
     suspend fun claimDevicePairing(pairingToken: String): Unit = authMutex.withLock {
         require(pairingToken.matches(Regex("[A-Za-z0-9_-]{43}"))) { "Invalid pairing token" }
@@ -309,12 +320,20 @@ class AppRepository(
             LoginState.PENDING -> LoginPollResult.Pending(response.pollIntervalSeconds)
             LoginState.EXPIRED -> LoginPollResult.Expired
             LoginState.DENIED -> LoginPollResult.Denied
+            LoginState.DECLINED -> LoginPollResult.Declined
             LoginState.AUTHENTICATED -> {
                 val accessToken = requireNotNull(response.accessToken)
                 require(accessToken.length in 32..MAX_ACCESS_TOKEN_LENGTH) {
                     "Invalid access token"
                 }
                 writeSessionToken(accessToken)
+                response.accountHint
+                    ?.takeIf { !BuildConfig.IS_PLAY_DISTRIBUTION && LoginApproval.isAccountHint(it) }
+                    ?.let { hint ->
+                        withContext(Dispatchers.IO) {
+                            secureStore.put(SecureFileStore.ACCOUNT_HINT, hint.toByteArray(Charsets.UTF_8))
+                        }
+                    }
                 refreshAccount()
                 LoginPollResult.Authenticated
             }
@@ -554,6 +573,14 @@ class AppRepository(
         val token = readToken() ?: return
         apiClient.clearPresence(token)
     }
+
+    /** Sign-ins on the user's other devices waiting for this phone; see core/auth/LoginApproval.kt. */
+    suspend fun pendingApprovals(): List<PendingApproval> =
+        LoginApproval.parse(apiClient.approvals(requireToken()).approvals, Instant.now())
+
+    /** True when the sign-in was approved, false when it was declined. */
+    suspend fun decideApproval(id: String, number: Int?): Boolean =
+        apiClient.decideApproval(requireToken(), id, number).state == "approved"
 
     /** The live event stream of this session; see core/platform/LiveEvents.kt. */
     suspend fun openEvents(): javax.net.ssl.HttpsURLConnection = apiClient.openEvents(requireToken())
@@ -873,4 +900,6 @@ sealed interface LoginPollResult {
     data object Authenticated : LoginPollResult
     data object Expired : LoginPollResult
     data object Denied : LoginPollResult
+    /** A wrong number or "this is not me" on the user's other device. */
+    data object Declined : LoginPollResult
 }

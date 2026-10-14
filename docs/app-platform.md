@@ -126,6 +126,7 @@ data, only what to fetch again:
 | `devices` | refreshes the account (a device signed in or out) |
 | `presence` | refreshes the live status of the other devices, if it shows them |
 | `config` | fetches the remote configuration (an announcement or switch changed) |
+| `approvals` | fetches the sign-ins waiting for approval (see below) |
 
 Unknown events are ignored. The server pings every 25 seconds and ends a
 stream after 14 minutes or when the session is revoked; apps reconnect after
@@ -145,6 +146,51 @@ server keeps it three minutes, without an address or history, and answers
 nothing was stored. `DELETE` on sign-out and quit removes it at once. Node and
 country are sent only while the VPN is connected. The devices page of the
 website shows "online" and the country.
+
+## Approving a sign-in
+
+A new app asks the user to approve it somewhere they are already signed in,
+by picking the number it shows ("number matching"). The activation code and
+the QR code stay as the fallback.
+
+The app adds `"numberMatchSupported": true` to the signed
+`POST /api/mobile/v1/auth/challenge` body (only together with
+`accountActivationSupported`), and `"accountHint"` if an earlier sign-in on
+this device gave it one. The response then also has:
+
+| Field | Meaning |
+| --- | --- |
+| `matchNumber` | 10–99, shown large on the sign-in screen |
+| `approvalRequested` | `true` when the hinted account's apps (and its Telegram) were asked |
+| `telegramUriComplete` | optional `https://t.me/<bot>?start=web_…`: the bot asks for the number |
+
+The number can be picked:
+
+- **in a signed-in app** of the hinted account. A remembered device asks its
+  account at most three times in ten minutes. The `approvals` event tells
+  the apps to fetch `GET /api/mobile/v1/approvals` →
+  `{ ok, approvals: [{ id, deviceName, platform, platformLabel, choices: [n, n, n], expiresAt }] }`
+  and answer `POST /api/mobile/v1/approvals` `{ "id": "<uuid>", "number": 37 }`
+  or `"number": null` for "this is not me" → `{ ok, state: "approved" | "declined" }`;
+- **in Telegram**, through `telegramUriComplete`. The bot shows the three
+  numbers and "This is not me". If the remembered account has Telegram, the
+  bot also writes first;
+- **on the website**, through `activationUriComplete`. `/activate` shows the
+  three numbers instead of a single button.
+
+A wrong number or "This is not me" ends the attempt: `POST /auth/status` then
+answers `{ "ok": true, "state": "declined" }`, and the app offers to start
+again. `authenticated` responses of number-matching apps carry
+`accountHint`: an opaque string the app keeps after signing out (and drops
+when the user removes the account from the app), valid for 180 days.
+
+Signing in by entering or scanning the activation code in a signed-in app
+(`/activation/authorize`) needs no number: the camera proves the user is
+next to the new device.
+
+Apps that are not on the screen post one notification per request. On
+Android, number matching is part of the direct build; Google Play builds sign
+in with the activation code and the website as before.
 
 ## Signing in to the website from an app
 

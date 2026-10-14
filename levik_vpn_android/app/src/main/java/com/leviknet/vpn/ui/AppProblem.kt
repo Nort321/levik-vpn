@@ -75,7 +75,8 @@ internal fun Throwable.toAppProblem(
 
 internal fun UiMessage.asProblem(): AppProblem? = when (this) {
     UiMessage.PAIRING_ALREADY_SIGNED_IN, UiMessage.SUBSCRIPTION_UPDATED, UiMessage.DEVICE_REVOKED_SUCCESS, UiMessage.SERVER_PING_UNAVAILABLE,
-    UiMessage.TRAFFIC_HISTORY_CLEARED, UiMessage.TRAFFIC_HISTORY_EXPORTED -> null
+    UiMessage.TRAFFIC_HISTORY_CLEARED, UiMessage.TRAFFIC_HISTORY_EXPORTED, UiMessage.DEVICE_AUTHORIZED_SUCCESS,
+    UiMessage.APPROVAL_CONFIRMED, UiMessage.APPROVAL_DECLINED, UiMessage.APPROVAL_GONE -> null
     else -> AppProblem(when (this) {
         UiMessage.SESSION_EXPIRED -> ProblemReason.SESSION
         UiMessage.SUBSCRIPTION_REQUIRED -> ProblemReason.SUBSCRIPTION
@@ -85,7 +86,7 @@ internal fun UiMessage.asProblem(): AppProblem? = when (this) {
         UiMessage.VPN_PERMISSION_DENIED -> ProblemReason.PERMISSION
         UiMessage.NOTIFICATION_PERMISSION_DENIED -> ProblemReason.NOTIFICATIONS
         UiMessage.LOCATION_PERMISSION_DENIED -> ProblemReason.LOCATION
-        UiMessage.LOGIN_DENIED -> ProblemReason.LOGIN
+        UiMessage.LOGIN_DENIED, UiMessage.LOGIN_DECLINED -> ProblemReason.LOGIN
         UiMessage.ATTESTATION_UNAVAILABLE -> ProblemReason.ATTESTATION
         UiMessage.SERVER_PING_UNAVAILABLE -> ProblemReason.VPN_NETWORK
         UiMessage.DEVICE_REVOKE_FAILED -> ProblemReason.DEVICE_REVOKE

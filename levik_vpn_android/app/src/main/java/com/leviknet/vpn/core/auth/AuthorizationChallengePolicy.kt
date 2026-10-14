@@ -52,7 +52,13 @@ internal object AuthorizationChallengePolicy {
     ): ChallengeAuthorization.LegacyTelegram? {
         val rawUri = challenge.verificationUriComplete ?: return null
         val code = challenge.verificationCode ?: return null
-        if (code.isBlank() || rawUri.length > MAX_LEGACY_URI_LENGTH) return null
+        if (code.isBlank()) return null
+        return telegramStartUri(rawUri)?.let { ChallengeAuthorization.LegacyTelegram(it, code) }
+    }
+
+    /** The bot's sign-in link as a tg:// link the Telegram app opens; null for anything else. */
+    fun telegramStartUri(rawUri: String): String? {
+        if (rawUri.length > MAX_LEGACY_URI_LENGTH) return null
         val uri = runCatching { URI(rawUri) }.getOrNull() ?: return null
         if (uri.rawUserInfo != null || uri.port != -1 || uri.rawFragment != null) return null
         val parameters = queryParameters(uri.rawQuery) ?: return null
@@ -70,8 +76,7 @@ internal object AuthorizationChallengePolicy {
             else -> false
         }
         if (!validTarget) return null
-        val nativeUri = "tg://resolve?domain=$TELEGRAM_BOT_USERNAME&start=$start"
-        return ChallengeAuthorization.LegacyTelegram(nativeUri, code)
+        return "tg://resolve?domain=$TELEGRAM_BOT_USERNAME&start=$start"
     }
 
     private fun queryParameters(rawQuery: String?): Map<String, String>? {

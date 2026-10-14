@@ -284,6 +284,32 @@ class MobileApiClient(
         return (response as? JsonObject)?.get("shared")?.let { it as? JsonPrimitive }?.booleanOrNull != false
     }
 
+    suspend fun approvals(accessToken: String): PendingApprovalsResponse {
+        val response: PendingApprovalsResponse = request(
+            method = METHOD_GET,
+            path = APPROVALS_PATH,
+            body = EMPTY_BODY,
+            accessToken = accessToken,
+            requiresIntegrity = false,
+        )
+        checkSuccess(response.ok)
+        return response
+    }
+
+    /** [number] null answers "this is not me". */
+    suspend fun decideApproval(accessToken: String, id: String, number: Int?): ApprovalDecisionResponse {
+        val body = approvalDecisionBody(id, number).encodeToByteArray()
+        val response: ApprovalDecisionResponse = request(
+            method = METHOD_POST,
+            path = APPROVALS_PATH,
+            body = body,
+            accessToken = accessToken,
+            requiresIntegrity = false,
+        )
+        checkSuccess(response.ok)
+        return response
+    }
+
     suspend fun clearPresence(accessToken: String) {
         request<JsonElement>(
             method = METHOD_DELETE,
@@ -618,6 +644,15 @@ class MobileApiClient(
         private const val WEB_HANDOFF_PATH = "/api/mobile/v1/web-handoff"
         private const val PRESENCE_PATH = "/api/mobile/v1/presence"
         private const val EVENTS_PATH = "/api/mobile/v1/events"
+        private const val APPROVALS_PATH = "/api/mobile/v1/approvals"
+
+        /** The server needs "number": null, which the shared Json leaves out, so the body is built by hand. */
+        internal fun approvalDecisionBody(id: String, number: Int?): String = JsonObject(
+            mapOf(
+                "id" to JsonPrimitive(id),
+                "number" to (number?.let(::JsonPrimitive) ?: JsonNull),
+            ),
+        ).toString()
         private const val INVITE_PREVIEW_PATH = "/api/mobile/v1/invites/preview"
         private const val INVITE_CLAIM_PATH = "/api/mobile/v1/invites/claim"
         private const val FAMILY_PATH = "/api/mobile/v1/family"
