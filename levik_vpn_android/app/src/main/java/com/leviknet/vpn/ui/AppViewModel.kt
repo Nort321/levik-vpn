@@ -64,6 +64,9 @@ import com.leviknet.vpn.vpn.VpnConnectionState
 import com.leviknet.vpn.vpn.VpnController
 import com.leviknet.vpn.vpn.VpnSnapshot
 import com.leviknet.vpn.core.platform.AppAnnouncement
+import com.leviknet.vpn.core.platform.AppCatalog
+import com.leviknet.vpn.core.platform.AppCatalogPolicy
+import com.leviknet.vpn.core.platform.DirectAppSuggestion
 import com.leviknet.vpn.core.platform.AppLinks
 import com.leviknet.vpn.core.platform.AppPlatform
 import com.leviknet.vpn.core.platform.CabinetTarget
@@ -118,6 +121,8 @@ class AppViewModel(
     private val appContext: Context? = null,
     whitelistDetector: WhitelistDetector? = null,
     private val appPlatform: AppPlatform? = null,
+    /** The signed app catalog (Direct builds): offers to let banks bypass the VPN. */
+    private val appCatalog: StateFlow<AppCatalog?>? = null,
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(AppUiState(yandexSupported = repository.supportsYandex()))
     private val effectChannel = Channel<AppEffect>(Channel.BUFFERED)
@@ -370,6 +375,16 @@ class AppViewModel(
         viewModelScope.launch {
             settings.anonymousTelemetryEnabled.collect { enabled ->
                 mutableState.update { it.copy(anonymousTelemetryEnabled = enabled) }
+            }
+        }
+        appCatalog?.let { catalog ->
+            viewModelScope.launch {
+                combine(
+                    catalog,
+                    settings.splitTunnelMode,
+                    settings.splitTunnelPackages,
+                    settings.answeredDirectApps,
+                ) { _, _, _, _ -> }.collectLatest { refreshDirectAppSuggestion() }
             }
         }
         appPlatform?.let { platform ->
@@ -794,6 +809,47 @@ class AppViewModel(
     }
 
     /** "Later": the request stays pending on the server and in the other apps. */
+    private suspend fun refreshDirectAppSuggestion() {
+        val catalog = appCatalog ?: return
+        val packageManager = appContext?.packageManager ?: return
+        if (!settings.hasInstalledAppsConsent()) return
+        val suggestion = withContext(Dispatchers.IO) {
+            AppCatalogPolicy.nextSuggestion(
+                catalog = catalog.value,
+                mode = settings.splitTunnelMode.value,
+                packages = settings.splitTunnelPackages.value,
+                answered = settings.answeredDirectApps.value,
+                installed = { packageName -> packageManager.isInstalled(packageName) },
+            )
+        }
+        mutableState.update { it.copy(directAppSuggestion = suggestion) }
+    }
+
+    /** Lets the suggested app bypass the VPN; every other app keeps its route. */
+    fun routeAppDirectly(suggestion: DirectAppSuggestion) {
+        val (mode, packages) = AppCatalogPolicy.routeDirect(
+            settings.splitTunnelMode.value,
+            settings.splitTunnelPackages.value,
+            suggestion.packageName,
+        )
+        settings.setSplitTunnel(mode, packages)
+        settings.rememberDirectAppAnswer(suggestion.packageName)
+        mutableState.update { it.copy(directAppSuggestion = null, message = UiMessage.DIRECT_APP_ADDED) }
+        if (mutableState.value.vpn.state == VpnConnectionState.CONNECTED) {
+            vpnController.reconfigure()
+        }
+    }
+
+    /** Closed without an answer: asked again the next time the app comes to the screen. */
+    fun postponeDirectApp() {
+        mutableState.update { it.copy(directAppSuggestion = null) }
+    }
+
+    fun keepAppInVpn(suggestion: DirectAppSuggestion) {
+        settings.rememberDirectAppAnswer(suggestion.packageName)
+        mutableState.update { it.copy(directAppSuggestion = null) }
+    }
+
     fun hideApproval(id: String) {
         mutableState.update { it.copy(hiddenApprovals = it.hiddenApprovals + id) }
     }
@@ -2400,6 +2456,8 @@ class AppViewModel(
     fun onAppForegrounded() {
         refreshWhitelistStatus()
         appPlatform?.onForeground()
+        // A bank may have been installed meanwhile.
+        if (appCatalog != null) viewModelScope.launch { refreshDirectAppSuggestion() }
         if (mutableState.value.subscriptionManagementOpen) {
             refreshSubscription(showErrors = false)
         }
@@ -2651,6 +2709,7 @@ class AppViewModel(
                         appContext = container.appContext,
                         whitelistDetector = container.whitelistDetector,
                         appPlatform = container.appPlatform,
+                        appCatalog = container.appCatalog.catalog.takeIf { AppContainer.APP_CATALOG_ENABLED },
                     ) as T
                 }
             }
@@ -2850,7 +2909,17 @@ data class AppUiState(
     val answeringApproval: Boolean = false,
     /** Servers under maintenance or about to be, with the time it ends. */
     val serverMaintenance: Map<String, Long> = emptyMap(),
+    /** An installed bank that may refuse to work through the VPN (Direct builds). */
+    val directAppSuggestion: DirectAppSuggestion? = null,
 ) {
+    /** Asked while the VPN is on, when the bank would actually notice it, and never over a sign-in request. */
+    fun directAppPrompt(now: java.time.Instant): DirectAppSuggestion? =
+        directAppSuggestion?.takeIf {
+            session == SessionStatus.Authenticated &&
+                vpn.state == VpnConnectionState.CONNECTED &&
+                approvalPrompt(now) == null
+        }
+
     /** The sign-in to ask about now: not hidden with "Later" and not expired. */
     fun approvalPrompt(now: java.time.Instant): PendingApproval? =
         pendingApprovals.firstOrNull { it.id !in hiddenApprovals && it.expiresAt.isAfter(now) }
@@ -2934,6 +3003,7 @@ enum class UiMessage {
     APPROVAL_CONFIRMED,
     APPROVAL_DECLINED,
     APPROVAL_GONE,
+    DIRECT_APP_ADDED,
     ATTESTATION_UNAVAILABLE,
     SUBSCRIPTION_UPDATED,
     SERVER_PING_UNAVAILABLE,
@@ -2963,4 +3033,15 @@ private sealed interface PendingRelayIntroduction {
     val serverId: String
     data class SelectServer(override val serverId: String) : PendingRelayIntroduction
     data class Connect(override val serverId: String, val subscriptionId: String) : PendingRelayIntroduction
+}
+
+private fun PackageManager.isInstalled(packageName: String): Boolean = try {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        getApplicationInfo(packageName, PackageManager.ApplicationInfoFlags.of(0))
+    } else {
+        @Suppress("DEPRECATION")
+        getApplicationInfo(packageName, 0)
+    }.enabled
+} catch (_: PackageManager.NameNotFoundException) {
+    false
 }

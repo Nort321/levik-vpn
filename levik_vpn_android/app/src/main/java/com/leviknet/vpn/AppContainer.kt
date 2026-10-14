@@ -9,6 +9,9 @@ import com.leviknet.vpn.core.network.ServiceEndpointsStore
 import com.leviknet.vpn.core.network.WhitelistMapReporter
 import com.leviknet.vpn.core.network.WhitelistMapWorker
 import com.leviknet.vpn.core.network.WhitelistDetector
+import com.leviknet.vpn.core.platform.AppCatalogPolicy
+import com.leviknet.vpn.core.platform.AppCatalogStore
+import com.leviknet.vpn.core.platform.SignedCatalog
 import com.leviknet.vpn.core.network.createAppAttestationProvider
 import com.leviknet.vpn.core.security.DeviceIdentity
 import com.leviknet.vpn.core.security.HybridProfileDecryptor
@@ -83,6 +86,20 @@ class AppContainer(application: Application) {
     private val serviceEndpoints = ServiceEndpointsStore(File(application.noBackupFilesDir, "service-endpoints.json"))
         .also { it.load() }
 
+    /** Signed catalog of apps by meaning; Direct builds offer to let banks bypass the VPN. */
+    val appCatalog = AppCatalogStore(
+        file = File(application.noBackupFilesDir, "app-catalog.json"),
+        builtIn = {
+            runCatching {
+                val assets = application.assets
+                SignedCatalog(
+                    body = assets.open(AppCatalogPolicy.FILE_NAME).use { it.readBytes() },
+                    signature = assets.open("${AppCatalogPolicy.FILE_NAME}.sig").use { it.readBytes() }.toString(Charsets.UTF_8),
+                )
+            }.getOrNull()
+        },
+    )
+
     private val requestSigner = RequestSigner(deviceIdentity)
     private val attestationProvider = createAppAttestationProvider(
         application,
@@ -139,8 +156,10 @@ class AppContainer(application: Application) {
 
     init {
         nativeCleanupScope.launch {
+            if (APP_CATALOG_ENABLED) appCatalog.load()
             while (true) {
                 serviceEndpoints.refreshIfDue(ENDPOINTS_REFRESH_MS)
+                if (APP_CATALOG_ENABLED) appCatalog.refreshIfDue(ENDPOINTS_REFRESH_MS)
                 delay(ENDPOINTS_CHECK_MS)
             }
         }
@@ -229,6 +248,9 @@ class AppContainer(application: Application) {
         private const val SUBSCRIPTION_REFRESH_INTERVAL_MS = 60 * 60 * 1000L
         private const val ENDPOINTS_REFRESH_MS = 12 * 60 * 60 * 1000L
         private const val ENDPOINTS_CHECK_MS = 60 * 60 * 1000L
+
+        /** The app catalog and the bank prompt are part of the Direct build only. */
+        val APP_CATALOG_ENABLED = !BuildConfig.IS_PLAY_DISTRIBUTION
         private const val ENDPOINTS_RETRY_MS = 60 * 1000L
     }
 }

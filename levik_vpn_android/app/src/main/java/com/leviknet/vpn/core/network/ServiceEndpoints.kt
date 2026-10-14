@@ -86,16 +86,23 @@ object ServiceEndpoints {
     /** Levik website hosts: the original domains and the signed website, if it moved. */
     fun websiteHosts(): Set<String> = LEGACY_WEB_HOSTS + URI(current.webOrigin).host
 
-    /** Verifies the signature over the exact bytes, then the content. Null when anything is off. */
-    fun verify(body: ByteArray, signature: String, key: PublicKey? = null): ServiceEndpointsDocument? {
-        if (body.isEmpty() || body.size > MAX_DOCUMENT_BYTES || signature.length > MAX_SIGNATURE_BYTES) return null
+    /** True when [signature] was made with the Levik configuration key over exactly these bytes. */
+    internal fun signatureValid(body: ByteArray, signature: String, key: PublicKey? = null): Boolean {
+        if (body.isEmpty() || signature.length > MAX_SIGNATURE_BYTES) return false
         val encoded = signature.trim()
-        if (!SIGNATURE.matches(encoded)) return null
+        if (!SIGNATURE.matches(encoded)) return false
         return runCatching {
             val verifier = Signature.getInstance("SHA256withECDSA")
             verifier.initVerify(key ?: configKey)
             verifier.update(body)
-            if (!verifier.verify(Base64.getDecoder().decode(encoded))) return null
+            verifier.verify(Base64.getDecoder().decode(encoded))
+        }.getOrDefault(false)
+    }
+
+    /** Verifies the signature over the exact bytes, then the content. Null when anything is off. */
+    fun verify(body: ByteArray, signature: String, key: PublicKey? = null): ServiceEndpointsDocument? {
+        if (body.size > MAX_DOCUMENT_BYTES || !signatureValid(body, signature, key)) return null
+        return runCatching {
             val document = Json.parseToJsonElement(String(body, Charsets.UTF_8)) as? JsonObject ?: return null
             if ((document["schema"] as? JsonPrimitive)?.takeUnless { it.isString }?.intOrNull != 1) return null
             val sequence = (document["sequence"] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull
@@ -157,7 +164,7 @@ fun interface EndpointsFetcher {
     fun get(url: String, limit: Int): ByteArray?
 }
 
-private val httpsFetcher = EndpointsFetcher { url, limit ->
+internal val httpsFetcher = EndpointsFetcher { url, limit ->
     val connection = URL(url).openConnection() as HttpsURLConnection
     try {
         connection.requestMethod = "GET"

@@ -599,6 +599,11 @@
     <string name="maintenance_moved_title">Server “%1$s” is going into maintenance</string>
     <string name="maintenance_moved_body">Levik VPN moved you to “%1$s” ahead of time.</string>
     <string name="server_maintenance_until">Maintenance until %1$s</string>
+    <string name="direct_app_title">%1$s may not work with a VPN</string>
+    <string name="direct_app_body">Let it bypass the VPN? Only this app will connect directly; the others keep their route. You can change this under Split Tunneling.</string>
+    <string name="direct_app_confirm">Bypass the VPN</string>
+    <string name="direct_app_keep">Keep in the VPN</string>
+    <string name="direct_app_added">The app now connects without the VPN</string>
     <string name="approval_confirmed">Sign-in confirmed</string>
     <string name="approval_declined">Sign-in cancelled: the device will not get access</string>
     <string name="approval_gone">This sign-in request was already handled or has expired</string>

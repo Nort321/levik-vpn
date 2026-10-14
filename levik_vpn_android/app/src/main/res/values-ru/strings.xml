@@ -599,6 +599,11 @@
     <string name="maintenance_moved_title">Сервер «%1$s» уходит на обслуживание</string>
     <string name="maintenance_moved_body">Levik VPN заранее переключился на «%1$s».</string>
     <string name="server_maintenance_until">Обслуживание до %1$s</string>
+    <string name="direct_app_title">%1$s может не работать с VPN</string>
+    <string name="direct_app_body">Пускать его напрямую? Без VPN будет работать только это приложение, остальные — как раньше. Изменить можно в разделе «Раздельное туннелирование».</string>
+    <string name="direct_app_confirm">Пускать напрямую</string>
+    <string name="direct_app_keep">Оставить через VPN</string>
+    <string name="direct_app_added">Приложение теперь работает без VPN</string>
     <string name="approval_confirmed">Вход подтверждён</string>
     <string name="approval_declined">Вход отменён: устройство не получит доступ</string>
     <string name="approval_gone">Запрос на вход уже обработан или истёк</string>

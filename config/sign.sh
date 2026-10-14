@@ -1,12 +1,14 @@
 #!/bin/sh
-# Signs config/levik-config-v1.json for the apps (ECDSA P-256, SHA-256, base64 DER).
+# Signs a document for the apps (ECDSA P-256, SHA-256, base64 DER):
+#   sh config/sign.sh                          the service host list, levik-config-v1.json
+#   sh config/sign.sh levik-categories-v1.json the app category catalog
 # Before signing: raise "sequence" by one and update "issuedAt"; the apps ignore
 # a document whose sequence is lower than the one they already have.
 # Key: ~/.config/levik/remote-config-p256.pem (keep an offline backup).
 set -eu
 
 DIR=$(cd "$(dirname "$0")" && pwd)
-DOC=$DIR/levik-config-v1.json
+DOC=$DIR/$(basename "${1:-levik-config-v1.json}")
 KEY=${LEVIK_CONFIG_KEY:-$HOME/.config/levik/remote-config-p256.pem}
 PUB=MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEBxwZK9Ledu9WcstW72cqoVTP9AjtB5dzNIhqmvTlm0lXRaqspdY1KbwCnzhjgCY10hAi9CL37PxhY/GGaIdAdQ==
 

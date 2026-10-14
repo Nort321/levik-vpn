@@ -159,6 +159,27 @@ keep the stream while signed in; Android keeps it while the app is visible or
 the VPN is connected. A `401` stops the stream until a regular request
 decides whether the session is gone.
 
+## App catalog
+
+`config/levik-categories-v1.json` groups apps and sites by meaning: banks,
+payments, government services. Each app has an id, a category, a Russian and an
+English name, Android package names, domains, and `suggestDirect` for apps
+known to refuse working while a VPN is on. The document is signed like the
+service host list (`sh config/sign.sh levik-categories-v1.json`, raise
+`sequence` first) and published next to it on every mirror: the apps take the
+service host list's `configUrls` and replace the file name. A copy is built
+into the app; a downloaded one is used only when its signature is valid and its
+sequence is higher, and it is verified again on every start. The catalog only
+travels to the device: what is installed never leaves it.
+
+Android (Direct build) checks twice a day for a newer catalog. When an
+installed app with `suggestDirect` still goes through the VPN and the user has
+not answered for it, the app asks while the VPN is connected: "Sber may not
+work with a VPN. Let it bypass the VPN?" Yes adds the app to the apps without
+VPN (starting a fresh list when all apps went through the VPN, removing it
+from the list in "only selected apps" mode) and applies it at once; either
+answer is remembered, closing the dialog asks again later.
+
 ## Device presence
 
 While open, an app reports `PUT /api/mobile/v1/presence`

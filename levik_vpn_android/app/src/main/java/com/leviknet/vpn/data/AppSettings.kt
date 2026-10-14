@@ -316,6 +316,9 @@ class AppSettings(context: Context) {
     private val mutableFavoriteServerIds = MutableStateFlow(
         preferences.getStringSet(FAVORITE_SERVER_IDS, emptySet()) ?: emptySet(),
     )
+    private val mutableAnsweredDirectApps = MutableStateFlow(
+        preferences.getStringSet(ANSWERED_DIRECT_APPS, emptySet()) ?: emptySet(),
+    )
     private val mutableFavoriteNodes = MutableStateFlow(
         preferences.getString(FAVORITE_NODES, null),
     )
@@ -365,6 +368,9 @@ class AppSettings(context: Context) {
     val autoConnectOnBoot: StateFlow<Boolean> = mutableAutoConnectOnBoot.asStateFlow()
     val autoFallbackServer: StateFlow<Boolean> = mutableAutoFallbackServer.asStateFlow()
     val favoriteServerIds: StateFlow<Set<String>> = mutableFavoriteServerIds.asStateFlow()
+
+    /** Packages the user was already asked about letting them bypass the VPN. */
+    val answeredDirectApps: StateFlow<Set<String>> = mutableAnsweredDirectApps.asStateFlow()
 
     /** The account's favourite node list as last reconciled; null before the first reconcile. */
     val favoriteNodes: StateFlow<String?> = mutableFavoriteNodes.asStateFlow()
@@ -546,6 +552,22 @@ class AppSettings(context: Context) {
             putString(SPLIT_TUNNEL_MODE, mode.name)
         }
         mutableSplitTunnelMode.value = mode
+    }
+
+    /** Mode and packages together, so the service never reads one without the other. */
+    fun setSplitTunnel(mode: SplitTunnelMode, packages: Set<String>) {
+        preferences.edit(commit = true) {
+            putString(SPLIT_TUNNEL_MODE, mode.name)
+            putStringSet(SPLIT_TUNNEL_PACKAGES, packages)
+        }
+        mutableSplitTunnelMode.value = mode
+        mutableSplitTunnelPackages.value = packages
+    }
+
+    fun rememberDirectAppAnswer(packageName: String) {
+        val answered = mutableAnsweredDirectApps.value + packageName
+        preferences.edit(commit = true) { putStringSet(ANSWERED_DIRECT_APPS, answered) }
+        mutableAnsweredDirectApps.value = answered
     }
 
     fun setSplitTunnelPackages(packages: Set<String>) {
@@ -730,6 +752,7 @@ class AppSettings(context: Context) {
         private const val AUTO_CONNECT_ON_BOOT = "auto_connect_on_boot"
         private const val AUTO_FALLBACK_SERVER = "auto_fallback_server"
         private const val FAVORITE_SERVER_IDS = "favorite_server_ids"
+        private const val ANSWERED_DIRECT_APPS = "answered_direct_apps"
         private const val FAVORITE_NODES = "favorite_nodes"
         private const val FAVORITE_RECONCILED_LOCAL = "favorite_reconciled_local"
         private const val CUSTOM_DIRECT_DOMAINS = "custom_direct_domains"

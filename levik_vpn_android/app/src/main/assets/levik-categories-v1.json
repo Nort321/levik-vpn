@@ -1,0 +1,102 @@
+{
+  "schema": 1,
+  "sequence": 1,
+  "issuedAt": "2026-10-14T18:00:00Z",
+  "categories": [
+    { "id": "banks", "title": { "ru": "Банки", "en": "Banks" } },
+    { "id": "payments", "title": { "ru": "Платежи", "en": "Payments" } },
+    { "id": "government", "title": { "ru": "Госуслуги", "en": "Government services" } }
+  ],
+  "apps": [
+    {
+      "id": "sber", "category": "banks", "name": { "ru": "Сбер", "en": "Sber" },
+      "android": ["ru.sberbankmobile"],
+      "domains": ["sberbank.ru", "sber.ru"],
+      "suggestDirect": true
+    },
+    {
+      "id": "tbank", "category": "banks", "name": { "ru": "Т-Банк", "en": "T-Bank" },
+      "android": ["com.idamob.tinkoff.android"],
+      "domains": ["tbank.ru", "tinkoff.ru"],
+      "suggestDirect": true
+    },
+    {
+      "id": "vtb", "category": "banks", "name": { "ru": "ВТБ", "en": "VTB" },
+      "android": ["ru.vtb24.mobilebanking.android"],
+      "domains": ["vtb.ru"],
+      "suggestDirect": true
+    },
+    {
+      "id": "alfa", "category": "banks", "name": { "ru": "Альфа-Банк", "en": "Alfa-Bank" },
+      "android": ["ru.alfabank.mobile.android"],
+      "domains": ["alfabank.ru"],
+      "suggestDirect": true
+    },
+    {
+      "id": "gazprombank", "category": "banks", "name": { "ru": "Газпромбанк", "en": "Gazprombank" },
+      "android": ["ru.gazprombank.android.mobilebank.app"],
+      "domains": ["gazprombank.ru"],
+      "suggestDirect": true
+    },
+    {
+      "id": "raiffeisen", "category": "banks", "name": { "ru": "Райффайзен Банк", "en": "Raiffeisenbank" },
+      "android": ["ru.raiffeisennews"],
+      "domains": ["raiffeisen.ru"],
+      "suggestDirect": true
+    },
+    {
+      "id": "sovcombank", "category": "banks", "name": { "ru": "Совкомбанк", "en": "Sovcombank" },
+      "android": ["ru.sovcomcard.halva.v1"],
+      "domains": ["sovcombank.ru", "halvacard.ru"],
+      "suggestDirect": true
+    },
+    {
+      "id": "psb", "category": "banks", "name": { "ru": "ПСБ", "en": "PSB" },
+      "android": ["logo.com.mbanking"],
+      "domains": ["psbank.ru"],
+      "suggestDirect": true
+    },
+    {
+      "id": "rshb", "category": "banks", "name": { "ru": "Россельхозбанк", "en": "Rosselkhozbank" },
+      "android": ["ru.rshb.dbo"],
+      "domains": ["rshb.ru"],
+      "suggestDirect": true
+    },
+    {
+      "id": "pochtabank", "category": "banks", "name": { "ru": "Почта Банк", "en": "Pochta Bank" },
+      "android": ["ru.letobank.Prometheus"],
+      "domains": ["pochtabank.ru"],
+      "suggestDirect": true
+    },
+    {
+      "id": "mirpay", "category": "payments", "name": { "ru": "Mir Pay", "en": "Mir Pay" },
+      "android": ["ru.nspk.mirpay"],
+      "domains": ["mirpay.ru"],
+      "suggestDirect": true
+    },
+    {
+      "id": "sbpay", "category": "payments", "name": { "ru": "СБПэй", "en": "SBPay" },
+      "android": ["ru.nspk.sbpay"],
+      "domains": ["sbp.nspk.ru"],
+      "suggestDirect": true
+    },
+    {
+      "id": "yoomoney", "category": "payments", "name": { "ru": "ЮMoney", "en": "YooMoney" },
+      "android": ["ru.yoo.money"],
+      "domains": ["yoomoney.ru"],
+      "suggestDirect": false
+    },
+    {
+      "id": "gosuslugi", "category": "government", "name": { "ru": "Госуслуги", "en": "Gosuslugi" },
+      "android": ["ru.rostel"],
+      "domains": ["gosuslugi.ru"],
+      "suggestDirect": false
+    },
+    {
+      "id": "moy-nalog", "category": "government", "name": { "ru": "Мой налог", "en": "Moy Nalog" },
+      "android": ["com.gnivts.selfemployed"],
+      "domains": ["nalog.gov.ru"],
+      "suggestDirect": false
+    }
+  ]
+}

@@ -76,7 +76,8 @@ internal fun Throwable.toAppProblem(
 internal fun UiMessage.asProblem(): AppProblem? = when (this) {
     UiMessage.PAIRING_ALREADY_SIGNED_IN, UiMessage.SUBSCRIPTION_UPDATED, UiMessage.DEVICE_REVOKED_SUCCESS, UiMessage.SERVER_PING_UNAVAILABLE,
     UiMessage.TRAFFIC_HISTORY_CLEARED, UiMessage.TRAFFIC_HISTORY_EXPORTED, UiMessage.DEVICE_AUTHORIZED_SUCCESS,
-    UiMessage.APPROVAL_CONFIRMED, UiMessage.APPROVAL_DECLINED, UiMessage.APPROVAL_GONE -> null
+    UiMessage.APPROVAL_CONFIRMED, UiMessage.APPROVAL_DECLINED, UiMessage.APPROVAL_GONE,
+    UiMessage.DIRECT_APP_ADDED -> null
     else -> AppProblem(when (this) {
         UiMessage.SESSION_EXPIRED -> ProblemReason.SESSION
         UiMessage.SUBSCRIPTION_REQUIRED -> ProblemReason.SUBSCRIPTION

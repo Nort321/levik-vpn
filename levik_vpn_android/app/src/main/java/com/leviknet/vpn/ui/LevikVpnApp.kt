@@ -718,6 +718,15 @@ fun LevikVpnApp(viewModel: AppViewModel) {
         }
     }
 
+    state.directAppPrompt(java.time.Instant.now())?.let { suggestion ->
+        DirectAppDialog(
+            suggestion = suggestion,
+            onRouteDirectly = { viewModel.routeAppDirectly(suggestion) },
+            onKeepInVpn = { viewModel.keepAppInVpn(suggestion) },
+            onDismiss = viewModel::postponeDirectApp,
+        )
+    }
+
     if (showPauseDialog) {
         PauseVpnDialog(
             onDismiss = { showPauseDialog = false },
@@ -7164,6 +7173,7 @@ private fun UiMessage.localized(): String = stringResource(
         UiMessage.APPROVAL_CONFIRMED -> R.string.approval_confirmed
         UiMessage.APPROVAL_DECLINED -> R.string.approval_declined
         UiMessage.APPROVAL_GONE -> R.string.approval_gone
+        UiMessage.DIRECT_APP_ADDED -> R.string.direct_app_added
         UiMessage.ATTESTATION_UNAVAILABLE -> R.string.attestation_unavailable
         UiMessage.SUBSCRIPTION_UPDATED -> R.string.subscription_updated
         UiMessage.SERVER_PING_UNAVAILABLE -> R.string.server_ping_unavailable
