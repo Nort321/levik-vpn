@@ -19,6 +19,7 @@ import com.leviknet.vpn.data.AppIconManager
 import com.leviknet.vpn.data.AppRepository
 import com.leviknet.vpn.data.AppSettings
 import com.leviknet.vpn.data.SessionStatus
+import com.leviknet.vpn.vpn.TunnelServer
 import com.leviknet.vpn.vpn.VpnConnectionState
 import com.leviknet.vpn.vpn.VpnController
 import java.io.File
@@ -44,6 +45,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.booleanOrNull
 
@@ -66,6 +68,7 @@ class AppPlatform(
     private val configClient = RemoteConfigClient(BuildConfig.VERSION_NAME)
     private val configMutex = Mutex()
     private val syncMutex = Mutex()
+    private val favoritesMutex = Mutex()
 
     @Volatile
     private var stored: StoredRemoteConfig? = null
@@ -109,13 +112,22 @@ class AppPlatform(
                 }
             }
         }
+        if (SHARE_FAVORITES) {
+            scope.launch {
+                // Starring a server here, a new server list or the account's list: bring both sides together.
+                combine(settings.favoriteServerIds, repository.tunnelProfile, settings.favoriteNodes) { _, profile, _ ->
+                    profile?.servers
+                }.collectLatest { servers -> if (servers != null) reconcileFavorites(servers) }
+            }
+        }
         scope.launch {
             // Local edits are sent shortly after the user stops changing them.
             combine(
-                listOf<Flow<Any>>(
+                listOf<Flow<Any?>>(
                     settings.routingPreset, settings.automaticServer, settings.autoHealingEnabled,
                     settings.killSwitchEnabled, settings.useDoh, settings.antiDpiEnabled,
                     settings.antiDpiPackets, settings.antiDpiLength, settings.antiDpiInterval,
+                    settings.favoriteNodes,
                 ),
             ) { localValues() }
                 .distinctUntilChanged()
@@ -286,8 +298,13 @@ class AppPlatform(
             }
             checkNotNull(document) { "Invalid settings document" }
             if (!mutableSyncEnabled.value) return
+            if (baseline?.containsKey(SettingsSyncPolicy.FAVORITE_NODES) != true) {
+                joinFavorites(localValues(), document.settings)?.let { pending = pending + it }
+            }
             val local = localValues()
             pending = SettingsSyncPolicy.withoutConfirmed(pending, sent) + SettingsSyncPolicy.changes(current, local)
+            pending = pending + SettingsSyncPolicy.missingRemotely(local, document.settings)
+                .filterKeys { it !in pending }
             applyRemote(SettingsSyncPolicy.remotePatch(local, document.settings, pending))
             saveSettings(PENDING, pending)
             saveSettings(BASELINE, localValues())
@@ -306,6 +323,7 @@ class AppPlatform(
             settings.setRoutingPreset(it)
             reconfigure = true
         }
+        if (SHARE_FAVORITES) patch[SettingsSyncPolicy.FAVORITE_NODES]?.content?.let(settings::setFavoriteNodes)
         patch[SettingsSyncPolicy.AUTOMATIC_SERVER]?.booleanOrNull?.let(settings::setAutomaticServer)
         patch[SettingsSyncPolicy.AUTO_RECONNECT]?.booleanOrNull?.let(settings::setAutoHealingEnabled)
         patch[SettingsSyncPolicy.KILL_SWITCH]?.booleanOrNull?.let(settings::setKillSwitchEnabled)
@@ -326,6 +344,38 @@ class AppPlatform(
         }
         if (reconfigure && vpnController.state.value.state == VpnConnectionState.CONNECTED) vpnController.reconfigure()
         AppLogger.i(TAG, "Settings synced from the account: ${patch.keys.joinToString()}")
+    }
+
+    /**
+     * The first exchange that includes this phone's favourites keeps those of
+     * both sides: their union is applied here and returned for upload when it
+     * differs. Before this phone has a list, the account's becomes its own.
+     */
+    private fun joinFavorites(local: SyncedSettings, remote: SyncedSettings): SyncedSettings? {
+        if (!SHARE_FAVORITES) return null
+        val key = SettingsSyncPolicy.FAVORITE_NODES
+        val theirs = remote[key]?.content ?: return null
+        val mine = local[key]?.content
+        if (mine == null) {
+            settings.setFavoriteNodes(theirs)
+            return null
+        }
+        if (mine == theirs) return null
+        val joined = FavoriteNodes.union(mine, theirs)
+        settings.setFavoriteNodes(joined)
+        return if (joined == theirs) null else mapOf(key to JsonPrimitive(joined))
+    }
+
+    private suspend fun reconcileFavorites(servers: List<TunnelServer>) = favoritesMutex.withLock {
+        val stored = settings.favoriteNodes.value
+        val state = FavoriteNodes.State(FavoriteNodes.parse(stored), settings.favoriteReconciledLocal())
+        val local = settings.favoriteServerIds.value
+        val result = FavoriteNodes.reconcile(state, local, FavoriteNodes.serversByNode(servers))
+        val nodes = FavoriteNodes.canonical(result.state.nodes)
+        if (nodes == stored && result.local == local && result.state.reconciledLocal == state.reconciledLocal) {
+            return@withLock
+        }
+        settings.applyFavoriteReconcile(result.local, nodes, result.state.reconciledLocal)
     }
 
     private fun forgetSyncState() {
@@ -349,6 +399,7 @@ class AppPlatform(
             antiDpiPackets = settings.antiDpiPackets.value,
             antiDpiLength = settings.antiDpiLength.value,
             antiDpiInterval = settings.antiDpiInterval.value,
+            favoriteNodes = if (SHARE_FAVORITES) settings.favoriteNodes.value else null,
         ),
     )
 
@@ -379,6 +430,9 @@ class AppPlatform(
         const val SETTINGS_PUSH_DELAY_MS = 1_500L
         const val SETTINGS_SYNC_INTERVAL_MS = 30 * 60 * 1_000L
         val SALT_PATTERN = Regex("^[0-9a-f]{32}$")
+
+        /** Play builds keep favourites on the phone; their data declaration does not cover them. */
+        val SHARE_FAVORITES = !BuildConfig.IS_PLAY_DISTRIBUTION
         val INACTIVE_TUNNEL = setOf(VpnConnectionState.DISCONNECTED, VpnConnectionState.ERROR)
     }
 }

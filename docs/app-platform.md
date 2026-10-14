@@ -75,9 +75,29 @@ Shared fields, the same meaning in every app:
 | `antiDpiEnabled` | boolean |
 | `antiDpiPackets` | `tlshello`, `N` or `N-M` (up to 3 digits), or empty; ≤ 24 characters |
 | `antiDpiLength`, `antiDpiInterval` | `N` or `N-M` (up to 4 digits), or empty; ≤ 16 characters |
+| `favoriteNodes` | node ids of the favourite servers, sorted, distinct, joined by `,`; at most 40; empty for none |
 
-Split tunnelling, DNS servers, theme, autostart and favourite servers stay on
-the device. They differ between platforms or describe the device itself.
+Split tunnelling, DNS servers, theme and autostart stay on the device. They
+differ between platforms or describe the device itself.
+
+### Node ids
+
+A server is named by the hash of the host it connects to, so the VLESS,
+Hysteria 2 and TUIC variants of one server share an id on every platform and
+the id survives key rotation:
+
+```text
+host   = lowercase(endpoint host), without [] around IPv6 and without a trailing dot
+nodeId = "n1" + first 20 hex characters of SHA-256("levik-node-v1|" + host)
+```
+
+`fi1.example.net` is `n1142bf5571df2373ffb23`. Engines that point at a local
+port (relay, Yandex) have no node id; their favourites stay on the device.
+Each app keeps its own favourites for the screen and reconciles them with the
+account list: a star set or removed on this device changes the list, every
+other server takes the list's state, and node ids of servers this device does
+not have are kept. The first exchange after favourites became available joins
+both lists. Google Play builds keep favourites on the phone.
 
 - `PUT` takes `{ "changes": { field: value } }` with only the edited fields.
   Each field is last writer wins; the response is the whole document:

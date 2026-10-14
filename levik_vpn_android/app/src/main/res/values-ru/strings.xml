@@ -443,7 +443,7 @@
     <string name="resume_vpn_btn">Возобновить VPN</string>
 
     <string name="censorship_radar_title">Анонимный радар блокировок</string>
-    <string name="censorship_radar_desc">Анонимно собирать статус доступности сервисов (YouTube, Discord, Telegram) для общей карты доступности на leviknet.com.</string>
+    <string name="censorship_radar_desc">Анонимно собирать статус доступности сервисов (YouTube, Discord, Telegram) для общей карты доступности на leviknet.org.</string>
 
     <string name="connection_telemetry_title">Статистика качества подключения</string>
     <string name="connection_telemetry_desc">Анонимно сообщать об обрывах и ошибках подключения. Без IP-адресов, сайтов и данных аккаунта.</string>

@@ -10,8 +10,9 @@ import kotlinx.serialization.json.longOrNull
 
 /**
  * Settings that mean the same thing in every Levik VPN app, docs/app-platform.md.
- * Split tunnelling, DNS, theme, autostart and favourites stay on this phone.
- * Values are kept in their wire form: key to JSON primitive.
+ * Split tunnelling, DNS, theme and autostart stay on this phone; favourites
+ * travel as node ids (FavoriteNodes). Values are kept in their wire form:
+ * key to JSON primitive.
  */
 typealias SyncedSettings = Map<String, JsonPrimitive>
 
@@ -28,6 +29,8 @@ data class LocalSyncedValues(
     val antiDpiPackets: String,
     val antiDpiLength: String,
     val antiDpiInterval: String,
+    /** Canonical node list, or null where this build does not share favourites. */
+    val favoriteNodes: String? = null,
 )
 
 object SettingsSyncPolicy {
@@ -40,10 +43,11 @@ object SettingsSyncPolicy {
     const val ANTI_DPI_PACKETS = "antiDpiPackets"
     const val ANTI_DPI_LENGTH = "antiDpiLength"
     const val ANTI_DPI_INTERVAL = "antiDpiInterval"
+    const val FAVORITE_NODES = "favoriteNodes"
 
     val KEYS = listOf(
         ROUTING_MODE, AUTOMATIC_SERVER, AUTO_RECONNECT, KILL_SWITCH, USE_DOH,
-        ANTI_DPI_ENABLED, ANTI_DPI_PACKETS, ANTI_DPI_LENGTH, ANTI_DPI_INTERVAL,
+        ANTI_DPI_ENABLED, ANTI_DPI_PACKETS, ANTI_DPI_LENGTH, ANTI_DPI_INTERVAL, FAVORITE_NODES,
     )
     val ANTI_DPI_KEYS = setOf(ANTI_DPI_ENABLED, ANTI_DPI_PACKETS, ANTI_DPI_LENGTH, ANTI_DPI_INTERVAL)
 
@@ -63,12 +67,13 @@ object SettingsSyncPolicy {
             ANTI_DPI_PACKETS -> value.isString && value.content.length <= 24 && PACKETS.matches(value.content)
             ANTI_DPI_LENGTH, ANTI_DPI_INTERVAL ->
                 value.isString && value.content.length <= 16 && RANGE.matches(value.content)
+            FAVORITE_NODES -> value.isString && FavoriteNodes.isCanonical(value.content)
             in KEYS -> !value.isString && value.booleanOrNull != null
             else -> false
         }
     }
 
-    fun encode(values: LocalSyncedValues): SyncedSettings = mapOf(
+    fun encode(values: LocalSyncedValues): SyncedSettings = listOfNotNull(
         ROUTING_MODE to JsonPrimitive(ROUTING.getValue(values.routing)),
         AUTOMATIC_SERVER to JsonPrimitive(values.automaticServer),
         AUTO_RECONNECT to JsonPrimitive(values.autoReconnect),
@@ -78,15 +83,26 @@ object SettingsSyncPolicy {
         ANTI_DPI_PACKETS to JsonPrimitive(values.antiDpiPackets),
         ANTI_DPI_LENGTH to JsonPrimitive(values.antiDpiLength),
         ANTI_DPI_INTERVAL to JsonPrimitive(values.antiDpiInterval),
-    )
+        values.favoriteNodes?.let { FAVORITE_NODES to JsonPrimitive(it) },
+    ).toMap()
+
+    /**
+     * Fields this app shares that the account has never stored, for example
+     * one added in a later version: they are uploaded rather than left unset.
+     */
+    fun missingRemotely(local: SyncedSettings, remote: SyncedSettings): SyncedSettings =
+        local.filter { (key, value) -> key !in remote && isPortable(key, value) }
 
     fun portable(settings: SyncedSettings): SyncedSettings = settings.filter { (key, value) -> isPortable(key, value) }
 
-    /** The shared fields that changed between two snapshots. */
+    /**
+     * The shared fields that changed between two snapshots. A field the earlier
+     * snapshot did not have yet is not an edit: the next exchange joins it.
+     */
     fun changes(before: SyncedSettings, after: SyncedSettings): SyncedSettings =
         KEYS.mapNotNull { key ->
             val value = after[key]
-            if (value != before[key] && isPortable(key, value)) key to value!! else null
+            if (key in before && value != before[key] && isPortable(key, value)) key to value!! else null
         }.toMap()
 
     /**

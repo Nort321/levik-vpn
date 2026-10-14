@@ -1,7 +1,7 @@
 # Levik VPN для Android
 
 <p align="center">
-  <img src="https://leviknet.com/assets/levik-logo.png" alt="Логотип Levik VPN" width="160" height="160" />
+  <img src="https://leviknet.org/assets/levik-logo.png" alt="Логотип Levik VPN" width="160" height="160" />
 </p>
 
 <p align="center">
@@ -10,9 +10,9 @@
 </p>
 
 <p align="center">
-  <a href="https://leviknet.com/downloads">Скачать APK</a> ·
+  <a href="https://leviknet.org/downloads">Скачать APK</a> ·
   <a href="https://github.com/Nort321/levik-vpn/releases/latest">Последний релиз</a> ·
-  <a href="https://leviknet.com">Официальный сайт</a> ·
+  <a href="https://leviknet.org">Официальный сайт</a> ·
   <a href="https://t.me/leviksupportbot">Поддержка</a>
 </p>
 
@@ -54,7 +54,7 @@
 
 - Требуется **Android 8.0 или новее**.
 - Root-права не нужны.
-- Актуальный APK доступен на [странице загрузки](https://leviknet.com/downloads) и в [GitHub Releases](https://github.com/Nort321/levik-vpn/releases/latest).
+- Актуальный APK доступен на [странице загрузки](https://leviknet.org/downloads) и в [GitHub Releases](https://github.com/Nort321/levik-vpn/releases/latest).
 
 Для обновления ранней тестовой версии `1.9.0`, подписанной другим ключом, может потребоваться удалить старую версию перед установкой актуального APK. При удалении могут сброситься локальные настройки приложения.
 
@@ -79,7 +79,7 @@ GitHub Actions запускает Android Lint, модульные тесты и
 
 ## Конфиденциальность и безопасность
 
-Поведение открытого Android-клиента можно проверить непосредственно по исходному коду. Правила обработки данных сервисом описаны в [политике конфиденциальности](https://leviknet.com/legal/privacy).
+Поведение открытого Android-клиента можно проверить непосредственно по исходному коду. Правила обработки данных сервисом описаны в [политике конфиденциальности](https://leviknet.org/legal/privacy).
 
 Инструкции по безопасному сообщению об уязвимости находятся в [SECURITY.md](SECURITY.md).
 

@@ -61,6 +61,14 @@ fun groupProtocolVariants(servers: List<TunnelServer>): List<ServerProtocolGroup
     return groups.map { variants -> ServerProtocolGroup(variants.sortedBy { it.protocol().ordinal }) }
 }
 
+/** The host that names this server across the user's apps (FavoriteNodes); null for Yandex. */
+fun TunnelServer.syncHost(): String? {
+    relayConfig?.let { return it.node.host }
+    if (yandexConfig != null) return null
+    // Local engines (relay, Yandex) point the outbound at loopback: not a server identity.
+    return endpointHost()?.takeUnless { it == "localhost" || it == "::1" || it.startsWith("127.") }
+}
+
 private fun TunnelServer.endpointHost(): String? {
     tuicConfig?.let { return it.address }
     val settings = outbound["settings"] as? JsonObject ?: return null

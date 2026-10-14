@@ -21,6 +21,7 @@ class SettingsSyncPolicyTest {
         antiDpiPackets = "tlshello",
         antiDpiLength = "100-200",
         antiDpiInterval = "10-20",
+        favoriteNodes = "n1142bf5571df2373ffb23",
     )
 
     @Test
@@ -47,6 +48,14 @@ class SettingsSyncPolicyTest {
         assertFalse(SettingsSyncPolicy.isPortable(SettingsSyncPolicy.ANTI_DPI_PACKETS, JsonPrimitive("1-3;rm")))
         assertFalse(SettingsSyncPolicy.isPortable(SettingsSyncPolicy.ANTI_DPI_LENGTH, JsonPrimitive("12345")))
         assertFalse(SettingsSyncPolicy.isPortable("favorites", JsonPrimitive(true)))
+        assertFalse(SettingsSyncPolicy.isPortable(SettingsSyncPolicy.FAVORITE_NODES, JsonPrimitive("server-1")))
+        assertFalse(
+            SettingsSyncPolicy.isPortable(
+                SettingsSyncPolicy.FAVORITE_NODES,
+                JsonPrimitive("n15c40cf1f1842e4bd352a,n1142bf5571df2373ffb23"),
+            ),
+        )
+        assertTrue(SettingsSyncPolicy.isPortable(SettingsSyncPolicy.FAVORITE_NODES, JsonPrimitive("")))
         assertTrue(SettingsSyncPolicy.isPortable(SettingsSyncPolicy.ANTI_DPI_INTERVAL, JsonPrimitive("")))
         assertTrue(SettingsSyncPolicy.isPortable(SettingsSyncPolicy.USE_DOH, JsonPrimitive(false)))
     }
@@ -110,5 +119,16 @@ class SettingsSyncPolicyTest {
         assertEquals(AntiDpiPreset.BALANCED, SettingsSyncPolicy.antiDpiPreset(true, "1-3", "50-150", "10-20"))
         assertEquals(AntiDpiPreset.TLS_HELLO, SettingsSyncPolicy.antiDpiPreset(true, "tlshello", "100-200", "10-20"))
         assertEquals(AntiDpiPreset.CUSTOM, SettingsSyncPolicy.antiDpiPreset(true, "2", "40", "7"))
+    }
+
+    @Test
+    fun `a field missing from the earlier snapshot is not an edit but is uploaded when the account lacks it`() {
+        val before = SettingsSyncPolicy.encode(local.copy(favoriteNodes = null))
+        val after = SettingsSyncPolicy.encode(local)
+        assertTrue(SettingsSyncPolicy.changes(before, after).isEmpty())
+        assertEquals(
+            mapOf(SettingsSyncPolicy.FAVORITE_NODES to JsonPrimitive("n1142bf5571df2373ffb23")),
+            SettingsSyncPolicy.missingRemotely(after, before),
+        )
     }
 }

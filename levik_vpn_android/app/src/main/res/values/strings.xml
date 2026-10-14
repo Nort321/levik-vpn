@@ -443,7 +443,7 @@
     <string name="resume_vpn_btn">Resume VPN</string>
 
     <string name="censorship_radar_title">Anonymous Censorship Radar</string>
-    <string name="censorship_radar_desc">Anonymously monitor service availability (YouTube, Discord, Telegram) to help map blocks on leviknet.com.</string>
+    <string name="censorship_radar_desc">Anonymously monitor service availability (YouTube, Discord, Telegram) to help map blocks on leviknet.org.</string>
 
     <string name="connection_telemetry_title">Connection quality statistics</string>
     <string name="connection_telemetry_desc">Anonymously report connection failures and drops. No IP addresses, websites or account data.</string>

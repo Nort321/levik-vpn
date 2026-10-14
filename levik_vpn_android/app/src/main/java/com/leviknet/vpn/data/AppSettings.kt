@@ -313,6 +313,9 @@ class AppSettings(context: Context) {
     private val mutableFavoriteServerIds = MutableStateFlow(
         preferences.getStringSet(FAVORITE_SERVER_IDS, emptySet()) ?: emptySet(),
     )
+    private val mutableFavoriteNodes = MutableStateFlow(
+        preferences.getString(FAVORITE_NODES, null),
+    )
     private val mutableCustomDirectDomains = MutableStateFlow(
         preferences.getStringSet(CUSTOM_DIRECT_DOMAINS, emptySet()) ?: emptySet(),
     )
@@ -357,6 +360,9 @@ class AppSettings(context: Context) {
     val autoConnectOnBoot: StateFlow<Boolean> = mutableAutoConnectOnBoot.asStateFlow()
     val autoFallbackServer: StateFlow<Boolean> = mutableAutoFallbackServer.asStateFlow()
     val favoriteServerIds: StateFlow<Set<String>> = mutableFavoriteServerIds.asStateFlow()
+
+    /** The account's favourite node list as last reconciled; null before the first reconcile. */
+    val favoriteNodes: StateFlow<String?> = mutableFavoriteNodes.asStateFlow()
     val customDirectDomains: StateFlow<Set<String>> = mutableCustomDirectDomains.asStateFlow()
     val customProxyDomains: StateFlow<Set<String>> = mutableCustomProxyDomains.asStateFlow()
     private val mutableWhitelistMapEnabled = MutableStateFlow(
@@ -595,6 +601,26 @@ class AppSettings(context: Context) {
         mutableFavoriteServerIds.value = current
     }
 
+    /** Favourites and their node list after a reconcile, saved together. */
+    fun applyFavoriteReconcile(serverIds: Set<String>, nodes: String, reconciledLocal: Set<String>) {
+        preferences.edit(commit = true) {
+            putStringSet(FAVORITE_SERVER_IDS, serverIds)
+            putString(FAVORITE_NODES, nodes)
+            putStringSet(FAVORITE_RECONCILED_LOCAL, reconciledLocal)
+        }
+        mutableFavoriteServerIds.value = serverIds
+        mutableFavoriteNodes.value = nodes
+    }
+
+    fun favoriteReconciledLocal(): Set<String> =
+        preferences.getStringSet(FAVORITE_RECONCILED_LOCAL, emptySet()).orEmpty()
+
+    /** A node list from the account; the next reconcile applies it to this phone's servers. */
+    fun setFavoriteNodes(nodes: String) {
+        preferences.edit(commit = true) { putString(FAVORITE_NODES, nodes) }
+        mutableFavoriteNodes.value = nodes
+    }
+
     fun setCustomDirectDomains(domains: Set<String>) {
         preferences.edit(commit = true) {
             putStringSet(CUSTOM_DIRECT_DOMAINS, domains)
@@ -693,6 +719,8 @@ class AppSettings(context: Context) {
         private const val AUTO_CONNECT_ON_BOOT = "auto_connect_on_boot"
         private const val AUTO_FALLBACK_SERVER = "auto_fallback_server"
         private const val FAVORITE_SERVER_IDS = "favorite_server_ids"
+        private const val FAVORITE_NODES = "favorite_nodes"
+        private const val FAVORITE_RECONCILED_LOCAL = "favorite_reconciled_local"
         private const val CUSTOM_DIRECT_DOMAINS = "custom_direct_domains"
         private const val CUSTOM_PROXY_DOMAINS = "custom_proxy_domains"
         private const val WHITELIST_MAP_ENABLED = "whitelist_map_enabled"
