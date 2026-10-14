@@ -22,9 +22,13 @@ import com.leviknet.vpn.data.AppIconManager
 import com.leviknet.vpn.data.AppRepository
 import com.leviknet.vpn.data.AppSettings
 import com.leviknet.vpn.data.SessionStatus
+import com.leviknet.vpn.vpn.ServerPinger
 import com.leviknet.vpn.vpn.TunnelServer
 import com.leviknet.vpn.vpn.VpnConnectionState
 import com.leviknet.vpn.vpn.VpnController
+import com.leviknet.vpn.vpn.isEligibleForAutomaticSelection
+import com.leviknet.vpn.vpn.isMobileServer
+import com.leviknet.vpn.vpn.telemetryProtocol
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.Proxy
@@ -37,10 +41,15 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
@@ -51,6 +60,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -102,6 +112,19 @@ class AppPlatform(
     /** Sign-ins on the user's other devices waiting for this phone (Direct builds). */
     val approvals: StateFlow<List<PendingApproval>> = mutableApprovals.asStateFlow()
 
+    private val maintenanceMutex = Mutex()
+    private val idleMeter = IdleMeter()
+
+    private val mutableMaintenance = MutableStateFlow<List<MaintenanceWindow>>(emptyList())
+
+    /** Planned work on servers (Direct builds); the server list marks them and automatic choice skips them. */
+    val maintenance: StateFlow<List<MaintenanceWindow>> = mutableMaintenance.asStateFlow()
+
+    private val mutableMaintenanceMoves = MutableSharedFlow<MaintenanceSwitch>(extraBufferCapacity = 1)
+
+    /** The connection moved off a server before its maintenance. */
+    val maintenanceMoves: SharedFlow<MaintenanceSwitch> = mutableMaintenanceMoves.asSharedFlow()
+
     private val mutableAnnouncements = MutableStateFlow<List<AppAnnouncement>>(emptyList())
     val announcements: StateFlow<List<AppAnnouncement>> = mutableAnnouncements.asStateFlow()
 
@@ -123,6 +146,7 @@ class AppPlatform(
         scope.launch {
             stored = loadStored()
             publishAnnouncements()
+            publishMaintenance()
             refreshConfigIfStale()
             while (true) {
                 delay((stored?.config?.refreshAfterSeconds ?: DEFAULT_REFRESH_S) * 1_000L)
@@ -167,6 +191,24 @@ class AppPlatform(
                     } else {
                         withdrawPresence()
                     }
+                }
+            }
+        }
+        if (MAINTENANCE_ENABLED) {
+            scope.launch {
+                vpnController.state.collect { snapshot ->
+                    if (snapshot.state == VpnConnectionState.CONNECTED) {
+                        idleMeter.record(snapshot.downloadedBytes + snapshot.uploadedBytes, System.currentTimeMillis())
+                    } else {
+                        idleMeter.reset()
+                    }
+                }
+            }
+            scope.launch {
+                while (true) {
+                    delay(MAINTENANCE_CHECK_MS)
+                    publishMaintenance()
+                    checkMaintenance()
                 }
             }
         }
@@ -226,6 +268,14 @@ class AppPlatform(
 
     fun xhttpMuxHosts(): Set<String> = stored?.config?.xhttpMuxHosts.orEmpty()
 
+    /** True while the server is under maintenance or about to be: it is not chosen automatically. */
+    fun underMaintenance(server: TunnelServer, nowMs: Long = System.currentTimeMillis()): Boolean =
+        ServerMaintenance.windowFor(mutableMaintenance.value, FavoriteNodes.nodeId(server), nowMs) != null
+
+    /** Leaves out servers under maintenance, unless that would leave none. */
+    fun avoidMaintenance(servers: List<TunnelServer>, nowMs: Long = System.currentTimeMillis()): List<TunnelServer> =
+        ServerMaintenance.avoid(servers, mutableMaintenance.value, FavoriteNodes::nodeId, nowMs)
+
     /** The cabinet page signed in through a one-time link, or the plain page when that fails. */
     suspend fun cabinetUrl(target: CabinetTarget): String = try {
         repository.webHandoffUrl(target.path) ?: AppLinks.cabinetFallbackUrl(target)
@@ -271,6 +321,79 @@ class AppPlatform(
             }
         }.onFailure { AppLogger.w(TAG, "Could not save app configuration") }
         publishAnnouncements()
+        if (MAINTENANCE_ENABLED) {
+            publishMaintenance()
+            scope.launch { checkMaintenance() }
+        }
+    }
+
+    /** Windows that have not ended; the server sends only those within the next day. */
+    private fun publishMaintenance() {
+        if (!MAINTENANCE_ENABLED) return
+        val now = System.currentTimeMillis()
+        val current = stored?.config?.maintenance.orEmpty().filter { it.endsAtMs > now }
+        if (mutableMaintenance.value != current) mutableMaintenance.value = current
+    }
+
+    /**
+     * Moves the connection off a server before its maintenance: while it is
+     * idle, or two minutes before the start at the latest. The app does not
+     * move back afterwards, docs/app-platform.md.
+     */
+    private suspend fun checkMaintenance() {
+        if (!MAINTENANCE_ENABLED || !maintenanceMutex.tryLock()) return
+        try {
+            val now = System.currentTimeMillis()
+            val snapshot = vpnController.state.value
+            if (snapshot.state != VpnConnectionState.CONNECTED) return
+            val servers = repository.tunnelProfile.value?.servers ?: return
+            val current = servers.firstOrNull { it.id == snapshot.serverId } ?: return
+            val move = ServerMaintenance.move(
+                ServerMaintenance.windowFor(mutableMaintenance.value, FavoriteNodes.nodeId(current), now),
+                now,
+            )
+            if (move == MaintenanceMove.STAY || (move == MaintenanceMove.WHEN_IDLE && !idleMeter.idle(now))) return
+            val target = maintenanceTarget(current, servers, now) ?: run {
+                AppLogger.w(TAG, "No server to move to before maintenance")
+                return
+            }
+            AppLogger.i(TAG, "Moving off a server before its maintenance")
+            repository.selectServer(target.id)
+            vpnController.switchServer(target.id)
+            idleMeter.reset()
+            mutableMaintenanceMoves.tryEmit(MaintenanceSwitch(current.id, target.id))
+            postMessage(
+                MAINTENANCE_NOTIFICATION_ID,
+                context.getString(R.string.maintenance_moved_title, current.name),
+                context.getString(R.string.maintenance_moved_body, target.name),
+            )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            AppLogger.w(TAG, "Could not move before maintenance: ${error.javaClass.simpleName}")
+        } finally {
+            maintenanceMutex.unlock()
+        }
+    }
+
+    /**
+     * The fastest answering server of the same kind outside maintenance;
+     * protocols that work on the user's operator first.
+     */
+    private suspend fun maintenanceTarget(current: TunnelServer, servers: List<TunnelServer>, nowMs: Long): TunnelServer? {
+        val mobile = current.isMobileServer()
+        val pool = servers.filter {
+            it.id != current.id && it.isEligibleForAutomaticSelection() && it.isMobileServer() == mobile &&
+                !underMaintenance(it, nowMs)
+        }
+        if (pool.isEmpty()) return null
+        val measured = supervisorScope {
+            pool.map { server -> async(Dispatchers.IO) { server to runCatching { ServerPinger.measure(server) }.getOrNull() } }
+                .awaitAll()
+        }.mapNotNull { (server, latency) -> latency?.let { server to it } }
+        if (measured.isEmpty()) return null
+        val advised = RemoteConfigPolicy.candidates(measured, protocolAdvice()) { it.first.telemetryProtocol().wire }
+        return advised.minByOrNull { it.second }?.first
     }
 
     private suspend fun loadStored(): StoredRemoteConfig? = withContext(Dispatchers.IO) {
@@ -305,6 +428,10 @@ class AppPlatform(
     }
 
     private fun postNotification(announcement: AppAnnouncement) {
+        postMessage(NOTIFICATION_ID_BASE + (announcement.id.hashCode() and 0x3ff), announcement.title, announcement.body)
+    }
+
+    private fun postMessage(notificationId: Int, title: String, body: String) {
         if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
         manager.createNotificationChannel(
@@ -317,21 +444,20 @@ class AppPlatform(
         val launch = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
-        val notificationId = NOTIFICATION_ID_BASE + (announcement.id.hashCode() and 0x3ff)
         val pendingIntent = PendingIntent.getActivity(
             context, notificationId, launch, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(AppIconArtwork.smallIcon(context, AppIconManager(context).current()))
-            .setContentTitle(announcement.title)
-            .setContentText(announcement.body)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(announcement.body))
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
             .build()
         runCatching { manager.notify(notificationId, notification) }
-            .onFailure { AppLogger.w(TAG, "Could not show an announcement") }
+            .onFailure { AppLogger.w(TAG, "Could not show a message") }
     }
 
     /** One exchange with the account at a time; failures wait for the next attempt. */
@@ -685,6 +811,8 @@ class AppPlatform(
         const val APPROVAL_CHANNEL_ID = "levik_sign_in"
         const val APPROVAL_NOTIFICATION_ID_BASE = 5000
         const val APPROVAL_EXPIRY_SLACK_MS = 1_000L
+        const val MAINTENANCE_NOTIFICATION_ID = 5300
+        const val MAINTENANCE_CHECK_MS = 15_000L
         const val MAX_REMEMBERED = 200
         const val MAX_EXCHANGES = 2
         const val DEFAULT_REFRESH_S = 15 * 60L
@@ -697,6 +825,9 @@ class AppPlatform(
 
         /** Live events and presence are part of the Direct build only. */
         val LIVE_ENABLED = !BuildConfig.IS_PLAY_DISTRIBUTION
+
+        /** Moving off servers before their maintenance is part of the Direct build only. */
+        val MAINTENANCE_ENABLED = !BuildConfig.IS_PLAY_DISTRIBUTION
         const val PRESENCE_DEBOUNCE_MS = 1_500L
         const val MAX_EVENT_LINE = 4_096
         val INACTIVE_TUNNEL = setOf(VpnConnectionState.DISCONNECTED, VpnConnectionState.ERROR)

@@ -32,7 +32,10 @@ identifier. Only the client header is sent.
       "endsAt": "ISO 8601"
     }
   ],
-  "protocols": { "preferred": ["vless-reality"], "avoid": ["hysteria2"] }
+  "protocols": { "preferred": ["vless-reality"], "avoid": ["hysteria2"] },
+  "maintenance": [
+    { "nodeId": "n1…", "startsAt": "ISO 8601", "endsAt": "ISO 8601" }
+  ]
 }
 ```
 
@@ -57,6 +60,26 @@ identifier. Only the client header is sent.
 The apps ask again after `refreshAfterSeconds` (clamped to 5 minutes–24
 hours), when they come to the screen, and keep the last answer for offline
 starts. The endpoint is rate limited per address.
+
+### Server maintenance
+
+Admins plan work on a server on the app configuration page of the website: the
+server's endpoint host, a start from now to 12 hours ahead and a length up to
+8 hours. The configuration lists windows that start within the next 24 hours,
+by [node id](#node-ids), and every open app refetches it at once through the
+`config` [live event](#live-events). A withdrawn window disappears the same way.
+
+From 15 minutes before the start until the end, the apps:
+
+- leave the server out of automatic selection and failover, unless no other
+  server remains;
+- mark it in the server list with "Maintenance until HH:MM";
+- move a connection on it to the fastest other server of the same kind, as soon
+  as the connection has carried less than 4 KB/s for 20 seconds, and two
+  minutes before the start at the latest. The app tells the user with a
+  notification and does not move back when the work ends.
+
+Android does this in the Direct build only; iOS does not take part.
 
 ## Synced settings
 

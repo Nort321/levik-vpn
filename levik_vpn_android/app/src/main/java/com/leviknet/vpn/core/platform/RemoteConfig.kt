@@ -50,6 +50,8 @@ data class RemoteConfig(
     val refreshAfterSeconds: Long,
     /** Hosts whose XHTTP outbound needs Mux.Cool; the server decides, the app keeps no host list. */
     val xhttpMuxHosts: Set<String> = emptySet(),
+    /** Planned work on servers within the next day, by node id. */
+    val maintenance: List<MaintenanceWindow> = emptyList(),
 )
 
 data class StoredRemoteConfig(
@@ -100,6 +102,7 @@ object RemoteConfigPolicy {
             protocols = parseAdvice(root["protocols"]),
             refreshAfterSeconds = refresh,
             xhttpMuxHosts = parseHosts((root["transport"] as? JsonObject)?.get("xhttpMuxHosts")),
+            maintenance = ServerMaintenance.parse(root["maintenance"]),
         )
     }
 

@@ -596,6 +596,9 @@
     <string name="approval_device">%1$s · %2$s</string>
     <string name="approval_not_me">Это не я</string>
     <string name="approval_later">Позже</string>
+    <string name="maintenance_moved_title">Сервер «%1$s» уходит на обслуживание</string>
+    <string name="maintenance_moved_body">Levik VPN заранее переключился на «%1$s».</string>
+    <string name="server_maintenance_until">Обслуживание до %1$s</string>
     <string name="approval_confirmed">Вход подтверждён</string>
     <string name="approval_declined">Вход отменён: устройство не получит доступ</string>
     <string name="approval_gone">Запрос на вход уже обработан или истёк</string>

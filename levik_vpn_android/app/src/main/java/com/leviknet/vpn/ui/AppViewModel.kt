@@ -67,6 +67,8 @@ import com.leviknet.vpn.core.platform.AppAnnouncement
 import com.leviknet.vpn.core.platform.AppLinks
 import com.leviknet.vpn.core.platform.AppPlatform
 import com.leviknet.vpn.core.platform.CabinetTarget
+import com.leviknet.vpn.core.platform.FavoriteNodes
+import com.leviknet.vpn.core.platform.ServerMaintenance
 import com.leviknet.vpn.core.platform.OpenAppTarget
 import com.leviknet.vpn.core.platform.RemoteConfigPolicy
 import com.leviknet.vpn.vpn.isEligibleForAutomaticSelection
@@ -86,6 +88,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -388,6 +391,30 @@ class AppViewModel(
             viewModelScope.launch {
                 platform.approvals.collect { approvals ->
                     mutableState.update { it.copy(pendingApprovals = approvals) }
+                }
+            }
+            viewModelScope.launch {
+                // The marks follow the clock: a server is marked from the lead time before its window.
+                combine(platform.maintenance, state.map { it.profile?.servers }.distinctUntilChanged()) { windows, servers ->
+                    windows to servers.orEmpty()
+                }.collectLatest { (windows, servers) ->
+                    while (true) {
+                        val now = System.currentTimeMillis()
+                        val marked = if (windows.isEmpty()) emptyMap() else servers.mapNotNull { server ->
+                            ServerMaintenance.windowFor(windows, FavoriteNodes.nodeId(server), now)
+                                ?.let { server.id to it.endsAtMs }
+                        }.toMap()
+                        mutableState.update { if (it.serverMaintenance == marked) it else it.copy(serverMaintenance = marked) }
+                        if (windows.isEmpty()) break
+                        delay(MAINTENANCE_MARK_INTERVAL_MS)
+                    }
+                }
+            }
+            viewModelScope.launch {
+                platform.maintenanceMoves.collect { switch ->
+                    mutableState.update { current ->
+                        current.copy(selectedServerId = switch.toServerId, pingMs = current.serverPings[switch.toServerId])
+                    }
                 }
             }
         }
@@ -1909,7 +1936,7 @@ class AppViewModel(
         val regularServerIds = profile.servers
             .filter { it.id in eligibleServerIds && !it.isMobileServer() }
             .mapTo(mutableSetOf(), TunnelServer::id)
-        val preferredServerIds = regularServerIds.ifEmpty { eligibleServerIds }
+        val preferredServerIds = withoutMaintenance(profile, regularServerIds.ifEmpty { eligibleServerIds })
         // Protocols that work on the user's operator first, unless none of them answers.
         val advisedServerIds = RemoteConfigPolicy.candidates(
             profile.servers.filter { it.id in preferredServerIds },
@@ -1939,6 +1966,13 @@ class AppViewModel(
             )
         }
         return selected
+    }
+
+    /** Servers going into maintenance are left out while others remain. */
+    private fun withoutMaintenance(profile: PreparedTunnelProfile, serverIds: Set<String>): Set<String> {
+        val platform = appPlatform ?: return serverIds
+        return platform.avoidMaintenance(profile.servers.filter { it.id in serverIds })
+            .mapTo(mutableSetOf(), TunnelServer::id)
     }
 
     private suspend fun measureServers(servers: List<TunnelServer>): Map<String, Long?> =
@@ -1975,7 +2009,7 @@ class AppViewModel(
                         val regularServerIds = profile.servers
                             .filter { it.id in eligibleServerIds && !it.isMobileServer() }
                             .mapTo(mutableSetOf(), TunnelServer::id)
-                        val preferredServerIds = regularServerIds.ifEmpty { eligibleServerIds }
+                        val preferredServerIds = withoutMaintenance(profile, regularServerIds.ifEmpty { eligibleServerIds })
                         val bestServerId = measured.entries
                             .filter { it.key in preferredServerIds && it.value != null }
                             .minByOrNull { requireNotNull(it.value) }
@@ -2581,6 +2615,7 @@ class AppViewModel(
         private const val MIN_POLL_SECONDS = 2
         private const val MAX_POLL_SECONDS = 10
         private const val SERVER_PING_INTERVAL_MS = 30_000L
+        private const val MAINTENANCE_MARK_INTERVAL_MS = 30_000L
         private const val LTE_TRAFFIC_SYNC_INTERVAL_MS = 15_000L
         private val PINGABLE_STATES = setOf(
             VpnConnectionState.DISCONNECTED,
@@ -2813,6 +2848,8 @@ data class AppUiState(
     val pendingApprovals: List<PendingApproval> = emptyList(),
     val hiddenApprovals: Set<String> = emptySet(),
     val answeringApproval: Boolean = false,
+    /** Servers under maintenance or about to be, with the time it ends. */
+    val serverMaintenance: Map<String, Long> = emptyMap(),
 ) {
     /** The sign-in to ask about now: not hidden with "Later" and not expired. */
     fun approvalPrompt(now: java.time.Instant): PendingApproval? =

@@ -1798,6 +1798,7 @@ class LevikVpnService : VpnService() {
             server.id != currentId &&
                 server.isEligibleForAutomaticSelection() &&
                 !server.isMobileServer() &&
+                !container.appPlatform.underMaintenance(server) &&
                 tunnelHealthPolicy.isCandidateEligible(server.id, nowMs)
         }
         if (candidates.isEmpty()) return false

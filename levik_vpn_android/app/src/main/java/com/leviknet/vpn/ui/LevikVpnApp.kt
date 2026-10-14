@@ -1423,6 +1423,7 @@ private fun MainContent(
                 automaticServer = state.automaticServer,
                 onAutomaticServer = onAutomaticServer,
                 serverPings = state.serverPings,
+                serverMaintenance = state.serverMaintenance,
                 pingingServers = state.pingingServers,
                 favoriteServerIds = state.favoriteServerIds,
                 onToggleFavorite = onToggleFavorite,
@@ -2776,6 +2777,7 @@ private fun ServersScreen(
     automaticServer: Boolean,
     onAutomaticServer: () -> Unit,
     serverPings: Map<String, Long?>,
+    serverMaintenance: Map<String, Long>,
     pingingServers: Boolean,
     favoriteServerIds: Set<String>,
     onToggleFavorite: (String) -> Unit,
@@ -3068,6 +3070,7 @@ private fun ServersScreen(
                                         selectedServerId = selectedServerId,
                                         favoriteServerIds = favoriteServerIds,
                                         serverPings = serverPings,
+                                        serverMaintenance = serverMaintenance,
                                         pingingServers = pingingServers,
                                         isDark = isDark,
                                         onServerSelected = onServerSelection,
@@ -3091,6 +3094,7 @@ private fun ServersScreen(
                                         selected = !automaticServer && server.id == selectedServerId,
                                         isFav = favoriteServerIds.contains(server.id),
                                         pingValue = serverPings[server.id],
+                                        maintenanceEndsAt = serverMaintenance[server.id],
                                         pingingServers = pingingServers,
                                         isDark = isDark,
                                         onServerSelected = onServerSelection,
@@ -3107,6 +3111,7 @@ private fun ServersScreen(
                                     selectedServerId = selectedServerId,
                                     favoriteServerIds = favoriteServerIds,
                                     serverPings = serverPings,
+                                    serverMaintenance = serverMaintenance,
                                     pingingServers = pingingServers,
                                     isDark = isDark,
                                     onServerSelected = onServerSelection,
@@ -3123,6 +3128,7 @@ private fun ServersScreen(
                                 selectedServerId = selectedServerId,
                                 favoriteServerIds = favoriteServerIds,
                                 serverPings = serverPings,
+                                serverMaintenance = serverMaintenance,
                                 pingingServers = pingingServers,
                                 isDark = isDark,
                                 onServerSelected = onServerSelection,
@@ -3189,6 +3195,7 @@ private fun ServerGroupCard(
     selectedServerId: String?,
     favoriteServerIds: Set<String>,
     serverPings: Map<String, Long?>,
+    serverMaintenance: Map<String, Long>,
     pingingServers: Boolean,
     isDark: Boolean,
     onServerSelected: (String) -> Unit,
@@ -3202,6 +3209,7 @@ private fun ServerGroupCard(
         selected = !automaticServer && group.variants.any { it.id == selectedServerId },
         isFav = favoriteIds.isNotEmpty(),
         pingValue = serverPings[server.id],
+        maintenanceEndsAt = serverMaintenance[server.id],
         pingingServers = pingingServers,
         isDark = isDark,
         onServerSelected = onServerSelected,
@@ -3226,6 +3234,8 @@ private fun ServerItemCard(
     onToggleFavorite: (String) -> Unit,
     onYandexSetup: ((Boolean) -> Unit)? = null,
     protocolVariants: List<TunnelServer> = emptyList(),
+    /** When planned work on the server ends; the app moves off it beforehand. */
+    maintenanceEndsAt: Long? = null,
 ) {
     var showGuide by remember(server.id) { mutableStateOf(false) }
     if (showGuide) {
@@ -3290,6 +3300,27 @@ private fun ServerItemCard(
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = badgeColor,
+                            )
+                        }
+                    }
+                    if (maintenanceEndsAt != null) {
+                        val warning = if (isDark) Color(0xFFFBBF24) else Color(0xFFD97706)
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = warning.copy(alpha = 0.15f),
+                            modifier = Modifier.padding(top = 4.dp),
+                        ) {
+                            Text(
+                                text = stringResource(
+                                    R.string.server_maintenance_until,
+                                    MAINTENANCE_TIME_FORMATTER.format(
+                                        Instant.ofEpochMilli(maintenanceEndsAt).atZone(ZoneId.systemDefault()),
+                                    ),
+                                ),
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = warning,
                             )
                         }
                     }
@@ -7104,6 +7135,7 @@ private fun formatDuration(seconds: Long): String {
 
 private val DATE_FORMATTER = DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)
 private val DATE_TIME_FORMATTER = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
+private val MAINTENANCE_TIME_FORMATTER = DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)
 
 private fun formatDateTime(epochMs: Long): String =
     DATE_TIME_FORMATTER.format(Instant.ofEpochMilli(epochMs).atZone(ZoneId.systemDefault()))

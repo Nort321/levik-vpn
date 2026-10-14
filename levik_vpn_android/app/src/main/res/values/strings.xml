@@ -596,6 +596,9 @@
     <string name="approval_device">%1$s · %2$s</string>
     <string name="approval_not_me">This is not me</string>
     <string name="approval_later">Later</string>
+    <string name="maintenance_moved_title">Server “%1$s” is going into maintenance</string>
+    <string name="maintenance_moved_body">Levik VPN moved you to “%1$s” ahead of time.</string>
+    <string name="server_maintenance_until">Maintenance until %1$s</string>
     <string name="approval_confirmed">Sign-in confirmed</string>
     <string name="approval_declined">Sign-in cancelled: the device will not get access</string>
     <string name="approval_gone">This sign-in request was already handled or has expired</string>
