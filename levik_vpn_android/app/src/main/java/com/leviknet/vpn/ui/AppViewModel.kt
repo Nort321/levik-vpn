@@ -385,6 +385,11 @@ class AppViewModel(
             }
         }
         viewModelScope.launch {
+            settings.sharePresence.collect { enabled ->
+                mutableState.update { it.copy(sharePresence = enabled) }
+            }
+        }
+        viewModelScope.launch {
             settings.connectionTelemetryEnabled.collect { enabled ->
                 mutableState.update { it.copy(connectionTelemetryEnabled = enabled) }
             }
@@ -1567,6 +1572,7 @@ class AppViewModel(
             loginStartJob?.cancel()
             loginPollJob?.cancel()
             try {
+                appPlatform?.withdrawPresence()
                 repository.logout()
                 settings.setSelectedSubscriptionId(null)
                 mutableState.update {
@@ -2301,6 +2307,10 @@ class AppViewModel(
         }
     }
 
+    fun onAppBackgrounded() {
+        appPlatform?.onBackground()
+    }
+
     fun onAppForegrounded() {
         refreshWhitelistStatus()
         appPlatform?.onForeground()
@@ -2493,6 +2503,10 @@ class AppViewModel(
 
     fun setSettingsSyncEnabled(enabled: Boolean) {
         appPlatform?.setSyncEnabled(enabled)
+    }
+
+    fun setSharePresence(enabled: Boolean) {
+        settings.setSharePresence(enabled)
     }
 
     fun getLogs(): List<LogEntry> = AppLogger.getLogs()
@@ -2743,6 +2757,7 @@ data class AppUiState(
     val announcements: List<AppAnnouncement> = emptyList(),
     val settingsSyncEnabled: Boolean = true,
     val settingsSyncedAt: Long? = null,
+    val sharePresence: Boolean = true,
 )
 
 /** The one-time notice waits until the user is signed in and no other dialog is open. */

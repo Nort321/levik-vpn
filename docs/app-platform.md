@@ -76,6 +76,7 @@ Shared fields, the same meaning in every app:
 | `antiDpiPackets` | `tlshello`, `N` or `N-M` (up to 3 digits), or empty; ≤ 24 characters |
 | `antiDpiLength`, `antiDpiInterval` | `N` or `N-M` (up to 4 digits), or empty; ≤ 16 characters |
 | `favoriteNodes` | node ids of the favourite servers, sorted, distinct, joined by `,`; at most 40; empty for none |
+| `sharePresence` | boolean; absent means `true`. `false` hides every app of the account as online and deletes their status |
 
 Split tunnelling, DNS servers, theme and autostart stay on the device. They
 differ between platforms or describe the device itself.
@@ -110,6 +111,40 @@ both lists. Google Play builds keep favourites on the phone.
   back. Edits made while a request is in flight are kept and sent next.
 - Sync can be turned off in each app's settings. It stops on sign-out and the
   account's stored settings are deleted with the account.
+
+## Live events
+
+`GET /api/mobile/v1/events` (signed like every app request, `Accept:
+text/event-stream`) keeps a server-sent event stream open. Events carry no
+data, only what to fetch again:
+
+| Event | The app |
+| --- | --- |
+| `ready` | first event of every stream: fetch settings, remote config and account, report presence |
+| `resync` | events may have been lost on the server: same as `ready` |
+| `settings` | runs a settings exchange |
+| `devices` | refreshes the account (a device signed in or out) |
+| `presence` | refreshes the live status of the other devices, if it shows them |
+| `config` | fetches the remote configuration (an announcement or switch changed) |
+
+Unknown events are ignored. The server pings every 25 seconds and ends a
+stream after 15 minutes or when the session is revoked; apps reconnect after
+the `retry` delay (5 s), back off up to a minute while the server is
+unreachable and drop a stream that stayed silent for 70 seconds. Desktop apps
+keep the stream while signed in; Android keeps it while the app is visible or
+the VPN is connected. A `401` stops the stream until a regular request
+decides whether the session is gone.
+
+## Device presence
+
+While open, an app reports `PUT /api/mobile/v1/presence`
+`{ "vpnConnected": boolean, "nodeId": string | null, "country": "DE" | null }`
+on start, when its VPN state or server changes and every two minutes. The
+server keeps it three minutes, without an address or history, and answers
+`{ ok, shared }`; `shared: false` means the account turned presence off and
+nothing was stored. `DELETE` on sign-out and quit removes it at once. Node and
+country are sent only while the VPN is connected. The devices page of the
+website shows "online" and the country.
 
 ## Signing in to the website from an app
 

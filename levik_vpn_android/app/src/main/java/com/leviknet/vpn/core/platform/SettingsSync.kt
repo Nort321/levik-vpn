@@ -31,6 +31,8 @@ data class LocalSyncedValues(
     val antiDpiInterval: String,
     /** Canonical node list, or null where this build does not share favourites. */
     val favoriteNodes: String? = null,
+    /** Null where this build does not report presence (Google Play). */
+    val sharePresence: Boolean? = null,
 )
 
 object SettingsSyncPolicy {
@@ -44,10 +46,11 @@ object SettingsSyncPolicy {
     const val ANTI_DPI_LENGTH = "antiDpiLength"
     const val ANTI_DPI_INTERVAL = "antiDpiInterval"
     const val FAVORITE_NODES = "favoriteNodes"
+    const val SHARE_PRESENCE = "sharePresence"
 
     val KEYS = listOf(
         ROUTING_MODE, AUTOMATIC_SERVER, AUTO_RECONNECT, KILL_SWITCH, USE_DOH,
-        ANTI_DPI_ENABLED, ANTI_DPI_PACKETS, ANTI_DPI_LENGTH, ANTI_DPI_INTERVAL, FAVORITE_NODES,
+        ANTI_DPI_ENABLED, ANTI_DPI_PACKETS, ANTI_DPI_LENGTH, ANTI_DPI_INTERVAL, FAVORITE_NODES, SHARE_PRESENCE,
     )
     val ANTI_DPI_KEYS = setOf(ANTI_DPI_ENABLED, ANTI_DPI_PACKETS, ANTI_DPI_LENGTH, ANTI_DPI_INTERVAL)
 
@@ -84,6 +87,7 @@ object SettingsSyncPolicy {
         ANTI_DPI_LENGTH to JsonPrimitive(values.antiDpiLength),
         ANTI_DPI_INTERVAL to JsonPrimitive(values.antiDpiInterval),
         values.favoriteNodes?.let { FAVORITE_NODES to JsonPrimitive(it) },
+        values.sharePresence?.let { SHARE_PRESENCE to JsonPrimitive(it) },
     ).toMap()
 
     /**

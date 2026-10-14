@@ -581,6 +581,8 @@
     <string name="profile_cabinet">Personal account</string>
     <string name="settings_sync_title">Sync settings</string>
     <string name="settings_sync_desc">Routing, protection and Anti-DPI are the same in all your Levik VPN apps</string>
+    <string name="share_presence_title">Show “online” status</string>
+    <string name="share_presence_desc">On the devices page and in your other apps: whether Levik VPN is open and the VPN is on. No IP addresses, no history</string>
     <string name="settings_sync_done">Synced at %1$s</string>
     <string name="growth_share">Share</string>
     <string name="growth_copy">Copy</string>

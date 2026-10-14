@@ -107,6 +107,11 @@ class MainActivity : ComponentActivity() {
         viewModel.onAppForegrounded()
     }
 
+    override fun onStop() {
+        super.onStop()
+        viewModel.onAppBackgrounded()
+    }
+
     @Suppress("DEPRECATION") // Bitmap constructor is required on Android 8/8.1.
     private fun updateTaskIcon(icon: AppIcon) {
         runCatching {

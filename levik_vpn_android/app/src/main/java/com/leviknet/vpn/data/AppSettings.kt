@@ -261,6 +261,9 @@ class AppSettings(context: Context) {
     private val mutableUseDoh = MutableStateFlow(
         preferences.getBoolean(USE_DOH, true),
     )
+    private val mutableSharePresence = MutableStateFlow(
+        preferences.getBoolean(SHARE_PRESENCE, true),
+    )
     private val mutableCustomDohUrl = MutableStateFlow(
         preferences.getString(CUSTOM_DOH_URL, "") ?: "",
     )
@@ -347,6 +350,8 @@ class AppSettings(context: Context) {
     val autoConnectUntrustedWifi: StateFlow<Boolean> = mutableAutoConnectUntrustedWifi.asStateFlow()
     val trustedWifiSsids: StateFlow<Set<String>> = mutableTrustedWifiSsids.asStateFlow()
     val useDoh: StateFlow<Boolean> = mutableUseDoh.asStateFlow()
+    /** Show this phone as online on the devices page and in the user's other apps. */
+    val sharePresence: StateFlow<Boolean> = mutableSharePresence.asStateFlow()
     val customDohUrl: StateFlow<String> = mutableCustomDohUrl.asStateFlow()
 
     val selectedSubscriptionId: StateFlow<String?> = mutableSelectedSubscriptionId.asStateFlow()
@@ -496,6 +501,11 @@ class AppSettings(context: Context) {
             putStringSet(TRUSTED_WIFI_SSIDS, current)
         }
         mutableTrustedWifiSsids.value = current
+    }
+
+    fun setSharePresence(enabled: Boolean) {
+        preferences.edit(commit = true) { putBoolean(SHARE_PRESENCE, enabled) }
+        mutableSharePresence.value = enabled
     }
 
     fun setUseDoh(enabled: Boolean) {
@@ -707,6 +717,7 @@ class AppSettings(context: Context) {
         private const val AUTO_CONNECT_UNTRUSTED_WIFI = "auto_connect_untrusted_wifi"
         private const val TRUSTED_WIFI_SSIDS = "trusted_wifi_ssids"
         private const val USE_DOH = "use_doh"
+        private const val SHARE_PRESENCE = "share_presence"
         private const val CUSTOM_DOH_URL = "custom_doh_url"
         private const val SELECTED_SUBSCRIPTION_ID = "selected_subscription_id"
         private const val AUTOMATIC_SERVER = "automatic_server"

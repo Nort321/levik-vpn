@@ -13,6 +13,7 @@ import com.leviknet.vpn.BuildConfig
 import com.leviknet.vpn.MainActivity
 import com.leviknet.vpn.R
 import com.leviknet.vpn.core.logger.AppLogger
+import com.leviknet.vpn.core.network.ApiException
 import com.leviknet.vpn.core.network.ServiceEndpoints
 import com.leviknet.vpn.core.notification.AppIconArtwork
 import com.leviknet.vpn.data.AppIconManager
@@ -27,6 +28,7 @@ import java.net.HttpURLConnection
 import java.net.Proxy
 import java.net.URL
 import java.security.SecureRandom
+import kotlin.random.Random
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -38,6 +40,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -75,6 +82,12 @@ class AppPlatform(
 
     @Volatile
     private var lastSyncAtMs = 0L
+
+    private val foreground = MutableStateFlow(false)
+
+    /** What the server holds for this phone; null when it holds nothing. */
+    @Volatile
+    private var sentPresence: PresenceReport? = null
 
     private val mutableAnnouncements = MutableStateFlow<List<AppAnnouncement>>(emptyList())
     val announcements: StateFlow<List<AppAnnouncement>> = mutableAnnouncements.asStateFlow()
@@ -120,6 +133,27 @@ class AppPlatform(
                 }.collectLatest { servers -> if (servers != null) reconcileFavorites(servers) }
             }
         }
+        if (LIVE_ENABLED) {
+            scope.launch {
+                // Online while on the screen or while the VPN runs; offline otherwise.
+                combine(
+                    repository.session,
+                    foreground,
+                    vpnController.state.map { it.state }.distinctUntilChanged(),
+                ) { session, visible, state ->
+                    session == SessionStatus.Authenticated && PresencePolicy.online(visible, state)
+                }.distinctUntilChanged().collectLatest { online ->
+                    if (online) {
+                        coroutineScope {
+                            launch { runEventStream() }
+                            launch { runPresence() }
+                        }
+                    } else {
+                        withdrawPresence()
+                    }
+                }
+            }
+        }
         scope.launch {
             // Local edits are sent shortly after the user stops changing them.
             combine(
@@ -127,7 +161,7 @@ class AppPlatform(
                     settings.routingPreset, settings.automaticServer, settings.autoHealingEnabled,
                     settings.killSwitchEnabled, settings.useDoh, settings.antiDpiEnabled,
                     settings.antiDpiPackets, settings.antiDpiLength, settings.antiDpiInterval,
-                    settings.favoriteNodes,
+                    settings.favoriteNodes, settings.sharePresence,
                 ),
             ) { localValues() }
                 .distinctUntilChanged()
@@ -140,9 +174,27 @@ class AppPlatform(
 
     /** The app came to the screen: catch up with what changed meanwhile. */
     fun onForeground() {
+        foreground.value = true
         scope.launch {
             refreshConfigIfStale()
             if (System.currentTimeMillis() - lastSyncAtMs >= SETTINGS_SYNC_INTERVAL_MS) syncSettings()
+        }
+    }
+
+    fun onBackground() {
+        foreground.value = false
+    }
+
+    /** Best effort before signing out; the server forgets the phone on its own three minutes later. */
+    suspend fun withdrawPresence() {
+        if (sentPresence == null) return
+        sentPresence = null
+        try {
+            repository.clearPresence()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            AppLogger.w(TAG, "Could not clear presence: ${error.javaClass.simpleName}")
         }
     }
 
@@ -324,6 +376,7 @@ class AppPlatform(
             reconfigure = true
         }
         if (SHARE_FAVORITES) patch[SettingsSyncPolicy.FAVORITE_NODES]?.content?.let(settings::setFavoriteNodes)
+        if (LIVE_ENABLED) patch[SettingsSyncPolicy.SHARE_PRESENCE]?.booleanOrNull?.let(settings::setSharePresence)
         patch[SettingsSyncPolicy.AUTOMATIC_SERVER]?.booleanOrNull?.let(settings::setAutomaticServer)
         patch[SettingsSyncPolicy.AUTO_RECONNECT]?.booleanOrNull?.let(settings::setAutoHealingEnabled)
         patch[SettingsSyncPolicy.KILL_SWITCH]?.booleanOrNull?.let(settings::setKillSwitchEnabled)
@@ -378,6 +431,101 @@ class AppPlatform(
         settings.applyFavoriteReconcile(result.local, nodes, result.state.reconciledLocal)
     }
 
+    /**
+     * Keeps the live event stream open (docs/app-platform.md "Live events").
+     * A silent connection ends by the read timeout; failures back off.
+     */
+    private suspend fun runEventStream() {
+        var failures = 0
+        while (currentCoroutineContext().isActive) {
+            var received = false
+            try {
+                val connection = repository.openEvents()
+                try {
+                    coroutineScope {
+                        // A blocked read only ends when the connection closes.
+                        val closer = launch {
+                            try { awaitCancellation() } finally { connection.disconnect() }
+                        }
+                        withContext(Dispatchers.IO) {
+                            connection.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+                                val parser = EventStreamParser()
+                                while (true) {
+                                    val line = reader.readLine() ?: break
+                                    if (line.length > MAX_EVENT_LINE) break
+                                    parser.line(line)?.let { event ->
+                                        received = true
+                                        onLiveEvent(event)
+                                    }
+                                }
+                            }
+                        }
+                        closer.cancel()
+                    }
+                } finally {
+                    connection.disconnect()
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: ApiException.Unauthorized) {
+                // A regular request decides whether the session is gone and signs out.
+                runCatching { repository.refreshAccount() }
+                if (repository.session.value != SessionStatus.Authenticated) return
+            } catch (error: Exception) {
+                AppLogger.d(TAG, "Event stream ended: ${error.javaClass.simpleName}")
+            }
+            failures = if (received) 0 else failures + 1
+            delay(PresencePolicy.retryDelayMs(failures, Random.nextDouble()))
+        }
+    }
+
+    private fun onLiveEvent(event: LiveEvent) {
+        when (event) {
+            LiveEvent.READY, LiveEvent.RESYNC -> scope.launch {
+                refreshConfig()
+                syncSettings()
+                refreshAccountQuietly()
+            }
+            LiveEvent.SETTINGS -> scope.launch { syncSettings() }
+            LiveEvent.CONFIG -> scope.launch { refreshConfig() }
+            LiveEvent.DEVICES -> scope.launch { refreshAccountQuietly() }
+            LiveEvent.PRESENCE -> Unit
+        }
+    }
+
+    private suspend fun refreshAccountQuietly() {
+        try {
+            repository.refreshAccount()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            AppLogger.d(TAG, "Account refresh after an event failed: ${error.javaClass.simpleName}")
+        }
+    }
+
+    /** Reports on every change of what the devices page shows, and every two minutes. */
+    private suspend fun runPresence() {
+        combine(vpnController.state, repository.tunnelProfile, settings.sharePresence) { snapshot, profile, share ->
+            if (share) PresencePolicy.report(snapshot, profile?.servers.orEmpty()) else null
+        }.distinctUntilChanged().collectLatest { report ->
+            delay(PRESENCE_DEBOUNCE_MS)
+            if (report == null) {
+                withdrawPresence()
+                return@collectLatest
+            }
+            while (true) {
+                try {
+                    sentPresence = if (repository.reportPresence(report)) report else null
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    AppLogger.d(TAG, "Presence report failed: ${error.javaClass.simpleName}")
+                }
+                delay(PresencePolicy.REFRESH_MS)
+            }
+        }
+    }
+
     private fun forgetSyncState() {
         lastSyncAtMs = 0L
         preferences.edit(commit = true) {
@@ -400,6 +548,7 @@ class AppPlatform(
             antiDpiLength = settings.antiDpiLength.value,
             antiDpiInterval = settings.antiDpiInterval.value,
             favoriteNodes = if (SHARE_FAVORITES) settings.favoriteNodes.value else null,
+            sharePresence = if (LIVE_ENABLED) settings.sharePresence.value else null,
         ),
     )
 
@@ -433,6 +582,11 @@ class AppPlatform(
 
         /** Play builds keep favourites on the phone; their data declaration does not cover them. */
         val SHARE_FAVORITES = !BuildConfig.IS_PLAY_DISTRIBUTION
+
+        /** Live events and presence are part of the Direct build only. */
+        val LIVE_ENABLED = !BuildConfig.IS_PLAY_DISTRIBUTION
+        const val PRESENCE_DEBOUNCE_MS = 1_500L
+        const val MAX_EVENT_LINE = 4_096
         val INACTIVE_TUNNEL = setOf(VpnConnectionState.DISCONNECTED, VpnConnectionState.ERROR)
     }
 }

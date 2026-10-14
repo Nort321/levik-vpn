@@ -14,7 +14,11 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import com.leviknet.vpn.core.platform.PresencePolicy
+import com.leviknet.vpn.core.platform.PresenceReport
 
 class MobileApiClient(
     baseUrl: String,
@@ -261,6 +265,82 @@ class MobileApiClient(
         )
     }
 
+    /** This phone is online; whether its VPN is on and through which server. Returns "shared". */
+    suspend fun reportPresence(accessToken: String, report: PresenceReport): Boolean {
+        val body = JsonObject(
+            mapOf(
+                "vpnConnected" to JsonPrimitive(report.vpnConnected),
+                "nodeId" to (report.nodeId?.let(::JsonPrimitive) ?: JsonNull),
+                "country" to (report.country?.let(::JsonPrimitive) ?: JsonNull),
+            ),
+        ).toString().encodeToByteArray()
+        val response: JsonElement = request(
+            method = METHOD_PUT,
+            path = PRESENCE_PATH,
+            body = body,
+            accessToken = accessToken,
+            requiresIntegrity = false,
+        )
+        return (response as? JsonObject)?.get("shared")?.let { it as? JsonPrimitive }?.booleanOrNull != false
+    }
+
+    suspend fun clearPresence(accessToken: String) {
+        request<JsonElement>(
+            method = METHOD_DELETE,
+            path = PRESENCE_PATH,
+            body = EMPTY_BODY,
+            accessToken = accessToken,
+            requiresIntegrity = false,
+        )
+    }
+
+    /**
+     * Opens the live event stream (core/platform/LiveEvents.kt). The caller reads
+     * lines and disconnects; the read timeout drops a stream that went silent.
+     */
+    suspend fun openEvents(accessToken: String): HttpsURLConnection = withContext(Dispatchers.IO) {
+        val origin = try { endpoints.resolve() } catch (error: IOException) { throw ApiException.Network(error) }
+        val url = URL(origin, EVENTS_PATH)
+        val signed = signer.sign(method = METHOD_GET, path = url.path, accessToken = accessToken, body = EMPTY_BODY)
+        val connection = try {
+            (url.openConnection() as HttpsURLConnection).apply {
+                requestMethod = METHOD_GET
+                connectTimeout = CONNECT_TIMEOUT_MS
+                readTimeout = PresencePolicy.IDLE_TIMEOUT_MS
+                instanceFollowRedirects = false
+                useCaches = false
+                setRequestProperty("Accept", "text/event-stream")
+                setRequestProperty("User-Agent", USER_AGENT)
+                setRequestProperty("X-Levik-App-Version", BuildConfig.VERSION_NAME)
+                setRequestProperty("X-Levik-Client", CLIENT_HEADER)
+                setRequestProperty("X-Levik-Device-Id", signed.deviceId)
+                setRequestProperty("X-Levik-Timestamp", signed.timestamp.toString())
+                setRequestProperty("X-Levik-Nonce", signed.nonce)
+                setRequestProperty("X-Levik-Signature", signed.signature)
+                setRequestProperty("Authorization", "Bearer $accessToken")
+            }
+        } catch (error: IOException) {
+            endpoints.invalidate()
+            throw ApiException.Network(error)
+        }
+        try {
+            val status = connection.responseCode
+            val contentType = connection.contentType.orEmpty()
+            if (status == HttpsURLConnection.HTTP_UNAUTHORIZED) throw ApiException.Unauthorized()
+            if (status != HttpsURLConnection.HTTP_OK || !contentType.startsWith("text/event-stream", ignoreCase = true)) {
+                throw ApiException.Rejected(code = "http_$status", retryable = true, status = status)
+            }
+            connection
+        } catch (error: Exception) {
+            connection.disconnect()
+            if (error is IOException) {
+                endpoints.invalidate()
+                throw ApiException.Network(error)
+            }
+            throw error
+        }
+    }
+
     /** A one-time link that opens the website signed in to the same account. */
     suspend fun invitePreview(accessToken: String, code: String): InvitePreview {
         val response = post<InviteCodeRequest, InvitePreviewResponse>(
@@ -417,7 +497,7 @@ class MobileApiClient(
                 accessToken?.let { token ->
                     setRequestProperty("Authorization", "Bearer $token")
                 }
-                if (method != METHOD_GET) {
+                if (method == METHOD_POST || method == METHOD_PUT) {
                     doOutput = true
                     setFixedLengthStreamingMode(body.size)
                     setRequestProperty("Content-Type", JSON_MEDIA_TYPE)
@@ -429,7 +509,7 @@ class MobileApiClient(
         }
 
         try {
-            if (method != METHOD_GET) {
+            if (method == METHOD_POST || method == METHOD_PUT) {
                 connection.outputStream.use { output ->
                     output.write(body)
                     output.flush()
@@ -536,6 +616,8 @@ class MobileApiClient(
         private const val BROWSER_CHECKS_PATH = "/api/monitor/v1/browser-checks"
         private const val SETTINGS_PATH = "/api/mobile/v1/settings"
         private const val WEB_HANDOFF_PATH = "/api/mobile/v1/web-handoff"
+        private const val PRESENCE_PATH = "/api/mobile/v1/presence"
+        private const val EVENTS_PATH = "/api/mobile/v1/events"
         private const val INVITE_PREVIEW_PATH = "/api/mobile/v1/invites/preview"
         private const val INVITE_CLAIM_PATH = "/api/mobile/v1/invites/claim"
         private const val FAMILY_PATH = "/api/mobile/v1/family"
@@ -543,6 +625,7 @@ class MobileApiClient(
         private const val METHOD_GET = "GET"
         private const val METHOD_POST = "POST"
         private const val METHOD_PUT = "PUT"
+        private const val METHOD_DELETE = "DELETE"
         private const val JSON_MEDIA_TYPE = "application/json"
         private const val CONNECT_TIMEOUT_MS = 15_000
         private const val READ_TIMEOUT_MS = 30_000

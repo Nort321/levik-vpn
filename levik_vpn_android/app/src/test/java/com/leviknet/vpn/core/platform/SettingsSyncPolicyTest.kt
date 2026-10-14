@@ -22,6 +22,7 @@ class SettingsSyncPolicyTest {
         antiDpiLength = "100-200",
         antiDpiInterval = "10-20",
         favoriteNodes = "n1142bf5571df2373ffb23",
+        sharePresence = true,
     )
 
     @Test
@@ -58,6 +59,8 @@ class SettingsSyncPolicyTest {
         assertTrue(SettingsSyncPolicy.isPortable(SettingsSyncPolicy.FAVORITE_NODES, JsonPrimitive("")))
         assertTrue(SettingsSyncPolicy.isPortable(SettingsSyncPolicy.ANTI_DPI_INTERVAL, JsonPrimitive("")))
         assertTrue(SettingsSyncPolicy.isPortable(SettingsSyncPolicy.USE_DOH, JsonPrimitive(false)))
+        assertTrue(SettingsSyncPolicy.isPortable(SettingsSyncPolicy.SHARE_PRESENCE, JsonPrimitive(false)))
+        assertFalse(SettingsSyncPolicy.isPortable(SettingsSyncPolicy.SHARE_PRESENCE, JsonPrimitive("off")))
     }
 
     @Test

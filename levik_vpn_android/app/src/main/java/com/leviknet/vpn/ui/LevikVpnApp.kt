@@ -353,6 +353,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     onOpenAnnouncementLink = viewModel::openAnnouncementLink,
                     onOpenCabinet = { viewModel.openCabinet() },
                     onSettingsSyncChanged = viewModel::setSettingsSyncEnabled,
+                    onSharePresenceChanged = viewModel::setSharePresence,
                 )
             }
         }
@@ -1325,6 +1326,7 @@ private fun MainContent(
     onOpenAnnouncementLink: (String) -> Unit,
     onOpenCabinet: () -> Unit,
     onSettingsSyncChanged: (Boolean) -> Unit,
+    onSharePresenceChanged: (Boolean) -> Unit,
 ) {
     val isTelevision = LocalConfiguration.current.uiMode and
         Configuration.UI_MODE_TYPE_MASK == Configuration.UI_MODE_TYPE_TELEVISION
@@ -1476,6 +1478,8 @@ private fun MainContent(
                 settingsSyncEnabled = state.settingsSyncEnabled,
                 settingsSyncedAt = state.settingsSyncedAt,
                 onSettingsSyncChanged = onSettingsSyncChanged,
+                sharePresence = state.sharePresence,
+                onSharePresenceChanged = onSharePresenceChanged,
                 onOpenCabinet = onOpenCabinet,
             )
             }
@@ -3872,6 +3876,8 @@ private fun ProfileScreen(
     settingsSyncEnabled: Boolean,
     settingsSyncedAt: Long?,
     onSettingsSyncChanged: (Boolean) -> Unit,
+    sharePresence: Boolean,
+    onSharePresenceChanged: (Boolean) -> Unit,
     onOpenCabinet: () -> Unit,
 ) {
     val activeSubscriptions = account?.subscriptions.orEmpty().filter {
@@ -4296,6 +4302,43 @@ private fun ProfileScreen(
                             checked = settingsSyncEnabled,
                             onCheckedChange = onSettingsSyncChanged,
                             modifier = Modifier.semantics { contentDescription = settingsSyncTitle },
+                            colors = LevikSwitchDefaults.colors(),
+                        )
+                    }
+                }
+            }
+
+            if (session == SessionStatus.Authenticated && !BuildConfig.IS_PLAY_DISTRIBUTION) {
+                val sharePresenceTitle = stringResource(R.string.share_presence_title)
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    shadowElevation = 1.dp,
+                ) {
+                    Row(
+                        modifier = Modifier.padding(18.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                text = sharePresenceTitle,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = stringResource(R.string.share_presence_desc),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        Spacer(Modifier.width(14.dp))
+                        Switch(
+                            checked = sharePresence,
+                            onCheckedChange = onSharePresenceChanged,
+                            modifier = Modifier.semantics { contentDescription = sharePresenceTitle },
                             colors = LevikSwitchDefaults.colors(),
                         )
                     }

@@ -581,6 +581,8 @@
     <string name="profile_cabinet">Личный кабинет</string>
     <string name="settings_sync_title">Синхронизация настроек</string>
     <string name="settings_sync_desc">Маршрутизация, защита и Anti-DPI одинаковы во всех ваших приложениях Levik VPN</string>
+    <string name="share_presence_title">Показывать статус «в сети»</string>
+    <string name="share_presence_desc">На странице устройств и в других ваших приложениях: открыт ли Levik VPN и включён ли VPN. Без IP-адресов и истории</string>
     <string name="settings_sync_done">Синхронизировано в %1$s</string>
     <string name="growth_share">Поделиться</string>
     <string name="growth_copy">Копировать</string>

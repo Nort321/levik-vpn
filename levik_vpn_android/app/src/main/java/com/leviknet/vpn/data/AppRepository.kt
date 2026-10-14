@@ -546,7 +546,19 @@ class AppRepository(
         changes: Map<String, kotlinx.serialization.json.JsonPrimitive>,
     ): kotlinx.serialization.json.JsonElement = apiClient.updateSettings(requireToken(), changes)
 
-    /** A one-time link that opens the website signed in; null when it is not a Levik /handoff link. */
+    /** Returns whether the account shares presence; false means nothing was stored. */
+    suspend fun reportPresence(report: com.leviknet.vpn.core.platform.PresenceReport): Boolean =
+        apiClient.reportPresence(requireToken(), report)
+
+    suspend fun clearPresence() {
+        val token = readToken() ?: return
+        apiClient.clearPresence(token)
+    }
+
+    /** The live event stream of this session; see core/platform/LiveEvents.kt. */
+    suspend fun openEvents(): javax.net.ssl.HttpsURLConnection = apiClient.openEvents(requireToken())
+
+        /** A one-time link that opens the website signed in; null when it is not a Levik /handoff link. */
     suspend fun webHandoffUrl(target: String): String? =
         apiClient.webHandoff(requireToken(), target).url
             .takeIf(com.leviknet.vpn.core.platform.AppLinks::isHandoffUrl)
