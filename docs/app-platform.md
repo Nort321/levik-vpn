@@ -413,6 +413,78 @@ browser sessions leave them to Telegram. Signed-in desktop apps no longer
 remind about the end of a subscription by themselves; they only say when it
 has ended.
 
+## Levik Home
+
+A router with the Levik Home agent announces the account's home on its own
+network. Devices of the account that were home in the last 14 days take no
+slot of the subscription, and while the router's VPN is on, the apps at home
+let their own VPN sleep and wake it as soon as they leave.
+
+**Agent.** `curl -fsSL https://leviknet.org/home.sh | sh` installs
+`levik-home` (Python 3, curl) on OpenWrt (opkg or apk), Keenetic with Entware
+or any Linux with systemd or OpenRC; `home.sh` pins the agent's SHA-256.
+`levik-home setup` pairs it; `status`, `vpn on|off|auto`, `uninstall`.
+
+**Pairing.** `POST /api/router/v1/pair` `{ action: "create", deviceId, name }`
+returns `{ token, url, qr, expiresIn: 600, interval: 5 }`. The owner opens
+`url` (`/dashboard/routers?home=…`, also printed as a QR code) and confirms
+the router. Polling `{ action: "poll", token }` then answers once
+`{ status: "authorized", routerToken, homeId, homeKey, name }`, until then
+`pending` or `expired`. An account has at most 3 homes; pairing the same
+router again replaces its home. The router appears among the account's
+devices as platform `router`.
+
+**Heartbeat.** Every 2 minutes `POST /api/router/v1/heartbeat` with
+`Authorization: Bearer <routerToken>` and `{ vpnActive, version }` answers
+`{ home, serverTime, windows: [{ window, nonce }] }` with the nonces of the
+current and the next window. A router not heard for 5 minutes is offline.
+`POST /api/router/v1/unpair` forgets the home; so does removing it in the
+cabinet (Routers → Дом), which also revokes the router's token.
+
+**Beacon.** The agent answers mDNS queries for `_levik._tcp.local` on its LAN
+interfaces only, never the WAN, with an instance whose TXT record is
+
+```
+v=1  h=<homeId: 22 base64url>  w=<window = floor(unix / 300)>  p=<proof>
+proof = base64url(HMAC-SHA256(homeKey, "levik-home-beacon:v1|" + h + "|" + w + "|" + nonce)[0..16])
+```
+
+The nonce comes from the server and is never announced, so a recorded beacon
+cannot be replayed into another window. A query from a port other than 5353
+gets a direct answer (RFC 6762 §6.7); that is how desktop apps ask without
+binding the mDNS port. Without a nonce for the current window (the router
+lost the server) the agent stays silent.
+
+**Apps.** `POST /api/mobile/v1/home/sighting` `{ homeId, window, proof }`
+answers `{ home: { name, routerOnline, routerVpnActive } }` for a valid beacon
+of the account's own home (windows ±1 are accepted) and `{ home: null }` for
+anything else, including a neighbour's Levik Home. Apps report each home at
+most once per window: Android while the VPN runs or the app is open (NsdManager
+works under the VPN), desktops every 2 minutes with the VPN on and every 10
+minutes without it.
+
+**Slots.** Every 5 minutes the website sends the bot the devices (X-HWID) of
+each account with a home that were seen at home in the last 14 days, when the
+list changed and once a day anyway (`/home/slots` `{ accountId, hwids }` →
+`{ users, bonus }`). For each limited subscription of the account the bot
+raises Remnawave's device limit by the home devices registered on it, plus
+one spare place while a home device has not joined any subscription yet, at
+most 10. The bot records every limit it set; a limit changed by anything else
+(a renewal, a purchase, an operator) becomes the paid limit and the home
+places return within 5 minutes. Purchases of extra slots and their caps only
+see the paid limit. HWIDs are never deleted: a device that stopped coming home
+keeps its registration and takes a slot again.
+
+**Sleeping at home.** With "Sleep at home" on (the default), an app whose VPN
+is on and which hears its home while `routerOnline && routerVpnActive` pauses
+its VPN (Android: a pause without a timer, "AT HOME" in the app and the
+notification; desktops: disconnect, with the reason in the status line). It
+wakes when the device leaves the network it fell asleep on, the router's VPN
+stops, the setting is turned off, or the home has not answered for three
+windows (15 minutes). Turning the VPN back on at home keeps it on until the
+next arrival. Only the Direct build of Android has Levik Home; the Google
+Play build is unchanged.
+
 ## Approving a sign-in
 
 A new app asks the user to approve it somewhere they are already signed in,
