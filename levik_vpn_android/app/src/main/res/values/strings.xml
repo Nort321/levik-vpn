@@ -611,6 +611,8 @@
     <string name="approval_notification_body">%1$s · %2$s. Pick the number shown on that device.</string>
     <string name="notification_channel_sign_in">Sign-in requests</string>
     <string name="notification_channel_sign_in_desc">Sign-ins to your account on new devices waiting for your approval</string>
+    <string name="notification_channel_account">Subscription and family</string>
+    <string name="notification_channel_account_desc">Reminders about your subscription and requests for help from your family</string>
     <string name="settings_sync_done">Synced at %1$s</string>
     <string name="growth_share">Share</string>
     <string name="growth_copy">Copy</string>

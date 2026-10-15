@@ -20,6 +20,8 @@ enum class CabinetTarget(val path: String) {
     DEVICES("/dashboard/devices"),
     SUPPORT("/dashboard/support"),
     ACCOUNT_SECURITY("/dashboard/account-security"),
+    FAMILY("/dashboard/family"),
+    NOTIFICATIONS("/dashboard/notifications"),
 }
 
 object AppLinks {

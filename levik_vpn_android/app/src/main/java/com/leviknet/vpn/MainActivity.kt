@@ -23,6 +23,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.leviknet.vpn.core.auth.ExternalUriPolicy
 import com.leviknet.vpn.core.auth.DeepLinkRouter
+import com.leviknet.vpn.core.platform.AccountNotices
 import com.leviknet.vpn.core.update.consumeUpdateNotificationIntent
 import com.leviknet.vpn.core.logger.AppLogger
 import com.leviknet.vpn.core.notification.AppIconArtwork
@@ -95,7 +96,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleLaunchIntent(intent: Intent) {
-        if (consumeUpdateNotificationIntent(intent)) {
+        val noticeTarget = AccountNotices.openedTarget(intent.action, intent.getStringExtra(AccountNotices.EXTRA_TARGET))
+        if (noticeTarget != null) {
+            // Handled once: a recreated activity must not open the page again.
+            intent.action = null
+            viewModel.openCabinet(noticeTarget)
+        } else if (consumeUpdateNotificationIntent(intent)) {
             viewModel.checkForUpdates()
         } else if (intent.action == Intent.ACTION_SEND && intent.type == "text/plain") {
             // A link shared from a browser or a messenger; nothing is saved without a tap.

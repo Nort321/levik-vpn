@@ -152,6 +152,7 @@ data, only what to fetch again:
 | `approvals` | fetches the sign-ins waiting for approval (see below) |
 | `commands` | fetches the commands sent to it ([Remote](#remote)) |
 | `rules` | fetches the tunnel profile again and applies it ([Account rules](#account-rules)) |
+| `notifications` | fetches its notifications and shows them ([Notifications](#notifications)) |
 
 Unknown events are ignored. The server pings every 25 seconds and ends a
 stream after 14 minutes or when the session is revoked; apps reconnect after
@@ -366,6 +367,50 @@ other command from the family owner and, after a repair, tells the member what
 was done. The bot also tells the owner once in Telegram when such a member has
 not connected for a day after being active that week.
 
+## Notifications
+
+What the bot has to tell an account reaches it once, by one channel: in an
+app of the account that is open, otherwise in Telegram. Today these are the
+subscription reminders (from a few days before the end, once a day) and family help
+(a member is not connecting).
+
+1. The bot queues each notice in its outbox (`notification_outbox`), once per
+   reminder and day. A notice of someone without a Levik account goes to
+   Telegram at once.
+2. Every minute the website claims the queued notices of accounts
+   (`/notifications/claim` on the bot) and keeps them in
+   `account_notifications`. During the account's quiet hours, by default
+   23:00–09:00 Moscow time, a notice waits for their end.
+3. When it is due, the website sends the `notifications`
+   [live event](#live-events) if an app of the account is online and has
+   asked for notifications before. If no app takes it within two minutes, or
+   no app is online, the bot sends it in Telegram. An account without Telegram
+   keeps it until an app asks, at most until it expires.
+4. The website reports every decision to the bot (`/notifications/route`:
+   `app`, `telegram` from a time, or `delivered`).
+
+Nothing is lost while the website is down or lags: the bot sends a notice the
+website did not route within 5 minutes, or held for the apps 10 minutes past
+its quiet hours, in Telegram itself.
+
+- `GET /api/mobile/v1/notifications` returns the due notices of the account,
+  at most 20, oldest first: `{ id, kind, title, body, target, createdAt }`,
+  with `kind` `subscription_expiring` or `family_help` and `target` one of
+  `/dashboard`, `/dashboard/plans`, `/dashboard/family`. Taking them delivers
+  them: no other app and no Telegram message shows them again. Apps call it
+  when their event stream opens and on every `notifications` event, show each
+  notice as a system notification and open `target` signed in
+  ([Signing in to the website from an app](#signing-in-to-the-website-from-an-app))
+  when it is tapped. Calling it also marks the app as one that is offered
+  notices. Unknown kinds are shown like any other.
+- `GET`/`PUT /api/account/v1/notifications` reads and changes the quiet hours:
+  `{ quietHours: { enabled, from: "HH:MM", to: "HH:MM" } }`. The cabinet page
+  Notifications shows them with the notices of the last 30 days and where
+  each one went.
+
+Only the Direct build of Android takes notifications; Google Play builds and
+browser sessions leave them to Telegram.
+
 ## Approving a sign-in
 
 A new app asks the user to approve it somewhere they are already signed in,
@@ -416,7 +461,8 @@ in with the activation code and the website as before.
 `POST /api/mobile/v1/web-handoff` with `{ "target": "/dashboard…" }`, where
 the target is one of `/dashboard`, `/dashboard/subscriptions`,
 `/dashboard/plans`, `/dashboard/orders`, `/dashboard/devices`,
-`/dashboard/support`, `/dashboard/account-security`, `/dashboard/rules`.
+`/dashboard/support`, `/dashboard/account-security`, `/dashboard/rules`,
+`/dashboard/family`, `/dashboard/notifications`.
 
 The response `{ ok, url, expiresAt }` contains a one-time link
 `https://leviknet.org/handoff?token=<43 characters>` that is valid for two

@@ -20,6 +20,7 @@ enum class LiveEvent(val wireName: String) {
     APPROVALS("approvals"),
     COMMANDS("commands"),
     RULES("rules"),
+    NOTIFICATIONS("notifications"),
     ;
 
     companion object {

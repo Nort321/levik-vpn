@@ -323,6 +323,10 @@ class MobileApiClient(
     /** Commands waiting for this phone; asking also makes it reachable by the remote. */
     suspend fun takeCommands(accessToken: String): JsonObject = jsonRequest(METHOD_GET, COMMANDS_PATH, EMPTY_BODY, accessToken)
 
+    /** Notices due for the account; taking them delivers them (docs/app-platform.md "Notifications"). */
+    suspend fun takeNotifications(accessToken: String): JsonObject =
+        jsonRequest(METHOD_GET, NOTIFICATIONS_PATH, EMPTY_BODY, accessToken)
+
     suspend fun commandResult(accessToken: String, id: String, result: String, detail: String?) {
         val body = JsonObject(
             mapOf("id" to JsonPrimitive(id), "result" to JsonPrimitive(result), "detail" to (detail?.let(::JsonPrimitive) ?: JsonNull)),
@@ -730,6 +734,7 @@ class MobileApiClient(
         private const val DEVICES_PATH = "/api/mobile/v1/devices"
         private const val COMMANDS_PATH = "/api/mobile/v1/commands"
         private const val COMMAND_RESULT_PATH = "/api/mobile/v1/commands/result"
+        private const val NOTIFICATIONS_PATH = "/api/mobile/v1/notifications"
 
         /** The server needs "number": null, which the shared Json leaves out, so the body is built by hand. */
         internal fun approvalDecisionBody(id: String, number: Int?): String = JsonObject(

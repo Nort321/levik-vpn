@@ -590,6 +590,8 @@ class AppRepository(
 
     suspend fun takeCommands(): kotlinx.serialization.json.JsonObject = apiClient.takeCommands(requireToken())
 
+    suspend fun takeNotifications(): kotlinx.serialization.json.JsonObject = apiClient.takeNotifications(requireToken())
+
     suspend fun commandResult(id: String, result: String, detail: String?) =
         apiClient.commandResult(requireToken(), id, result, detail)
 

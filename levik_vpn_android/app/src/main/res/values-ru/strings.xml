@@ -611,6 +611,8 @@
     <string name="approval_notification_body">%1$s · %2$s. Выберите число, которое показано на этом устройстве.</string>
     <string name="notification_channel_sign_in">Запросы на вход</string>
     <string name="notification_channel_sign_in_desc">Входы в ваш аккаунт на новых устройствах, которые ждут вашего подтверждения</string>
+    <string name="notification_channel_account">Подписка и семья</string>
+    <string name="notification_channel_account_desc">Напоминания о подписке и просьбы о помощи от семьи</string>
     <string name="settings_sync_done">Синхронизировано в %1$s</string>
     <string name="growth_share">Поделиться</string>
     <string name="growth_copy">Копировать</string>

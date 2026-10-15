@@ -108,6 +108,8 @@ class AppPlatform(
     private var sentPresence: PresenceReport? = null
 
     private val approvalsMutex = Mutex()
+    private val noticesMutex = Mutex()
+    private val shownNotices = LinkedHashSet<String>()
     private var approvalsExpiry: Job? = null
 
     private val mutableApprovals = MutableStateFlow<List<PendingApproval>>(emptyList())
@@ -704,7 +706,9 @@ class AppPlatform(
                 syncSettings()
                 refreshAccountQuietly()
                 refreshApprovals()
+                refreshNotices()
             }
+            LiveEvent.NOTIFICATIONS -> scope.launch { refreshNotices() }
             LiveEvent.APPROVALS -> scope.launch { refreshApprovals() }
             LiveEvent.SETTINGS -> scope.launch { syncSettings() }
             LiveEvent.CONFIG -> scope.launch { refreshConfig() }
@@ -789,6 +793,60 @@ class AppPlatform(
             delay(waitMs)
             refreshApprovals()
         }
+    }
+
+    /**
+     * Takes the account's due notices, docs/app-platform.md "Notifications",
+     * and shows each once. Taking them is what keeps Telegram from repeating them.
+     */
+    private suspend fun refreshNotices() = noticesMutex.withLock {
+        if (repository.session.value != SessionStatus.Authenticated) return@withLock
+        val notices = try {
+            AccountNotices.parse(repository.takeNotifications()["notifications"])
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            AppLogger.d(TAG, "Notifications unavailable: ${error.javaClass.simpleName}")
+            return@withLock
+        }
+        for (notice in notices) {
+            if (!shownNotices.add(notice.id)) continue
+            if (shownNotices.size > MAX_REMEMBERED) shownNotices.remove(shownNotices.first())
+            postNotice(notice)
+        }
+    }
+
+    private fun postNotice(notice: AccountNotice) {
+        if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        manager.createNotificationChannel(
+            NotificationChannel(
+                ACCOUNT_CHANNEL_ID,
+                context.getString(R.string.notification_channel_account),
+                NotificationManager.IMPORTANCE_DEFAULT,
+            ).apply { description = context.getString(R.string.notification_channel_account_desc) },
+        )
+        val notificationId = ACCOUNT_NOTIFICATION_ID_BASE + (notice.id.hashCode() and 0xff)
+        val open = Intent(context, MainActivity::class.java).apply {
+            action = AccountNotices.ACTION_OPEN
+            putExtra(AccountNotices.EXTRA_TARGET, notice.target.name)
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context, notificationId, open, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val notification = NotificationCompat.Builder(context, ACCOUNT_CHANNEL_ID)
+            .setSmallIcon(AppIconArtwork.smallIcon(context, AppIconManager(context).current()))
+            .setContentTitle(notice.title)
+            .setContentText(notice.body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(notice.body))
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .build()
+        runCatching { manager.notify(notificationId, notification) }
+            .onFailure { AppLogger.w(TAG, "Could not show a notice") }
     }
 
     private fun forgetApprovals() {
@@ -918,6 +976,8 @@ class AppPlatform(
         const val NOTIFICATION_ID_BASE = 3000
         const val APPROVAL_CHANNEL_ID = "levik_sign_in"
         const val APPROVAL_NOTIFICATION_ID_BASE = 5000
+        const val ACCOUNT_CHANNEL_ID = "levik_account"
+        const val ACCOUNT_NOTIFICATION_ID_BASE = 5500
         const val APPROVAL_EXPIRY_SLACK_MS = 1_000L
         const val MAINTENANCE_NOTIFICATION_ID = 5300
         const val MAINTENANCE_CHECK_MS = 15_000L
