@@ -2519,7 +2519,11 @@ class AppViewModel(
     fun runDiagnostics() {
         if (mutableState.value.runningDiagnostics) return
         viewModelScope.launch {
-            mutableState.update { it.copy(runningDiagnostics = true, diagnosticReport = null) }
+            mutableState.update { it.copy(runningDiagnostics = true, diagnosticReport = null, diagnosisVerdict = null) }
+            // Direct builds only: Google Play builds keep the plain report.
+            val network = appPlatform?.takeUnless { BuildConfig.IS_PLAY_DISTRIBUTION }?.let { platform ->
+                async { runCatching { platform.diagnosisNetwork() }.getOrNull() }
+            }
             val report = NetworkDiagnostics.runDiagnostics(
                 vpnSnapshot = vpnController.state.value,
                 apiClient = apiClient,
@@ -2528,12 +2532,78 @@ class AppViewModel(
                     !BuildConfig.IS_PLAY_DISTRIBUTION || settings.anonymousTelemetryEnabled.value
                 },
             )
-            mutableState.update { it.copy(runningDiagnostics = false, diagnosticReport = report) }
+            val verdict = network?.await()?.let { (local, cellular, diagnose) -> diagnosisVerdict(report, local, cellular, diagnose) }
+            mutableState.update { it.copy(runningDiagnostics = false, diagnosticReport = report, diagnosisVerdict = verdict) }
+        }
+    }
+
+    /** "It's not the VPN": the device's checks and the website's view as one sentence (Direct builds). */
+    private fun diagnosisVerdict(
+        report: DiagnosticReport,
+        local: com.leviknet.vpn.core.platform.LocalNetwork,
+        cellular: Boolean,
+        diagnose: com.leviknet.vpn.core.platform.DiagnoseReport?,
+    ): com.leviknet.vpn.core.platform.DiagnosisVerdict {
+        val snapshot = vpnController.state.value
+        val servers = mutableState.value.profile?.servers.orEmpty()
+        val server = servers.firstOrNull { it.id == snapshot.serverId }
+            ?: servers.firstOrNull { it.id == mutableState.value.selectedServerId }
+        val phase = when (snapshot.state) {
+            VpnConnectionState.CONNECTED -> com.leviknet.vpn.core.platform.VpnPhase.CONNECTED
+            VpnConnectionState.CONNECTING, VpnConnectionState.RECONNECTING -> com.leviknet.vpn.core.platform.VpnPhase.CONNECTING
+            VpnConnectionState.ERROR, VpnConnectionState.LOCKDOWN -> com.leviknet.vpn.core.platform.VpnPhase.FAILED
+            else -> com.leviknet.vpn.core.platform.VpnPhase.OFF
+        }
+        return com.leviknet.vpn.core.platform.DiagnosisPolicy.verdict(
+            com.leviknet.vpn.core.platform.DiagnosisInput(
+                network = local,
+                cellular = cellular,
+                vpn = phase,
+                serverCountry = server?.countryCode,
+                serverNodeId = server?.let(com.leviknet.vpn.core.platform.FavoriteNodes::nodeId),
+                protocol = server?.telemetryProtocol()?.wire,
+                failingServices = report.serviceChecks.filterNot { it.success }.map { it.id },
+                anyServiceWorks = report.serviceChecks.any { it.success },
+                report = diagnose,
+                nowMs = System.currentTimeMillis(),
+            ),
+        )
+    }
+
+    /** The one button under a diagnosis. */
+    fun applyDiagnosisAction(action: com.leviknet.vpn.core.platform.VerdictAction) {
+        when (action) {
+            com.leviknet.vpn.core.platform.VerdictAction.RETRY -> runDiagnostics()
+            com.leviknet.vpn.core.platform.VerdictAction.CONNECT -> {
+                dismissDiagnostics()
+                if (vpnController.state.value.state in setOf(VpnConnectionState.DISCONNECTED, VpnConnectionState.ERROR)) {
+                    connectOrDisconnect()
+                }
+            }
+            com.leviknet.vpn.core.platform.VerdictAction.BEST_SERVER -> {
+                dismissDiagnostics()
+                viewModelScope.launch {
+                    appPlatform?.useBestServer()
+                    if (vpnController.state.value.state in setOf(VpnConnectionState.DISCONNECTED, VpnConnectionState.ERROR)) {
+                        connectOrDisconnect()
+                    }
+                }
+            }
+            com.leviknet.vpn.core.platform.VerdictAction.MOBILE_SERVERS -> {
+                dismissDiagnostics()
+                selectTab(AppTab.SERVERS)
+            }
+            com.leviknet.vpn.core.platform.VerdictAction.SUPPORT -> shareDiagnosticReportAsNote()
+            // Settings screens open from the UI, which has the context.
+            com.leviknet.vpn.core.platform.VerdictAction.NETWORK_SETTINGS,
+            com.leviknet.vpn.core.platform.VerdictAction.WIFI_SETTINGS,
+            com.leviknet.vpn.core.platform.VerdictAction.NONE,
+            -> dismissDiagnostics()
         }
     }
 
     fun dismissDiagnostics() {
-        mutableState.update { it.copy(diagnosticReport = null, runningDiagnostics = false) }
+        mutableState.update { it.copy(diagnosticReport = null, runningDiagnostics = false, diagnosisVerdict = null) }
     }
 
     fun pauseVpn(minutes: Int) {
@@ -2667,8 +2737,13 @@ class AppViewModel(
         viewModelScope.launch {
             mutableState.update { it.copy(isSharingNote = true) }
             try {
+                val verdict = mutableState.value.diagnosisVerdict
+                val summary = buildString {
+                    if (verdict != null) appendLine("Diagnosis: ${verdict.verdict} (${verdict.service ?: verdict.country ?: verdict.protocol ?: "-"})")
+                    append(report.toFormattedString())
+                }
                 val text = withContext(Dispatchers.IO) {
-                    supportNoteText(report.toFormattedString(), AppLogger.readDiskLog(MAX_SUPPORT_NOTE_BYTES))
+                    supportNoteText(summary, AppLogger.readDiskLog(MAX_SUPPORT_NOTE_BYTES))
                 }
                 val noteUrl = supportNotes.create(text)
                 mutableState.update { it.copy(supportNoteUrl = noteUrl, isSharingNote = false) }
@@ -2993,6 +3068,8 @@ data class AppUiState(
     val serverFilter: ServerFilterType = ServerFilterType.ALL,
     val trafficHistory: List<DailyTraffic> = emptyList(),
     val diagnosticReport: DiagnosticReport? = null,
+    /** Direct builds: "it's not the VPN", docs/app-platform.md "Diagnosis". */
+    val diagnosisVerdict: com.leviknet.vpn.core.platform.DiagnosisVerdict? = null,
     val runningDiagnostics: Boolean = false,
     val updateState: UpdateState = UpdateState.Idle,
     val supportNoteUrl: String? = null,

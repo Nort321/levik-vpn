@@ -407,6 +407,33 @@ class AppPlatform(
         }
     }
 
+    /**
+     * "It's not the VPN", docs/app-platform.md "Diagnosis": the phone's own
+     * network and the website's view of it, asked through that network so the
+     * server sees the operator rather than a Levik server.
+     */
+    suspend fun diagnosisNetwork(): Triple<LocalNetwork, Boolean, DiagnoseReport?> {
+        val physical = directNetwork()
+        val capabilities = physical?.let {
+            context.getSystemService(android.net.ConnectivityManager::class.java)?.getNetworkCapabilities(it)
+        }
+        val local = when {
+            physical == null -> LocalNetwork.NONE
+            capabilities?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL) == true ->
+                LocalNetwork.CAPTIVE
+            else -> LocalNetwork.OK
+        }
+        val cellular = capabilities?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) == true
+        val report = if (local == LocalNetwork.OK) configClient.diagnose(physical) else null
+        return Triple(local, cellular, report)
+    }
+
+    /** "Best server" from a diagnosis: automatic choice, and a running connection moves at once. */
+    suspend fun useBestServer() {
+        if (!settings.automaticServer.value) settings.setAutomaticServer(true)
+        moveToFastestServer()
+    }
+
     /** The remote asked for the automatic server: move a running connection to the fastest one. */
     private suspend fun moveToFastestServer() {
         val snapshot = vpnController.state.value
@@ -939,6 +966,19 @@ class RemoteConfigClient(private val version: String) {
         null
     }
 
+    /** "It's not the VPN": what the website knows about the caller's operator and Levik's servers. */
+    suspend fun diagnose(network: Network?): DiagnoseReport? = withContext(Dispatchers.IO) {
+        for (origin in ServiceEndpoints.current().apiOrigins) {
+            val reply = runCatching { request(URL("$origin/api/app/v1/diagnose"), network) }.getOrNull() ?: continue
+            val (status, text) = reply
+            if (status == 404) continue
+            if (status in 400..499) return@withContext null
+            if (status != 200 || text == null) continue
+            return@withContext runCatching { DIAGNOSE_JSON.decodeFromString<DiagnoseReport>(text) }.getOrNull()
+        }
+        null
+    }
+
     private fun request(url: URL, network: Network?): Pair<Int, String?> {
         val connection = (network?.openConnection(url, Proxy.NO_PROXY) ?: url.openConnection(Proxy.NO_PROXY))
             as HttpURLConnection
@@ -974,5 +1014,6 @@ class RemoteConfigClient(private val version: String) {
     private companion object {
         const val TIMEOUT_MS = 15_000
         const val MAX_RESPONSE_BYTES = 64 * 1024
+        val DIAGNOSE_JSON = Json { ignoreUnknownKeys = true }
     }
 }

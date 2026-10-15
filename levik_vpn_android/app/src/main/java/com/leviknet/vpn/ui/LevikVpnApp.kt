@@ -972,6 +972,8 @@ fun LevikVpnApp(viewModel: AppViewModel) {
         DiagnosticsDialog(
             running = state.runningDiagnostics,
             report = state.diagnosticReport,
+            verdict = state.diagnosisVerdict,
+            onVerdictAction = viewModel::applyDiagnosisAction,
             isSharingNote = state.isSharingNote,
             onShare = { reportText ->
                 viewModel.shareText(diagnosticsShareTitle, reportText)
@@ -6242,6 +6244,8 @@ private fun CustomRoutingDialog(
 private fun DiagnosticsDialog(
     running: Boolean,
     report: DiagnosticReport?,
+    verdict: com.leviknet.vpn.core.platform.DiagnosisVerdict?,
+    onVerdictAction: (com.leviknet.vpn.core.platform.VerdictAction) -> Unit,
     isSharingNote: Boolean,
     onShare: (String) -> Unit,
     onSendSupport: () -> Unit,
@@ -6271,6 +6275,7 @@ private fun DiagnosticsDialog(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
+                    verdict?.let { com.leviknet.vpn.ui.diagnosis.DiagnosisVerdictCard(it, onVerdictAction) }
                     if (report.ipInfo != null) {
                         Text(
                             text = "IP: ${report.ipInfo.address} (${report.ipInfo.city.orEmpty()}, ${report.ipInfo.countryCode.orEmpty()})",

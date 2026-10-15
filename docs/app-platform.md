@@ -239,6 +239,48 @@ Privacy: the rules hold only hosts the user chose and category choices; no
 history is kept. Android sends nothing about the apps installed: the server
 names the packages, the phone applies what is there.
 
+## Diagnosis
+
+"It's not the VPN, it's the internet": when something does not open, the app
+says why in one sentence and offers one button.
+
+`GET /api/app/v1/diagnose` is anonymous like the remote configuration (the
+`X-Levik-Client` header, no cookies, credentials or query, 60 requests an hour
+per address). Apps send it through the physical network, so the server sees
+the operator rather than a Levik server; the address is neither kept nor
+returned. The answer:
+
+| Field | |
+|---|---|
+| `network` | `{ known, provider, country }`; `known: false` through a Levik server |
+| `whitelist` | `{ status, since }` for the caller's region: `active`, `inactive`, `mixed`, `insufficient`, `stale` or `unknown` |
+| `services` | `[{ slug, name, state, operator }]`: the monitor's `state` (`operational`, `degraded`, `outage`, `restricted` in Russia, `unknown`) and `operator`, how the caller's operator reached it in the website's checks of the last 15 minutes (`failing`, `working`, `unknown`; ten checks at least) |
+| `protocols` | the protocol advice of the remote configuration |
+| `countries` | `[{ country, online, total }]` of Levik's servers |
+| `maintenance` | the maintenance windows of the remote configuration |
+
+The app adds what the device saw: its network (none, a sign-in page, working;
+Wi-Fi or mobile), the VPN state, the current server and which services did
+not answer. The verdicts, first match wins:
+
+1. No network: open network settings. A Wi-Fi sign-in page: open Wi-Fi settings.
+2. Neither Levik nor any service answers: the internet is down without the
+   VPN, the server is broken with it (best server).
+3. The VPN fails to connect, or is connected and nothing opens: whitelists on
+   a mobile network (choose a "Mobile network" server), the server is down or
+   under maintenance (best server), a protocol works better on this operator
+   (best server), otherwise the server is unreachable (best server).
+4. A failing service is down everywhere: not the VPN, nothing to do.
+5. Without the VPN: a failing service restricted in Russia, failing on the
+   operator or failing for no known reason asks to connect; nothing failing
+   says the internet works.
+6. Through the VPN a failing service asks for another server; otherwise
+   everything works and the diagnostics can go to support, with the verdict
+   in the note.
+
+Android shows the verdict on top of its diagnostics (Direct builds); desktop
+apps on their support page.
+
 ## Device presence
 
 While open, an app reports `PUT /api/mobile/v1/presence`

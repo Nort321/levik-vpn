@@ -797,4 +797,29 @@
     <string name="rules_error_unknown">Не удалось сохранить правило. Попробуйте ещё раз.</string>
     <string name="rules_shared_no_site">В том, чем поделились, нет адреса сайта.</string>
     <string name="rules_ok">Понятно</string>
+    <!-- «Это не VPN», docs/app-platform.md "Diagnosis" -->
+    <string name="diagnosis_no_network">Телефон не подключён к сети. Включите Wi-Fi или мобильный интернет.</string>
+    <string name="diagnosis_captive_portal">Эта сеть Wi-Fi просит сначала войти, как в кафе или отеле. Войдите, затем подключите VPN.</string>
+    <string name="diagnosis_internet_down">Интернет не отвечает: проблема в сети или у оператора, а не в VPN.</string>
+    <string name="diagnosis_whitelists">У оператора в вашем регионе включены белые списки: обычные серверы недоступны. Выберите сервер «Мобильная сеть».</string>
+    <string name="diagnosis_whitelists_provider">%1$s включил белые списки в вашем регионе: обычные серверы недоступны. Выберите сервер «Мобильная сеть».</string>
+    <string name="diagnosis_server_down">Этот сервер сейчас недоступен. Переключитесь на другой.</string>
+    <string name="diagnosis_server_down_country">Сервер в стране «%1$s» сейчас недоступен. Переключитесь на другой.</string>
+    <string name="diagnosis_protocol">В вашей сети сейчас лучше работает %1$s.</string>
+    <string name="diagnosis_protocol_provider">У %1$s сейчас лучше работает %2$s.</string>
+    <string name="diagnosis_vpn_unreachable">Сервер VPN недоступен из вашей сети. Попробуйте лучший сервер.</string>
+    <string name="diagnosis_vpn_path_broken">VPN подключён, но через этот сервер интернет не открывается. Переключитесь на другой.</string>
+    <string name="diagnosis_service_down">%1$s сейчас не работает у всех — это не VPN.</string>
+    <string name="diagnosis_service_restricted">%1$s ограничен в России: через VPN он работает.</string>
+    <string name="diagnosis_service_operator">%1$s сейчас не работает у многих на %2$s: через VPN он работает.</string>
+    <string name="diagnosis_service_direct">%1$s не открывается без VPN. Включите VPN.</string>
+    <string name="diagnosis_service_via_vpn">%1$s у других работает, а через этот сервер — нет. Переключитесь на другой.</string>
+    <string name="diagnosis_all_ok_vpn_off">Интернет работает. Если сайт не открывается, включите VPN.</string>
+    <string name="diagnosis_all_ok">Интернет и VPN работают. Если проблема осталась, отправьте диагностику в поддержку.</string>
+    <string name="diagnosis_action_retry">Проверить снова</string>
+    <string name="diagnosis_action_network">Открыть настройки сети</string>
+    <string name="diagnosis_action_wifi">Открыть настройки Wi-Fi</string>
+    <string name="diagnosis_action_connect">Подключить VPN</string>
+    <string name="diagnosis_action_best_server">Переключить на лучший сервер</string>
+    <string name="diagnosis_action_mobile_servers">Выбрать сервер</string>
 </resources>

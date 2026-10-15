@@ -797,4 +797,29 @@
     <string name="rules_error_unknown">Could not save the rule. Please try again.</string>
     <string name="rules_shared_no_site">There is no site address in what was shared.</string>
     <string name="rules_ok">OK</string>
+    <!-- "It's not the VPN", docs/app-platform.md "Diagnosis" -->
+    <string name="diagnosis_no_network">The phone is not connected to a network. Turn on Wi-Fi or mobile data.</string>
+    <string name="diagnosis_captive_portal">This Wi-Fi asks you to sign in first, as in a café or hotel. Sign in, then connect the VPN.</string>
+    <string name="diagnosis_internet_down">The internet is not answering: the problem is in the network or with the operator, not in the VPN.</string>
+    <string name="diagnosis_whitelists">Your operator has turned on whitelists in this region: ordinary servers are blocked. Choose a “Mobile network” server.</string>
+    <string name="diagnosis_whitelists_provider">%1$s has turned on whitelists in this region: ordinary servers are blocked. Choose a “Mobile network” server.</string>
+    <string name="diagnosis_server_down">This server is unavailable right now. Switch to another one.</string>
+    <string name="diagnosis_server_down_country">The server in %1$s is unavailable right now. Switch to another one.</string>
+    <string name="diagnosis_protocol">%1$s works better on your network right now.</string>
+    <string name="diagnosis_protocol_provider">%2$s works better on %1$s right now.</string>
+    <string name="diagnosis_vpn_unreachable">The VPN server cannot be reached from your network. Try the best server.</string>
+    <string name="diagnosis_vpn_path_broken">The VPN is connected, but this server does not reach the internet. Switch to another one.</string>
+    <string name="diagnosis_service_down">%1$s is down for everyone right now: it is not the VPN.</string>
+    <string name="diagnosis_service_restricted">%1$s is restricted in Russia: it works through the VPN.</string>
+    <string name="diagnosis_service_operator">%1$s does not work for many people on %2$s right now: it works through the VPN.</string>
+    <string name="diagnosis_service_direct">%1$s does not open without the VPN. Turn the VPN on.</string>
+    <string name="diagnosis_service_via_vpn">%1$s works for others but not through this server. Switch to another one.</string>
+    <string name="diagnosis_all_ok_vpn_off">The internet works. If a site does not open, turn on the VPN.</string>
+    <string name="diagnosis_all_ok">The internet and the VPN work. If something still fails, send the diagnostics to support.</string>
+    <string name="diagnosis_action_retry">Check again</string>
+    <string name="diagnosis_action_network">Open network settings</string>
+    <string name="diagnosis_action_wifi">Open Wi-Fi settings</string>
+    <string name="diagnosis_action_connect">Connect the VPN</string>
+    <string name="diagnosis_action_best_server">Switch to the best server</string>
+    <string name="diagnosis_action_mobile_servers">Choose a server</string>
 </resources>
