@@ -409,7 +409,9 @@ its quiet hours, in Telegram itself.
   each one went.
 
 Only the Direct build of Android takes notifications; Google Play builds and
-browser sessions leave them to Telegram.
+browser sessions leave them to Telegram. Signed-in desktop apps no longer
+remind about the end of a subscription by themselves; they only say when it
+has ended.
 
 ## Approving a sign-in
 
