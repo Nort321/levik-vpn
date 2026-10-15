@@ -45,9 +45,11 @@ data class InviteClaimResponse(val ok: Boolean, val result: InviteClaimResult)
 
 @Serializable
 data class FamilyRequest(
-    /** overview, invite, remove or leave */
+    /** overview, invite, remove, leave or help */
     val action: String,
     val memberId: Long? = null,
+    /** For help: whether the member lets the owner help with their apps. */
+    val allowed: Boolean? = null,
 )
 
 @Serializable
@@ -59,6 +61,8 @@ data class FamilyMember(
     val devices: Int,
     val lastActiveAt: String? = null,
     val joinedAt: String = "",
+    /** The member lets the owner help with their apps. */
+    val helpAllowed: Boolean = false,
 )
 
 @Serializable
@@ -72,10 +76,69 @@ data class FamilyOverview(
     val ownerName: String? = null,
     val usedSeats: Int? = null,
     val members: List<FamilyMember> = emptyList(),
+    /** For a member: whether they let the owner help with their apps. */
+    val helpAllowed: Boolean = false,
 )
 
 @Serializable
 data class FamilyInviteLink(val url: String, val expiresAt: String)
+
+/** A member's app the owner may help with, /api/mobile/v1/family/help; never its device id. */
+@Serializable
+data class FamilyHelpDevice(
+    val ref: String,
+    val name: String,
+    /** android, windows, macos or linux */
+    val platform: String,
+    val appVersion: String? = null,
+    /** The app takes commands, so help reaches it. */
+    val remote: Boolean = false,
+    val online: Boolean = false,
+    val vpnConnected: Boolean = false,
+)
+
+@Serializable
+data class FamilyHelpee(
+    val memberId: Long,
+    val name: String,
+    val lastActiveAt: String? = null,
+    /** False until the member signs in to an app with their Levik account. */
+    val linked: Boolean = false,
+    val devices: List<FamilyHelpDevice> = emptyList(),
+)
+
+@Serializable
+data class FamilyHelpCommand(
+    val id: String,
+    val memberId: Long,
+    val deviceRef: String,
+    /** refresh_profile, auto_server or check_update */
+    val command: String,
+    /** pending, delivered, done, failed, unsupported or expired */
+    val state: String,
+    val detail: String? = null,
+) {
+    val final: Boolean get() = state in FINAL_STATES
+
+    private companion object {
+        val FINAL_STATES = setOf("done", "failed", "unsupported", "expired")
+    }
+}
+
+@Serializable
+data class FamilyHelpResponse(
+    val ok: Boolean,
+    val members: List<FamilyHelpee> = emptyList(),
+    val commands: List<FamilyHelpCommand> = emptyList(),
+) {
+    fun latestFor(deviceRef: String): FamilyHelpCommand? = commands.firstOrNull { it.deviceRef == deviceRef }
+}
+
+@Serializable
+data class FamilyHelpRequest(val memberId: Long, val deviceRef: String, val command: String)
+
+@Serializable
+data class FamilyHelpIssued(val ok: Boolean, val command: FamilyHelpCommand)
 
 @Serializable
 data class FamilyResponse(

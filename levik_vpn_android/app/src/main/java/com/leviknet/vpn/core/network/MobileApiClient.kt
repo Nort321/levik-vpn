@@ -433,6 +433,30 @@ class MobileApiClient(
         return response
     }
 
+    /** The family members who let this owner help, their apps and the help sent lately. */
+    suspend fun familyHelp(accessToken: String): FamilyHelpResponse {
+        val response = request<FamilyHelpResponse>(
+            method = METHOD_GET,
+            path = FAMILY_HELP_PATH,
+            body = EMPTY_BODY,
+            accessToken = accessToken,
+            requiresIntegrity = false,
+        )
+        checkSuccess(response.ok)
+        return response
+    }
+
+    suspend fun sendFamilyHelp(accessToken: String, request: FamilyHelpRequest): FamilyHelpCommand {
+        val response = post<FamilyHelpRequest, FamilyHelpIssued>(
+            path = FAMILY_HELP_PATH,
+            request = request,
+            accessToken = accessToken,
+            requiresIntegrity = false,
+        )
+        checkSuccess(response.ok)
+        return response.command
+    }
+
     suspend fun referrals(accessToken: String): ReferralsResponse {
         val response = post<EmptyRequest, ReferralsResponse>(
             path = REFERRALS_PATH,
@@ -691,6 +715,7 @@ class MobileApiClient(
         private const val INVITE_PREVIEW_PATH = "/api/mobile/v1/invites/preview"
         private const val INVITE_CLAIM_PATH = "/api/mobile/v1/invites/claim"
         private const val FAMILY_PATH = "/api/mobile/v1/family"
+        private const val FAMILY_HELP_PATH = "/api/mobile/v1/family/help"
         private const val REFERRALS_PATH = "/api/mobile/v1/referrals"
         private const val METHOD_GET = "GET"
         private const val METHOD_POST = "POST"

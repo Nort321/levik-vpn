@@ -39,6 +39,19 @@ class RemoteCommandsTest {
     }
 
     @Test
+    fun `knows a command from the family owner and lets it only repair`() {
+        val delivered = RemoteCommands.parseDelivered(
+            json("""[{"id":"00000000-0000-4000-8000-000000000003","command":"refresh_profile","via":"family"}]"""),
+        ).single()
+        assertTrue(delivered.fromFamily)
+        assertEquals(
+            setOf(RemoteCommand.AUTO_SERVER, RemoteCommand.REFRESH_PROFILE, RemoteCommand.CHECK_UPDATE),
+            RemoteCommands.FAMILY_COMMANDS,
+        )
+        assertTrue(RemoteCommand.CONNECT !in RemoteCommands.FAMILY_COMMANDS)
+    }
+
+    @Test
     fun `parses devices and issued commands strictly`() {
         val devices = RemoteCommands.parseDevices(
             json("""[

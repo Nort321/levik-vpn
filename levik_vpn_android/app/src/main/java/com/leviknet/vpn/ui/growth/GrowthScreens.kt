@@ -213,6 +213,9 @@ internal fun FamilyAndFriendsScreen(
     onShare: (String) -> Unit,
     onOpenPlans: () -> Unit,
     onBuyGift: () -> Unit,
+    helpEnabled: Boolean = false,
+    onSetHelp: (Boolean) -> Unit = {},
+    onSendHelp: (memberId: Long, deviceRef: String, command: String) -> Unit = { _, _, _ -> },
 ) {
     var confirmRemove by remember { mutableStateOf<FamilyMember?>(null) }
     var confirmLeave by remember { mutableStateOf(false) }
@@ -279,6 +282,18 @@ internal fun FamilyAndFriendsScreen(
                                 onRemove = { confirmRemove = it },
                                 onLeave = { confirmLeave = true },
                                 onOpenPlans = onOpenPlans,
+                                helpEnabled = helpEnabled,
+                                onSetHelp = onSetHelp,
+                            )
+                        }
+                    }
+                    state.help?.takeIf { helpEnabled && state.family?.role == "owner" }?.let { help ->
+                        item {
+                            FamilyHelpSection(
+                                help = help,
+                                sending = state.helpSending,
+                                error = state.helpError,
+                                onSend = onSendHelp,
                             )
                         }
                     }
@@ -376,6 +391,8 @@ private fun FamilyCard(
     onRemove: (FamilyMember) -> Unit,
     onLeave: () -> Unit,
     onOpenPlans: () -> Unit,
+    helpEnabled: Boolean,
+    onSetHelp: (Boolean) -> Unit,
 ) {
     val family = state.family ?: return
     when (family.role) {
@@ -387,7 +404,11 @@ private fun FamilyCard(
                 body = stringResource(R.string.family_owner_body, free, family.seats, formatDate(family.expiresAt)),
             ) {
                 family.members.forEach { member ->
-                    MemberRow(member = member, onRemove = onRemove.takeIf { member.role == "member" })
+                    MemberRow(
+                        member = member,
+                        onRemove = onRemove.takeIf { member.role == "member" },
+                        showHelp = helpEnabled,
+                    )
                 }
                 state.inviteLink?.let { link ->
                     InviteQr(link.url)
@@ -422,6 +443,9 @@ private fun FamilyCard(
             title = stringResource(R.string.family_member_title, family.ownerName ?: stringResource(R.string.invite_someone)),
             body = stringResource(R.string.family_member_body, formatDate(family.expiresAt)),
         ) {
+            if (helpEnabled) {
+                FamilyHelpSwitch(allowed = family.helpAllowed, busy = state.busy, onChange = onSetHelp)
+            }
             OutlinedButton(
                 onClick = onLeave,
                 enabled = !state.busy,
@@ -446,7 +470,7 @@ private fun FamilyCard(
 }
 
 @Composable
-private fun MemberRow(member: FamilyMember, onRemove: ((FamilyMember) -> Unit)?) {
+private fun MemberRow(member: FamilyMember, onRemove: ((FamilyMember) -> Unit)?, showHelp: Boolean) {
     Row(
         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -462,6 +486,13 @@ private fun MemberRow(member: FamilyMember, onRemove: ((FamilyMember) -> Unit)?)
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (showHelp && member.helpAllowed) {
+                Text(
+                    stringResource(R.string.family_member_help_allowed),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
         if (onRemove != null) {
             TextButton(onClick = { onRemove(member) }) { Text(stringResource(R.string.family_remove)) }
@@ -535,7 +566,7 @@ private fun LinkActions(url: String, shareText: String, onShare: (String) -> Uni
 }
 
 @Composable
-private fun SectionCard(title: String, body: String, content: @Composable () -> Unit) {
+internal fun SectionCard(title: String, body: String, content: @Composable () -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(LevikDimensions.CardRadius),
@@ -605,6 +636,8 @@ private fun claimedBody(kind: String): Int = when (kind) {
 private fun noticeText(notice: FamilyNotice): Int = when (notice) {
     FamilyNotice.MEMBER_REMOVED -> R.string.family_member_removed
     FamilyNotice.LEFT -> R.string.family_left
+    FamilyNotice.HELP_ALLOWED -> R.string.family_help_allowed
+    FamilyNotice.HELP_STOPPED -> R.string.family_help_stopped
 }
 
 @StringRes

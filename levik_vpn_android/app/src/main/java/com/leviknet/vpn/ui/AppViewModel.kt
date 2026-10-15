@@ -135,6 +135,7 @@ class AppViewModel(
         scope = viewModelScope,
         isAuthenticated = { mutableState.value.session == SessionStatus.Authenticated },
         onAccessChanged = { refreshSubscription(showErrors = false) },
+        helpEnabled = appPlatform?.remote != null,
     )
     private val supportNotes = SupportNoteClient()
     private var loginStartJob: Job? = null

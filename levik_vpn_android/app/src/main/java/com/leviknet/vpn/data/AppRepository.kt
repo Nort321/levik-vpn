@@ -621,10 +621,17 @@ class AppRepository(
     suspend fun family(
         action: String,
         memberId: Long? = null,
+        allowed: Boolean? = null,
     ): com.leviknet.vpn.core.network.FamilyResponse = apiClient.family(
         requireToken(),
-        com.leviknet.vpn.core.network.FamilyRequest(action, memberId),
+        com.leviknet.vpn.core.network.FamilyRequest(action, memberId, allowed),
     )
+
+    suspend fun familyHelp(): com.leviknet.vpn.core.network.FamilyHelpResponse =
+        apiClient.familyHelp(requireToken())
+
+    suspend fun sendFamilyHelp(memberId: Long, deviceRef: String, command: String): com.leviknet.vpn.core.network.FamilyHelpCommand =
+        apiClient.sendFamilyHelp(requireToken(), com.leviknet.vpn.core.network.FamilyHelpRequest(memberId, deviceRef, command))
 
     suspend fun referrals(): com.leviknet.vpn.core.network.ReferralsResponse =
         apiClient.referrals(requireToken())

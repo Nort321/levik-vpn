@@ -129,12 +129,15 @@ class RemoteControl(
             if (!fresh) continue
             val outcome = execute(command)
             quietly("Remote result") { repository.commandResult(command.id, outcome.result.wire, outcome.detail) }
+            if (command.fromFamily && outcome.result == CommandResult.DONE) tellFamilyHelped(command)
         }
     }
 
     internal suspend fun execute(command: DeliveredCommand): CommandOutcome {
         // Only the fixed list runs; a disconnect or anything else is refused here too.
         val known = RemoteCommand.of(command.command) ?: return CommandOutcome.UNSUPPORTED
+        // The family owner only repairs; the server holds the same line.
+        if (command.fromFamily && known !in RemoteCommands.FAMILY_COMMANDS) return CommandOutcome.UNSUPPORTED
         AppLogger.i(TAG, "Remote command: ${known.wire}")
         return try {
             when (known) {
@@ -166,6 +169,17 @@ class RemoteControl(
             AppLogger.w(TAG, "Remote command failed: ${error.javaClass.simpleName}")
             CommandOutcome.FAILED
         }
+    }
+
+    /** The member always learns what the family owner did on their phone. */
+    private fun tellFamilyHelped(command: DeliveredCommand) {
+        val body = when (RemoteCommand.of(command.command)) {
+            RemoteCommand.REFRESH_PROFILE -> R.string.family_helped_profile
+            RemoteCommand.AUTO_SERVER -> R.string.family_helped_server
+            RemoteCommand.CHECK_UPDATE -> R.string.family_helped_update
+            else -> return
+        }
+        notify(FAMILY_NOTIFICATION_ID, context.getString(R.string.family_helped_title), context.getString(body))
     }
 
     private suspend fun connect(): CommandOutcome = when (vpnController.state.value.state) {
@@ -219,6 +233,7 @@ class RemoteControl(
     private companion object {
         const val TAG = "RemoteControl"
         const val NOTIFICATION_ID = 5400
+        const val FAMILY_NOTIFICATION_ID = 5401
         const val WATCH_MS = 10 * 60 * 1_000L
         const val MAX_HANDLED = 200
     }

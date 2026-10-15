@@ -421,6 +421,9 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                 viewModel.openSubscriptionManagement()
             },
             onBuyGift = { viewModel.openCabinet(com.leviknet.vpn.core.platform.CabinetTarget.PLANS) },
+            helpEnabled = viewModel.growth.helpEnabled,
+            onSetHelp = viewModel.growth::setFamilyHelp,
+            onSendHelp = viewModel.growth::sendFamilyHelp,
         )
     }
 

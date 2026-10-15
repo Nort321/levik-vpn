@@ -60,7 +60,19 @@ enum class RemotePlatform(val wire: String) {
 }
 
 /** A command for this phone; an unknown name is kept so the phone can answer "unsupported". */
-data class DeliveredCommand(val id: String, val command: String, val replyKey: String?)
+data class DeliveredCommand(
+    val id: String,
+    val command: String,
+    val replyKey: String?,
+    /** app, web or family: family is the family owner helping, with repairs only. */
+    val via: String? = null,
+) {
+    val fromFamily: Boolean get() = via == VIA_FAMILY
+
+    private companion object {
+        const val VIA_FAMILY = "family"
+    }
+}
 
 data class RemoteDevice(
     /** The id the app sends as X-HWID. */
@@ -114,6 +126,9 @@ object RemoteCommands {
     const val UPDATE_CHECK_FAILED = "update_check_failed"
     const val AVAILABLE_PREFIX = "available:"
 
+    /** What the family owner may run on a member's phone, docs/app-platform.md "Family help". */
+    val FAMILY_COMMANDS = setOf(RemoteCommand.AUTO_SERVER, RemoteCommand.REFRESH_PROFILE, RemoteCommand.CHECK_UPDATE)
+
     private val UUID = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
     private val COUNTRY = Regex("^[A-Z]{2}$")
     private val NOTE_LINK = Regex("^https://note\\.leviknet\\.(?:org|com)/[A-Za-z0-9_-]+#[A-Za-z0-9_-]+$")
@@ -125,7 +140,7 @@ object RemoteCommands {
     fun parseDelivered(value: JsonElement?): List<DeliveredCommand> = items(value).mapNotNull { entry ->
         val id = entry.text("id", 36)?.takeIf(UUID::matches) ?: return@mapNotNull null
         val command = entry.text("command", 40) ?: return@mapNotNull null
-        DeliveredCommand(id, command, entry.text("replyKey", 1_000))
+        DeliveredCommand(id, command, entry.text("replyKey", 1_000), entry.text("via", 20))
     }
 
     fun parseDevices(value: JsonElement?): List<RemoteDevice> = items(value).mapNotNull { entry ->

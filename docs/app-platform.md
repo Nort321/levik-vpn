@@ -236,6 +236,30 @@ diagnostics. On Android, `connect` needs the VPN permission granted once on the
 phone itself; without it the answer is `failed` with `vpn_permission`. Only the
 Direct build takes part; Google Play builds neither take nor send commands.
 
+### Family help
+
+A family member may let the family owner help with their apps. Only the member
+turns it on or off: `POST /api/mobile/v1/family` `{ "action": "help",
+"allowed": true|false }`, or the switch on the family page of the website. The
+family overview then carries `helpAllowed` for a member, and for each member in
+the owner's list.
+
+- `GET /api/mobile/v1/family/help` (owner) lists the members who allowed help
+  (`memberId`, `name`, `lastActiveAt`, `linked`) with their apps (`ref`, `name`,
+  `platform`, `appVersion`, `remote`, `online`, `vpnConnected`) and the help sent
+  in the last 30 minutes (`id`, `memberId`, `deviceRef`, `command`, `state`,
+  `detail`). `ref` is an opaque id: the owner never sees the device id, the
+  server, the country or any traffic.
+- `POST /api/mobile/v1/family/help` `{ memberId, deviceRef, command }` sends
+  `refresh_profile`, `auto_server` or `check_update`. Nothing else is possible:
+  not `connect`, not diagnostics, and never a disconnect. The server asks the
+  bot for the member's consent on every request.
+
+The command reaches the member's app with `via: "family"`. The app refuses any
+other command from the family owner and, after a repair, tells the member what
+was done. The bot also tells the owner once in Telegram when such a member has
+not connected for a day after being active that week.
+
 ## Approving a sign-in
 
 A new app asks the user to approve it somewhere they are already signed in,

@@ -2,6 +2,7 @@ package com.leviknet.vpn.ui.growth
 
 import com.leviknet.vpn.core.logger.AppLogger
 import com.leviknet.vpn.core.network.ApiException
+import com.leviknet.vpn.core.network.FamilyHelpResponse
 import com.leviknet.vpn.core.network.FamilyInviteLink
 import com.leviknet.vpn.core.network.FamilyOverview
 import com.leviknet.vpn.core.network.FamilyResponse
@@ -13,6 +14,7 @@ import com.leviknet.vpn.data.AppRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -42,9 +44,15 @@ data class FamilyUiState(
     val gifts: List<GiftLink> = emptyList(),
     val error: String? = null,
     val notice: FamilyNotice? = null,
+    /** For an owner: members who let them help, their apps and the help sent lately. */
+    val help: FamilyHelpResponse? = null,
+    /** The app help is being sent to, by its ref. */
+    val helpSending: String? = null,
+    /** Why help did not go out: rate_limited, device_not_found, network or unknown. */
+    val helpError: String? = null,
 )
 
-enum class FamilyNotice { MEMBER_REMOVED, LEFT }
+enum class FamilyNotice { MEMBER_REMOVED, LEFT, HELP_ALLOWED, HELP_STOPPED }
 
 /** Referral, family and gift state for the app; screens live in GrowthScreens.kt. */
 class GrowthController(
@@ -52,6 +60,8 @@ class GrowthController(
     private val scope: CoroutineScope,
     private val isAuthenticated: () -> Boolean,
     private val onAccessChanged: () -> Unit,
+    /** Family help rides on the remote, which only Direct builds have. */
+    val helpEnabled: Boolean = false,
 ) {
     private val mutableInvite = MutableStateFlow<InviteUiState?>(null)
     val invite: StateFlow<InviteUiState?> = mutableInvite.asStateFlow()
@@ -61,6 +71,7 @@ class GrowthController(
 
     private var inviteJob: Job? = null
     private var familyJob: Job? = null
+    private var helpJob: Job? = null
 
     fun openInvite(code: String) {
         mutableInvite.value = InviteUiState(code = code)
@@ -131,6 +142,7 @@ class GrowthController(
 
     fun closeFamily() {
         familyJob?.cancel()
+        helpJob?.cancel()
         mutableFamily.value = FamilyUiState()
     }
 
@@ -145,6 +157,8 @@ class GrowthController(
             val family = runGrowth { repository.family(ACTION_OVERVIEW) }
             // Referral links and gifts are optional; a failure there must not hide the family.
             val referrals = runGrowth { repository.referrals() }.getOrNull()
+            val owner = family.getOrNull()?.family?.role == ROLE_OWNER
+            val help = if (helpEnabled && owner) runGrowth { repository.familyHelp() }.getOrNull() else null
             mutableFamily.update { state ->
                 state.copy(
                     loading = false,
@@ -152,7 +166,51 @@ class GrowthController(
                     referral = referrals?.referral,
                     gifts = referrals?.gifts.orEmpty(),
                     error = family.exceptionOrNull()?.let(::errorCode),
+                    help = help ?: state.help.takeIf { owner },
                 )
+            }
+            watchHelp()
+        }
+    }
+
+    /** A member lets the owner help with their apps, or stops it. */
+    fun setFamilyHelp(allowed: Boolean) = familyAction(
+        ACTION_HELP,
+        allowed = allowed,
+        notice = if (allowed) FamilyNotice.HELP_ALLOWED else FamilyNotice.HELP_STOPPED,
+    )
+
+    /** Sends one repair to a member's app: refresh_profile, auto_server or check_update. */
+    fun sendFamilyHelp(memberId: Long, deviceRef: String, command: String) {
+        val state = mutableFamily.value
+        if (!helpEnabled || state.helpSending != null || command !in HELP_COMMANDS) return
+        mutableFamily.update { it.copy(helpSending = deviceRef, helpError = null) }
+        scope.launch {
+            val result = runGrowth { repository.sendFamilyHelp(memberId, deviceRef, command) }
+            mutableFamily.update { current ->
+                val issued = result.getOrNull()
+                current.copy(
+                    helpSending = null,
+                    helpError = result.exceptionOrNull()?.let(::errorCode),
+                    help = current.help?.let { help ->
+                        if (issued == null) help else help.copy(commands = listOf(issued) + help.commands.filterNot { it.id == issued.id })
+                    },
+                )
+            }
+            watchHelp()
+        }
+    }
+
+    /** While help is on its way, the answers are fetched every few seconds. */
+    private fun watchHelp() {
+        if (helpJob?.isActive == true) return
+        helpJob = scope.launch {
+            while (true) {
+                val state = mutableFamily.value
+                if (!state.open || state.help?.commands?.any { !it.final } != true) break
+                delay(HELP_POLL_MS)
+                val help = runGrowth { repository.familyHelp() }.getOrNull() ?: continue
+                mutableFamily.update { if (it.open) it.copy(help = help) else it }
             }
         }
     }
@@ -163,11 +221,16 @@ class GrowthController(
 
     fun leaveFamily() = familyAction(ACTION_LEAVE, notice = FamilyNotice.LEFT)
 
-    private fun familyAction(action: String, memberId: Long? = null, notice: FamilyNotice? = null) {
+    private fun familyAction(
+        action: String,
+        memberId: Long? = null,
+        notice: FamilyNotice? = null,
+        allowed: Boolean? = null,
+    ) {
         if (mutableFamily.value.busy) return
         mutableFamily.update { it.copy(busy = true, error = null, notice = null) }
         familyJob = scope.launch {
-            val result: Result<FamilyResponse> = runGrowth { repository.family(action, memberId) }
+            val result: Result<FamilyResponse> = runGrowth { repository.family(action, memberId, allowed) }
             if (result.isSuccess && action == ACTION_LEAVE) onAccessChanged()
             mutableFamily.update { state ->
                 val response = result.getOrNull()
@@ -207,5 +270,10 @@ class GrowthController(
         private const val ACTION_INVITE = "invite"
         private const val ACTION_REMOVE = "remove"
         private const val ACTION_LEAVE = "leave"
+        private const val ACTION_HELP = "help"
+        private const val ROLE_OWNER = "owner"
+        private const val HELP_POLL_MS = 3_000L
+        /** What an owner may do for a member; never connect, disconnect or diagnostics. */
+        val HELP_COMMANDS = listOf("refresh_profile", "auto_server", "check_update")
     }
 }
