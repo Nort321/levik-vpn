@@ -327,6 +327,14 @@ class MobileApiClient(
     suspend fun takeNotifications(accessToken: String): JsonObject =
         jsonRequest(METHOD_GET, NOTIFICATIONS_PATH, EMPTY_BODY, accessToken)
 
+    /** Levik Home: a beacon heard on the local network, docs/app-platform.md "Levik Home". */
+    suspend fun reportHomeSighting(accessToken: String, homeId: String, window: Long, proof: String): JsonObject {
+        val body = JsonObject(
+            mapOf("homeId" to JsonPrimitive(homeId), "window" to JsonPrimitive(window), "proof" to JsonPrimitive(proof)),
+        ).toString().encodeToByteArray()
+        return jsonRequest(METHOD_POST, HOME_SIGHTING_PATH, body, accessToken)
+    }
+
     suspend fun commandResult(accessToken: String, id: String, result: String, detail: String?) {
         val body = JsonObject(
             mapOf("id" to JsonPrimitive(id), "result" to JsonPrimitive(result), "detail" to (detail?.let(::JsonPrimitive) ?: JsonNull)),
@@ -735,6 +743,7 @@ class MobileApiClient(
         private const val COMMANDS_PATH = "/api/mobile/v1/commands"
         private const val COMMAND_RESULT_PATH = "/api/mobile/v1/commands/result"
         private const val NOTIFICATIONS_PATH = "/api/mobile/v1/notifications"
+        private const val HOME_SIGHTING_PATH = "/api/mobile/v1/home/sighting"
 
         /** The server needs "number": null, which the shared Json leaves out, so the body is built by hand. */
         internal fun approvalDecisionBody(id: String, number: Int?): String = JsonObject(

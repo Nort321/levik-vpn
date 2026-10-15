@@ -592,6 +592,9 @@ class AppRepository(
 
     suspend fun takeNotifications(): kotlinx.serialization.json.JsonObject = apiClient.takeNotifications(requireToken())
 
+    suspend fun reportHomeSighting(homeId: String, window: Long, proof: String): kotlinx.serialization.json.JsonObject =
+        apiClient.reportHomeSighting(requireToken(), homeId, window, proof)
+
     suspend fun commandResult(id: String, result: String, detail: String?) =
         apiClient.commandResult(requireToken(), id, result, detail)
 

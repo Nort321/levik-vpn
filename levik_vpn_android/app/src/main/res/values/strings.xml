@@ -433,6 +433,10 @@
     <string name="status_paused">PAUSED (%1$s)</string>
     <string name="vpn_notification_paused">VPN paused (%1$s)</string>
     <string name="vpn_notification_resume">Resume</string>
+    <string name="vpn_notification_home">At home: the VPN of the router protects “%1$s”</string>
+    <string name="status_home">AT HOME</string>
+    <string name="home_sleep_desc">The router’s VPN protects “%1$s”. Levik VPN turns back on as soon as you leave.</string>
+    <string name="home_sleep_resume">Turn on here</string>
     <string name="pause_vpn_btn">Pause VPN</string>
     <string name="pause_vpn_title">Pause VPN connection</string>
     <string name="pause_vpn_desc">Temporarily route network directly. VPN will resume automatically.</string>
@@ -583,6 +587,8 @@
     <string name="settings_sync_desc">Routing, protection and Anti-DPI are the same in all your Levik VPN apps</string>
     <string name="share_presence_title">Show “online” status</string>
     <string name="share_presence_desc">On the devices page and in your other apps: whether Levik VPN is open and the VPN is on. No IP addresses, no history</string>
+    <string name="sleep_at_home_title">Sleep at home</string>
+    <string name="sleep_at_home_desc">When a Levik Home router with its VPN on protects your home network, the VPN on this phone pauses and turns back on as soon as you leave</string>
     <string name="login_declined">Sign-in cancelled: a different number was picked or “This is not me” was tapped.</string>
     <string name="login_match_label">Number to confirm</string>
     <string name="login_match_content_description">Number %1$d</string>

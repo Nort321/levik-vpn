@@ -433,6 +433,10 @@
     <string name="status_paused">ПАУЗА (%1$s)</string>
     <string name="vpn_notification_paused">VPN на паузе (%1$s)</string>
     <string name="vpn_notification_resume">Возобновить</string>
+    <string name="vpn_notification_home">Дома: «%1$s» защищает VPN роутера</string>
+    <string name="status_home">ДОМА</string>
+    <string name="home_sleep_desc">«%1$s» защищает VPN роутера. Levik VPN включится, как только вы уйдёте.</string>
+    <string name="home_sleep_resume">Включить здесь</string>
     <string name="pause_vpn_btn">Приостановить VPN</string>
     <string name="pause_vpn_title">Пауза VPN-подключения</string>
     <string name="pause_vpn_desc">Временно пускать трафик напрямую (для банков и Госуслуг). VPN включится автоматически.</string>
@@ -583,6 +587,8 @@
     <string name="settings_sync_desc">Маршрутизация, защита и Anti-DPI одинаковы во всех ваших приложениях Levik VPN</string>
     <string name="share_presence_title">Показывать статус «в сети»</string>
     <string name="share_presence_desc">На странице устройств и в других ваших приложениях: открыт ли Levik VPN и включён ли VPN. Без IP-адресов и истории</string>
+    <string name="sleep_at_home_title">Засыпать дома</string>
+    <string name="sleep_at_home_desc">Когда домашнюю сеть защищает роутер Levik Home с включённым VPN, VPN на телефоне встаёт на паузу и включается, как только вы уходите</string>
     <string name="login_declined">Вход отменён: выбрано другое число или нажато «Это не я».</string>
     <string name="login_match_label">Число для подтверждения</string>
     <string name="login_match_content_description">Число %1$d</string>

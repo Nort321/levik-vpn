@@ -42,6 +42,8 @@ data class VpnSnapshot(
     val uploadBytesPerSecond: Long = 0,
     val connectedDurationSeconds: Long = 0,
     val pausedRemainingSeconds: Long = 0,
+    /** The pause is Levik Home's: the name of the home whose router protects the network. */
+    val pausedAtHome: String? = null,
     val failure: VpnFailure? = null,
     val failureDetail: String? = null,
     internal val ownerGeneration: Long = 0,

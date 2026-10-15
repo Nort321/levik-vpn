@@ -227,6 +227,11 @@ class AppPlatform(
                 }
             }
         }
+        if (HOME_ENABLED) {
+            scope.launch {
+                HomeWatcher(context, settings, repository, vpnController, directNetwork, foreground.asStateFlow()).run()
+            }
+        }
         if (MAINTENANCE_ENABLED) {
             scope.launch {
                 vpnController.state.collect { snapshot ->
@@ -999,6 +1004,9 @@ class AppPlatform(
 
         /** The remote is part of the Direct build only. */
         val REMOTE_ENABLED = !BuildConfig.IS_PLAY_DISTRIBUTION
+
+        /** Levik Home is part of the Direct build only. */
+        val HOME_ENABLED = !BuildConfig.IS_PLAY_DISTRIBUTION
         const val PRESENCE_DEBOUNCE_MS = 1_500L
         const val MAX_EVENT_LINE = 4_096
         val INACTIVE_TUNNEL = setOf(VpnConnectionState.DISCONNECTED, VpnConnectionState.ERROR)

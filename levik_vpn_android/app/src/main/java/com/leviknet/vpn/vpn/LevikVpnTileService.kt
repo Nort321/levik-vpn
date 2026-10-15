@@ -101,7 +101,7 @@ class LevikVpnTileService : TileService() {
                         snapshot.pausedRemainingSeconds / 60,
                         snapshot.pausedRemainingSeconds % 60,
                     )
-                    tile.subtitle = getString(R.string.status_paused, formatted)
+                    tile.subtitle = if (snapshot.pausedAtHome != null) getString(R.string.status_home) else getString(R.string.status_paused, formatted)
                 }
             }
             VpnConnectionState.CONNECTING,

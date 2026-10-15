@@ -78,6 +78,17 @@ class VpnController(
         )
     }
 
+    /** Levik Home: the router's VPN protects this network; the pause lasts until the phone leaves. */
+    fun pauseAtHome(home: String) {
+        ContextCompat.startForegroundService(
+            context,
+            Intent(context, LevikVpnService::class.java)
+                .setAction(LevikVpnService.ACTION_PAUSE)
+                .putExtra(LevikVpnService.EXTRA_PAUSE_MINUTES, LevikVpnService.HOME_PAUSE_MINUTES)
+                .putExtra(LevikVpnService.EXTRA_PAUSE_HOME, home),
+        )
+    }
+
     fun resume() {
         ContextCompat.startForegroundService(
             context,

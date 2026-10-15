@@ -236,8 +236,9 @@ class LevikVpnService : VpnService() {
             }
             ACTION_PAUSE -> {
                 val minutes = intent?.getIntExtra(EXTRA_PAUSE_MINUTES, 15) ?: 15
+                val home = intent?.getStringExtra(EXTRA_PAUSE_HOME)?.trim()?.takeIf { it.isNotEmpty() && it.length <= MAX_HOME_NAME }
                 serviceScope.launch {
-                    pauseConnection(minutes)
+                    pauseConnection(minutes, home)
                 }
             }
             ACTION_RESUME -> {
@@ -1891,7 +1892,7 @@ class LevikVpnService : VpnService() {
         return true
     }
 
-    private suspend fun pauseConnection(minutes: Int) = connectionMutex.withLock {
+    private suspend fun pauseConnection(minutes: Int, home: String? = null) = connectionMutex.withLock {
         telemetry.record { it.pause() }
         pendingAutoFallback = null
         tunnelHealthPolicy.reset()
@@ -1927,6 +1928,7 @@ class LevikVpnService : VpnService() {
                 effectiveRoutingProfile = serverBeforePause?.effectiveRoutingProfile(container.settings.routingPreset.value)
                     ?: EffectiveRoutingProfile.USER_SELECTED,
                 pausedRemainingSeconds = initialRemaining,
+                pausedAtHome = home,
             ),
         )
         showForeground(
@@ -1934,6 +1936,7 @@ class LevikVpnService : VpnService() {
             serverNameBeforePause,
             initialRemaining,
             serverBeforePause?.countryCode,
+            home,
         )
 
         pauseJob = serviceScope.launch {
@@ -1964,6 +1967,7 @@ class LevikVpnService : VpnService() {
                     serverNameBeforePause,
                     remaining,
                     serverBeforePause?.countryCode,
+                    home,
                 )
             }
         }
@@ -2174,12 +2178,14 @@ class LevikVpnService : VpnService() {
         serverName: String?,
         remainingSeconds: Long = 0,
         serverCountryCode: String? = currentServer?.countryCode,
+        home: String? = null,
     ) {
         val notification = buildNotification(
             state,
             serverName,
             remainingSeconds,
             serverCountryCode,
+            home,
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
@@ -2197,6 +2203,7 @@ class LevikVpnService : VpnService() {
         serverName: String?,
         remainingSeconds: Long = 0,
         serverCountryCode: String? = currentServer?.countryCode,
+        home: String? = null,
     ): Notification {
         val contentIntent = PendingIntent.getActivity(
             this,
@@ -2238,10 +2245,11 @@ class LevikVpnService : VpnService() {
                 serverName.orEmpty(),
                 countryDisplay(serverCountryCode),
             )
-            VpnConnectionState.PAUSED -> getString(
-                R.string.vpn_notification_paused,
-                formattedTime,
-            )
+            VpnConnectionState.PAUSED -> if (home != null) {
+                getString(R.string.vpn_notification_home, home)
+            } else {
+                getString(R.string.vpn_notification_paused, formattedTime)
+            }
             VpnConnectionState.RECONNECTING -> getString(
                 R.string.vpn_notification_reconnecting,
             )
@@ -2325,6 +2333,11 @@ class LevikVpnService : VpnService() {
         const val ACTION_RESUME = "com.leviknet.vpn.action.RESUME"
         const val EXTRA_SERVER_ID = "com.leviknet.vpn.extra.SERVER_ID"
         const val EXTRA_PAUSE_MINUTES = "com.leviknet.vpn.extra.PAUSE_MINUTES"
+        const val EXTRA_PAUSE_HOME = "com.leviknet.vpn.extra.PAUSE_HOME"
+
+        /** Levik Home's pause ends when the phone leaves; this only bounds it. */
+        const val HOME_PAUSE_MINUTES = 24 * 60
+        private const val MAX_HOME_NAME = 60
         const val EXTRA_TRIGGER = "com.leviknet.vpn.extra.TRIGGER"
         const val EXTRA_END_BY = "com.leviknet.vpn.extra.END_BY"
         const val EXTRA_END_CODE = "com.leviknet.vpn.extra.END_CODE"

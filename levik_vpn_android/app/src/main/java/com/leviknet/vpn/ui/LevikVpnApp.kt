@@ -355,6 +355,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     onOpenCabinet = { viewModel.openCabinet() },
                     onSettingsSyncChanged = viewModel::setSettingsSyncEnabled,
                     onSharePresenceChanged = viewModel::setSharePresence,
+                    onSleepAtHomeChanged = viewModel::setSleepAtHome,
                     remoteDevices = {
                         if (viewModel.rules.enabled) {
                             com.leviknet.vpn.ui.rules.RulesEntryCard(onClick = viewModel.rules::open)
@@ -1445,6 +1446,7 @@ private fun MainContent(
     onOpenCabinet: () -> Unit,
     onSettingsSyncChanged: (Boolean) -> Unit,
     onSharePresenceChanged: (Boolean) -> Unit,
+    onSleepAtHomeChanged: (Boolean) -> Unit,
     remoteDevices: @Composable () -> Unit = {},
 ) {
     val isTelevision = LocalConfiguration.current.uiMode and
@@ -1600,6 +1602,8 @@ private fun MainContent(
                 onSettingsSyncChanged = onSettingsSyncChanged,
                 sharePresence = state.sharePresence,
                 onSharePresenceChanged = onSharePresenceChanged,
+                sleepAtHome = state.sleepAtHome,
+                onSleepAtHomeChanged = onSleepAtHomeChanged,
                 onOpenCabinet = onOpenCabinet,
                 remoteDevices = remoteDevices,
             )
@@ -2126,6 +2130,7 @@ private fun HomeScreen(
                         .padding(18.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
+                    val home = state.vpn.pausedAtHome
                     val formatted = String.format(
                         java.util.Locale.US,
                         "%02d:%02d",
@@ -2133,14 +2138,14 @@ private fun HomeScreen(
                         state.vpn.pausedRemainingSeconds % 60,
                     )
                     Text(
-                        text = stringResource(R.string.status_paused, formatted),
+                        text = if (home != null) stringResource(R.string.status_home) else stringResource(R.string.status_paused, formatted),
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = if (isDark) Color(0xFFFBBF24) else Color(0xFFD97706),
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        text = stringResource(R.string.pause_vpn_desc),
+                        text = if (home != null) stringResource(R.string.home_sleep_desc, home) else stringResource(R.string.pause_vpn_desc),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
@@ -2157,7 +2162,7 @@ private fun HomeScreen(
                         ),
                     ) {
                         Text(
-                            stringResource(R.string.resume_vpn_btn),
+                            stringResource(if (home != null) R.string.home_sleep_resume else R.string.resume_vpn_btn),
                             color = Color.White,
                             fontWeight = FontWeight.Bold,
                             fontSize = 15.sp,
@@ -4029,6 +4034,8 @@ private fun ProfileScreen(
     onSettingsSyncChanged: (Boolean) -> Unit,
     sharePresence: Boolean,
     onSharePresenceChanged: (Boolean) -> Unit,
+    sleepAtHome: Boolean,
+    onSleepAtHomeChanged: (Boolean) -> Unit,
     onOpenCabinet: () -> Unit,
     remoteDevices: @Composable () -> Unit = {},
 ) {
@@ -4492,6 +4499,40 @@ private fun ProfileScreen(
                             checked = sharePresence,
                             onCheckedChange = onSharePresenceChanged,
                             modifier = Modifier.semantics { contentDescription = sharePresenceTitle },
+                            colors = LevikSwitchDefaults.colors(),
+                        )
+                    }
+                }
+                val sleepAtHomeTitle = stringResource(R.string.sleep_at_home_title)
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    shadowElevation = 1.dp,
+                ) {
+                    Row(
+                        modifier = Modifier.padding(18.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                text = sleepAtHomeTitle,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = stringResource(R.string.sleep_at_home_desc),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        Spacer(Modifier.width(14.dp))
+                        Switch(
+                            checked = sleepAtHome,
+                            onCheckedChange = onSleepAtHomeChanged,
+                            modifier = Modifier.semantics { contentDescription = sleepAtHomeTitle },
                             colors = LevikSwitchDefaults.colors(),
                         )
                     }

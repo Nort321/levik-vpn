@@ -264,6 +264,9 @@ class AppSettings(context: Context) {
     private val mutableSharePresence = MutableStateFlow(
         preferences.getBoolean(SHARE_PRESENCE, true),
     )
+    private val mutableSleepAtHome = MutableStateFlow(
+        preferences.getBoolean(SLEEP_AT_HOME, true),
+    )
     private val mutableCustomDohUrl = MutableStateFlow(
         preferences.getString(CUSTOM_DOH_URL, "") ?: "",
     )
@@ -355,6 +358,8 @@ class AppSettings(context: Context) {
     val useDoh: StateFlow<Boolean> = mutableUseDoh.asStateFlow()
     /** Show this phone as online on the devices page and in the user's other apps. */
     val sharePresence: StateFlow<Boolean> = mutableSharePresence.asStateFlow()
+    /** Levik Home: pause the VPN at home while the router's VPN protects the network. */
+    val sleepAtHome: StateFlow<Boolean> = mutableSleepAtHome.asStateFlow()
     val customDohUrl: StateFlow<String> = mutableCustomDohUrl.asStateFlow()
 
     val selectedSubscriptionId: StateFlow<String?> = mutableSelectedSubscriptionId.asStateFlow()
@@ -512,6 +517,11 @@ class AppSettings(context: Context) {
     fun setSharePresence(enabled: Boolean) {
         preferences.edit(commit = true) { putBoolean(SHARE_PRESENCE, enabled) }
         mutableSharePresence.value = enabled
+    }
+
+    fun setSleepAtHome(enabled: Boolean) {
+        preferences.edit(commit = true) { putBoolean(SLEEP_AT_HOME, enabled) }
+        mutableSleepAtHome.value = enabled
     }
 
     fun setUseDoh(enabled: Boolean) {
@@ -740,6 +750,7 @@ class AppSettings(context: Context) {
         private const val TRUSTED_WIFI_SSIDS = "trusted_wifi_ssids"
         private const val USE_DOH = "use_doh"
         private const val SHARE_PRESENCE = "share_presence"
+        private const val SLEEP_AT_HOME = "sleep_at_home"
         private const val CUSTOM_DOH_URL = "custom_doh_url"
         private const val SELECTED_SUBSCRIPTION_ID = "selected_subscription_id"
         private const val AUTOMATIC_SERVER = "automatic_server"

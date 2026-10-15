@@ -461,6 +461,11 @@ class AppViewModel(
             }
         }
         viewModelScope.launch {
+            settings.sleepAtHome.collect { enabled ->
+                mutableState.update { it.copy(sleepAtHome = enabled) }
+            }
+        }
+        viewModelScope.launch {
             settings.connectionTelemetryEnabled.collect { enabled ->
                 mutableState.update { it.copy(connectionTelemetryEnabled = enabled) }
             }
@@ -2830,6 +2835,10 @@ class AppViewModel(
         settings.setSharePresence(enabled)
     }
 
+    fun setSleepAtHome(enabled: Boolean) {
+        settings.setSleepAtHome(enabled)
+    }
+
     fun getLogs(): List<LogEntry> = AppLogger.getLogs()
 
     fun getFormattedLogs(): String = AppLogger.getFormattedLogs()
@@ -3084,6 +3093,7 @@ data class AppUiState(
     val settingsSyncEnabled: Boolean = true,
     val settingsSyncedAt: Long? = null,
     val sharePresence: Boolean = true,
+    val sleepAtHome: Boolean = true,
     val pendingApprovals: List<PendingApproval> = emptyList(),
     val hiddenApprovals: Set<String> = emptySet(),
     val answeringApproval: Boolean = false,
