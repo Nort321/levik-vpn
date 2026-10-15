@@ -28,6 +28,22 @@ internal fun splitTunnelPackagesForBuilder(
     }
 }
 
+/**
+ * Adds the apps the account's rules send around the VPN to this device's own
+ * choice. A device that tunnels only chosen apps keeps its list: every other
+ * app already goes around the VPN.
+ */
+internal fun withAccountDirectApps(
+    mode: SplitTunnelMode,
+    configuredPackages: Set<String>,
+    directApps: Collection<String>,
+): Pair<SplitTunnelMode, Set<String>> = when {
+    directApps.isEmpty() -> mode to configuredPackages
+    mode == SplitTunnelMode.OFF -> SplitTunnelMode.DISALLOWED to directApps.toSet()
+    mode == SplitTunnelMode.DISALLOWED -> mode to configuredPackages + directApps
+    else -> mode to configuredPackages
+}
+
 /** Apply UID-level routing independently of the server, transport, and destination rules. */
 internal fun applySplitTunnelApplications(
     mode: SplitTunnelMode,

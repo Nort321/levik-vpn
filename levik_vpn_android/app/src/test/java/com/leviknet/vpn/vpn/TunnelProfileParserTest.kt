@@ -32,6 +32,31 @@ class TunnelProfileParserTest {
     }
 
     @Test
+    fun `accepts the apps the account's rules send around the VPN`() {
+        val profile = parser.parse(
+            plaintext = withDirectApps("\"ru.sberbankmobile\", \"com.idamob.tinkoff.android\"").encodeToByteArray(),
+            expectedSubscriptionId = "subscription-123",
+        )
+
+        assertEquals(listOf("ru.sberbankmobile", "com.idamob.tinkoff.android"), profile.routing?.directApps)
+    }
+
+    @Test
+    fun `rejects a direct app that is not a package name`() {
+        for (app in listOf("\"sberbank\"", "\"ru.sber bank\"", "\"1ru.sber\"", "\"${"a.b".repeat(70)}\"")) {
+            assertThrows(IllegalArgumentException::class.java) {
+                parser.parse(plaintext = withDirectApps(app).encodeToByteArray(), expectedSubscriptionId = "subscription-123")
+            }
+        }
+    }
+
+    private fun withDirectApps(apps: String): String =
+        profileJson(issuedAt = "2026-07-29T11:59:00Z", subscriptionExpiresAt = "2026-08-29T13:00:00Z").replace(
+            "\"proxyDomains\": [\"domain:blocked.example\"]",
+            "\"proxyDomains\": [\"domain:blocked.example\"], \"directApps\": [$apps]",
+        )
+
+    @Test
     fun `accepts long lived entitlement without treating it as cache ttl`() {
         val profile = parser.parse(
             plaintext = profileJson(

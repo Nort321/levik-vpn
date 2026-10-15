@@ -122,4 +122,23 @@ class TunnelConnectionPolicyTest {
             ).isEmpty(),
         )
     }
+
+    @Test
+    fun `account direct apps join the device's own choice`() {
+        val banks = listOf("ru.sberbankmobile")
+        assertEquals(SplitTunnelMode.OFF to emptySet<String>(), withAccountDirectApps(SplitTunnelMode.OFF, emptySet(), emptyList()))
+        assertEquals(
+            SplitTunnelMode.DISALLOWED to setOf("ru.sberbankmobile"),
+            withAccountDirectApps(SplitTunnelMode.OFF, setOf("ignored.when.off"), banks),
+        )
+        assertEquals(
+            SplitTunnelMode.DISALLOWED to setOf("org.telegram.messenger", "ru.sberbankmobile"),
+            withAccountDirectApps(SplitTunnelMode.DISALLOWED, setOf("org.telegram.messenger"), banks),
+        )
+        // Only chosen apps use the VPN: every other app, banks included, already goes around it.
+        assertEquals(
+            SplitTunnelMode.ALLOWED to setOf("org.telegram.messenger"),
+            withAccountDirectApps(SplitTunnelMode.ALLOWED, setOf("org.telegram.messenger"), banks),
+        )
+    }
 }

@@ -1,5 +1,6 @@
 package com.leviknet.vpn.core.platform
 
+import com.leviknet.vpn.vpn.PreparedTunnelProfile
 import com.leviknet.vpn.vpn.TunnelServer
 import com.leviknet.vpn.vpn.VpnConnectionState
 import com.leviknet.vpn.vpn.VpnSnapshot
@@ -18,6 +19,7 @@ enum class LiveEvent(val wireName: String) {
     CONFIG("config"),
     APPROVALS("approvals"),
     COMMANDS("commands"),
+    RULES("rules"),
     ;
 
     companion object {
@@ -41,6 +43,21 @@ class EventStreamParser {
 
     private companion object {
         const val DEFAULT_NAME = "message"
+    }
+}
+
+/**
+ * What the account's rules change in a tunnel profile, docs/app-platform.md
+ * "Account rules": a running VPN restarts only when this differs.
+ */
+data class RuleRoutingKey(
+    val directDomains: List<String>,
+    val proxyDomains: List<String>,
+    val directApps: List<String>,
+) {
+    companion object {
+        fun of(profile: PreparedTunnelProfile?): RuleRoutingKey? =
+            profile?.let { RuleRoutingKey(it.directDomains, it.proxyDomains, it.directApps) }
     }
 }
 

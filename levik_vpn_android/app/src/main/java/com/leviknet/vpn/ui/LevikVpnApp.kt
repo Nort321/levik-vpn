@@ -356,6 +356,9 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     onSettingsSyncChanged = viewModel::setSettingsSyncEnabled,
                     onSharePresenceChanged = viewModel::setSharePresence,
                     remoteDevices = {
+                        if (viewModel.rules.enabled) {
+                            com.leviknet.vpn.ui.rules.RulesEntryCard(onClick = viewModel.rules::open)
+                        }
                         if (viewModel.remoteAvailable) {
                             RemoteDevicesCard(
                                 remote = state.remote,
@@ -424,6 +427,36 @@ fun LevikVpnApp(viewModel: AppViewModel) {
             helpEnabled = viewModel.growth.helpEnabled,
             onSetHelp = viewModel.growth::setFamilyHelp,
             onSendHelp = viewModel.growth::sendFamilyHelp,
+        )
+    }
+
+    val rulesState by viewModel.rules.state.collectAsStateWithLifecycle()
+    if (rulesState.open) {
+        com.leviknet.vpn.ui.rules.RulesScreen(
+            state = rulesState,
+            onClose = viewModel.rules::close,
+            onRefresh = viewModel.rules::refresh,
+            onSetCategory = viewModel.rules::setCategory,
+            onSetDomain = viewModel.rules::setDomain,
+            onRemoveDomain = viewModel.rules::removeDomain,
+        )
+    }
+    rulesState.shared?.let { site ->
+        com.leviknet.vpn.ui.rules.SharedSiteDialog(
+            site = site,
+            busy = rulesState.busy,
+            error = rulesState.error,
+            onChoose = viewModel.rules::applyShared,
+            onDismiss = viewModel.rules::dismissShared,
+        )
+    }
+    if (rulesState.sharedWithoutSite) {
+        AlertDialog(
+            onDismissRequest = viewModel.rules::dismissShared,
+            text = { Text(stringResource(R.string.rules_shared_no_site)) },
+            confirmButton = {
+                TextButton(onClick = viewModel.rules::dismissShared) { Text(stringResource(R.string.rules_ok)) }
+            },
         )
     }
 

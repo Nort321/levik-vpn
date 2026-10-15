@@ -116,6 +116,7 @@ class AppPlatform(
     val approvals: StateFlow<List<PendingApproval>> = mutableApprovals.asStateFlow()
 
     private val maintenanceMutex = Mutex()
+    private val rulesMutex = Mutex()
     private val idleMeter = IdleMeter()
 
     private val mutableMaintenance = MutableStateFlow<List<MaintenanceWindow>>(emptyList())
@@ -681,9 +682,40 @@ class AppPlatform(
             LiveEvent.SETTINGS -> scope.launch { syncSettings() }
             LiveEvent.CONFIG -> scope.launch { refreshConfig() }
             LiveEvent.DEVICES -> scope.launch { refreshAccountQuietly() }
+            LiveEvent.RULES -> scope.launch { applyAccountRules() }
             LiveEvent.PRESENCE, LiveEvent.COMMANDS -> Unit
         }
         remote?.onEvent(event)
+    }
+
+    /**
+     * The account's rules changed, here, in the cabinet or on another device.
+     * The server folds them into the tunnel profile: fetch it and, while the
+     * VPN runs, apply it when the routing it carries changed.
+     */
+    private suspend fun applyAccountRules() = rulesMutex.withLock {
+        if (repository.session.value != SessionStatus.Authenticated) return@withLock
+        val before = RuleRoutingKey.of(repository.tunnelProfile.value)
+        try {
+            val refresher = profileRefresher
+            if (refresher != null) {
+                refresher()
+            } else {
+                val subscriptionId = settings.selectedSubscriptionId.value
+                    ?: repository.tunnelProfile.value?.subscriptionId
+                    ?: return@withLock
+                repository.prepareTunnel(subscriptionId)
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            AppLogger.d(TAG, "Rules refresh failed: ${error.javaClass.simpleName}")
+            return@withLock
+        }
+        val after = RuleRoutingKey.of(repository.tunnelProfile.value)
+        if (after != before && vpnController.state.value.state == VpnConnectionState.CONNECTED) {
+            vpnController.reconfigure()
+        }
     }
 
     /**

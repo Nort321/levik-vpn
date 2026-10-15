@@ -69,5 +69,6 @@ class LiveEventsTest {
         assertEquals(78_000L, PresencePolicy.retryDelayMs(40, 1.0))
         assertEquals(60_000L, PresencePolicy.retryDelayMs(4, 0.0))
         assertNull(LiveEvent.of("message"))
+        assertEquals(LiveEvent.RULES, LiveEvent.of("rules"))
     }
 }

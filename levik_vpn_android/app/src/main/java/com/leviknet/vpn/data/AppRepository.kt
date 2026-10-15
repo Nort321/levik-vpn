@@ -627,6 +627,12 @@ class AppRepository(
         com.leviknet.vpn.core.network.FamilyRequest(action, memberId, allowed),
     )
 
+    suspend fun accountRules(): com.leviknet.vpn.core.network.RulesResponse =
+        apiClient.accountRules(requireToken())
+
+    suspend fun changeAccountRules(change: com.leviknet.vpn.core.platform.RuleChange): com.leviknet.vpn.core.network.AccountRules =
+        apiClient.changeAccountRules(requireToken(), change)
+
     suspend fun familyHelp(): com.leviknet.vpn.core.network.FamilyHelpResponse =
         apiClient.familyHelp(requireToken())
 

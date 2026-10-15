@@ -764,4 +764,37 @@
     <string name="remote_send_failed">Не удалось отправить команду. Попробуйте ещё раз.</string>
     <string name="remote_rate_limited">Слишком много команд подряд. Подождите несколько минут.</string>
     <string name="remote_device_gone">Устройство больше не принимает команды. Откройте на нём Levik VPN.</string>
+    <!-- Правила аккаунта, docs/app-platform.md "Account rules" -->
+    <string name="rules_entry_title">Мои правила</string>
+    <string name="rules_entry_body">Сайты и приложения через VPN или напрямую, на всех устройствах</string>
+    <string name="rules_title">Мои правила</string>
+    <string name="rules_close">Закрыть мои правила</string>
+    <string name="rules_refresh">Обновить мои правила</string>
+    <string name="rules_intro">Правила действуют на всех ваших устройствах с Levik, в расширении для браузера и на роутере. Приложения подхватывают их за несколько секунд.</string>
+    <string name="rules_categories_title">Категории</string>
+    <string name="rules_sites_title">Сайты</string>
+    <string name="rules_sites_body">Правило действует и на поддомены: youtube.com включает m.youtube.com. Ваше правило важнее категории и режима.</string>
+    <string name="rules_sites_empty">Своих сайтов пока нет. Можно также поделиться ссылкой из браузера в Levik VPN.</string>
+    <string name="rules_site_label">Сайт</string>
+    <string name="rules_add">Добавить</string>
+    <string name="rules_like_mode">Как в режиме</string>
+    <string name="rules_direct">Напрямую</string>
+    <string name="rules_proxy">Через VPN</string>
+    <string name="rules_site_direct">Напрямую, мимо VPN</string>
+    <string name="rules_site_proxy">Через VPN</string>
+    <string name="rules_remove">Удалить правило для %1$s</string>
+    <string name="rules_saved_direct">Сохранено: %1$s — напрямую.</string>
+    <string name="rules_saved_proxy">Сохранено: %1$s — через VPN.</string>
+    <string name="rules_saved_removed">Правило для %1$s удалено.</string>
+    <string name="rules_shared_title">Открывать %1$s</string>
+    <string name="rules_shared_body">Через VPN или напрямую? Правило сохранится в аккаунте Levik и будет работать на всех ваших устройствах.</string>
+    <string name="rules_cancel">Отмена</string>
+    <string name="rules_error_invalid_domain">Это не похоже на адрес сайта. Пример: example.com</string>
+    <string name="rules_error_too_many">Можно добавить до 200 сайтов. Удалите ненужные.</string>
+    <string name="rules_error_rate_limited">Слишком много изменений подряд. Подождите несколько минут.</string>
+    <string name="rules_error_account">Войдите в аккаунт Levik, чтобы сохранять правила.</string>
+    <string name="rules_error_network">Нет связи с Levik. Попробуйте ещё раз.</string>
+    <string name="rules_error_unknown">Не удалось сохранить правило. Попробуйте ещё раз.</string>
+    <string name="rules_shared_no_site">В том, чем поделились, нет адреса сайта.</string>
+    <string name="rules_ok">Понятно</string>
 </resources>

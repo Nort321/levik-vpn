@@ -121,6 +121,8 @@ data class TunnelRouting(
     val directCidrs: List<String> = emptyList(),
     val directDomains: List<String> = emptyList(),
     val proxyDomains: List<String> = emptyList(),
+    /** Apps the account's rules send around the VPN, docs/app-platform.md "Account rules". */
+    val directApps: List<String> = emptyList(),
 )
 
 @Serializable
@@ -194,6 +196,7 @@ data class PreparedTunnelProfile(
     val directCidrs: List<String> = emptyList(),
     val directDomains: List<String> = emptyList(),
     val proxyDomains: List<String> = emptyList(),
+    val directApps: List<String> = emptyList(),
 )
 
 @Serializable

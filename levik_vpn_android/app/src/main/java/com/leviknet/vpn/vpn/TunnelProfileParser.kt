@@ -258,6 +258,11 @@ class TunnelProfileParser(
                 }
             }
         }
+        val directApps = routing?.directApps.orEmpty()
+        require(directApps.size <= MAX_DIRECT_APPS) { "Too many direct apps" }
+        directApps.forEach { name ->
+            require(name.length <= MAX_PACKAGE_NAME_LENGTH && name.matches(PACKAGE_NAME)) { "Invalid direct app" }
+        }
     }
 
     private fun isValidHost(value: String): Boolean {
@@ -336,6 +341,8 @@ class TunnelProfileParser(
         private const val MAX_POLICY_VERSION = 1_000_000
         private const val MAX_DOMAIN_RULES = 500
         private const val MAX_DOMAIN_RULE_LENGTH = 253
+        private const val MAX_DIRECT_APPS = 200
+        private const val MAX_PACKAGE_NAME_LENGTH = 200
         private const val MAX_RELAY_NODES = 16
         private const val MAX_TURN_HASHES = 4
         private const val MAX_SERVER_NAME_LENGTH = 80
@@ -349,6 +356,7 @@ class TunnelProfileParser(
         private val RELAY_PUBLIC_KEY = Regex("[A-Za-z0-9_-]{43}")
         private val TURN_HASH = Regex("[A-Za-z0-9_-]{16,256}")
         private val SAFE_CIDR = Regex("[0-9A-Fa-f:.]+/[0-9]{1,3}")
+        private val PACKAGE_NAME = Regex("[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)+")
         private val SAFE_DOMAIN_RULE = Regex("(?:domain|full):[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?")
     }
 }

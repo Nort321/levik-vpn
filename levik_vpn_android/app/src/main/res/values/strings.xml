@@ -764,4 +764,37 @@
     <string name="remote_send_failed">Could not send the command. Try again.</string>
     <string name="remote_rate_limited">Too many commands in a row. Wait a few minutes.</string>
     <string name="remote_device_gone">The device no longer takes commands. Open Levik VPN on it.</string>
+    <!-- Account rules, docs/app-platform.md "Account rules" -->
+    <string name="rules_entry_title">My rules</string>
+    <string name="rules_entry_body">Sites and apps through the VPN or directly, on every device</string>
+    <string name="rules_title">My rules</string>
+    <string name="rules_close">Close my rules</string>
+    <string name="rules_refresh">Refresh my rules</string>
+    <string name="rules_intro">Rules work on all your devices with Levik, in the browser extension and on the router. Apps apply them within seconds.</string>
+    <string name="rules_categories_title">Categories</string>
+    <string name="rules_sites_title">Sites</string>
+    <string name="rules_sites_body">A rule covers subdomains: youtube.com includes m.youtube.com. Your rule wins over a category and the mode.</string>
+    <string name="rules_sites_empty">No sites of your own yet. You can also share a link to Levik VPN from a browser.</string>
+    <string name="rules_site_label">Site</string>
+    <string name="rules_add">Add</string>
+    <string name="rules_like_mode">Like the mode</string>
+    <string name="rules_direct">Directly</string>
+    <string name="rules_proxy">Through VPN</string>
+    <string name="rules_site_direct">Directly, around the VPN</string>
+    <string name="rules_site_proxy">Through the VPN</string>
+    <string name="rules_remove">Remove the rule for %1$s</string>
+    <string name="rules_saved_direct">Saved: %1$s directly.</string>
+    <string name="rules_saved_proxy">Saved: %1$s through the VPN.</string>
+    <string name="rules_saved_removed">The rule for %1$s is removed.</string>
+    <string name="rules_shared_title">Open %1$s</string>
+    <string name="rules_shared_body">Through the VPN or directly? The rule is saved to your Levik account and works on all your devices.</string>
+    <string name="rules_cancel">Cancel</string>
+    <string name="rules_error_invalid_domain">That does not look like a site address. Example: example.com</string>
+    <string name="rules_error_too_many">You can add up to 200 sites. Remove the ones you no longer need.</string>
+    <string name="rules_error_rate_limited">Too many changes in a row. Please wait a few minutes.</string>
+    <string name="rules_error_account">Sign in to your Levik account to keep rules.</string>
+    <string name="rules_error_network">No connection to Levik. Please try again.</string>
+    <string name="rules_error_unknown">Could not save the rule. Please try again.</string>
+    <string name="rules_shared_no_site">There is no site address in what was shared.</string>
+    <string name="rules_ok">OK</string>
 </resources>

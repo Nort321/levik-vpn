@@ -137,6 +137,14 @@ class AppViewModel(
         onAccessChanged = { refreshSubscription(showErrors = false) },
         helpEnabled = appPlatform?.remote != null,
     )
+
+    /** The account's rules: the profile screen and links shared to the app (Direct builds). */
+    val rules = com.leviknet.vpn.ui.rules.RulesController(
+        repository = repository,
+        scope = viewModelScope,
+        isAuthenticated = { mutableState.value.session == SessionStatus.Authenticated },
+        enabled = !BuildConfig.IS_PLAY_DISTRIBUTION,
+    )
     private val supportNotes = SupportNoteClient()
     private var loginStartJob: Job? = null
     private var loginPollJob: Job? = null

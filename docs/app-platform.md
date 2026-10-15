@@ -150,6 +150,8 @@ data, only what to fetch again:
 | `presence` | refreshes the live status of the other devices, if it shows them |
 | `config` | fetches the remote configuration (an announcement or switch changed) |
 | `approvals` | fetches the sign-ins waiting for approval (see below) |
+| `commands` | fetches the commands sent to it ([Remote](#remote)) |
+| `rules` | fetches the tunnel profile again and applies it ([Account rules](#account-rules)) |
 
 Unknown events are ignored. The server pings every 25 seconds and ends a
 stream after 14 minutes or when the session is revoked; apps reconnect after
@@ -179,6 +181,63 @@ work with a VPN. Let it bypass the VPN?" Yes adds the app to the apps without
 VPN (starting a fresh list when all apps went through the VPN, removing it
 from the list in "only selected apps" mode) and applies it at once; either
 answer is remembered, closing the dialog asks again later.
+
+## Account rules
+
+"My rules everywhere": an account keeps rules that every app applies.
+
+- **Categories** from the [app catalog](#app-catalog): `direct` or `proxy`
+  (left out: like the mode). A category sends its sites one way and, on
+  Android, its apps too.
+- **Own sites**: up to 200 hosts, each `direct` or `proxy`; a rule covers
+  subdomains, `www.` is dropped and IDN is stored as punycode. An own site wins
+  over a category and the mode.
+
+`GET /api/mobile/v1/rules` returns `{ ok, rules: { categories, domains:
+[{ domain, action }] (newest first), revision }, categories: [{ id, title,
+apps }] }`. `POST` takes one change and returns `{ ok, rules }`:
+
+| Change | |
+|---|---|
+| `{ "op": "set_category", "category": "banks", "action": "direct" \| "proxy" \| null }` | `null` returns the category to the mode |
+| `{ "op": "set_domain", "domain": "youtube.com", "action": "proxy" }` | a link or a host; the server normalises it |
+| `{ "op": "remove_domain", "domain": "youtube.com" }` | |
+
+Errors: `invalid_domain` (400), `unknown_category` (400), `too_many_rules`
+(409), `rate_limited` (429). The website's cabinet has the same at
+`/api/account/v1/rules` ("Мои правила"). Each change raises `revision`, is
+written to the audit log and sends `rules` to the account's apps.
+
+Where the rules apply:
+
+- **Tunnel profile.** The server folds them into `routing.directDomains` and
+  `routing.proxyDomains` (`domain:<host>`) of every profile: the account's
+  entries come first, a host the user sends one way is taken out of the other
+  list, and each list stays within 500 entries. Old app versions therefore
+  apply them without a change. Android profiles also carry
+  `routing.directApps`, the package names of the categories set to `direct`
+  (only when there are any).
+- **Android (Direct build).** `directApps` join the apps without VPN (they
+  start such a list when every app went through the VPN; "only selected apps"
+  keeps its own list). On `rules` the app fetches the profile again and, while
+  connected, reconnects when the routing changed. Sharing a link to Levik VPN
+  from any app asks "Through VPN / Directly" and saves the site; the profile
+  has a "My rules" screen. Play builds apply only what the profile's domain
+  lists carry.
+- **Desktop apps** fetch the profile again on `rules` and reconnect when the
+  routing changed; the tray opens the cabinet's rules page.
+- **Browser extension.** For a session linked to a Levik account the gateway's
+  `/session` carries `rules: { direct: [host], proxy: [host] }`, applied in the
+  PAC ahead of the mode (the most specific host wins). "This site: through the
+  VPN / directly" sends `POST /api/extension/v1/rules` `{ op: "set_domain" |
+  "remove_domain", domain, action }`; the gateway relays it to the cabinet
+  with its shared secret. Categories are changed elsewhere.
+- **Routers.** The router export puts the rules ahead of the mode: sing-box
+  DNS and route rules, Mihomo `DOMAIN-SUFFIX` rules.
+
+Privacy: the rules hold only hosts the user chose and category choices; no
+history is kept. Android sends nothing about the apps installed: the server
+names the packages, the phone applies what is there.
 
 ## Device presence
 

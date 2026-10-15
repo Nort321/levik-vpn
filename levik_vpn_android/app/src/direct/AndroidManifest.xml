@@ -28,6 +28,17 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
+        <!-- "Share" a link to Levik VPN: through the VPN or directly, docs/app-platform.md "Account rules". -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
         <activity
             android:name=".vpn.RelayVkAuthActivity"
             android:excludeFromRecents="true"

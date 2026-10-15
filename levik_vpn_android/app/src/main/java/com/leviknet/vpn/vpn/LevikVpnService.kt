@@ -23,6 +23,7 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import com.leviknet.vpn.BuildConfig
 import com.leviknet.vpn.LevikVpnApplication
 import com.leviknet.vpn.MainActivity
 import com.leviknet.vpn.R
@@ -913,8 +914,17 @@ class LevikVpnService : VpnService() {
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val splitMode = container.settings.splitTunnelMode.value
-        val splitPackages = container.settings.splitTunnelPackages.value
+        // The account's rules (bank apps directly, say) reach the Direct build only.
+        val accountDirectApps = if (BuildConfig.IS_PLAY_DISTRIBUTION) {
+            emptyList()
+        } else {
+            runCatching { readPreparedProfile().directApps }.getOrDefault(emptyList())
+        }
+        val (splitMode, splitPackages) = withAccountDirectApps(
+            container.settings.splitTunnelMode.value,
+            container.settings.splitTunnelPackages.value,
+            accountDirectApps,
+        )
 
         return Builder()
             .setSession(getString(R.string.vpn_session_name, serverName))

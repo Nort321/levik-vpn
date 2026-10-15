@@ -89,6 +89,7 @@ class XrayRuntime(
             directCidrs = profile.routing?.directCidrs.orEmpty(),
             directDomains = profile.routing?.directDomains.orEmpty(),
             proxyDomains = profile.routing?.proxyDomains.orEmpty(),
+            directApps = profile.routing?.directApps.orEmpty(),
         )
     }
 

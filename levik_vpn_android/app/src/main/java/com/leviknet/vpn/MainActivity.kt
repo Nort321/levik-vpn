@@ -97,6 +97,9 @@ class MainActivity : ComponentActivity() {
     private fun handleLaunchIntent(intent: Intent) {
         if (consumeUpdateNotificationIntent(intent)) {
             viewModel.checkForUpdates()
+        } else if (intent.action == Intent.ACTION_SEND && intent.type == "text/plain") {
+            // A link shared from a browser or a messenger; nothing is saved without a tap.
+            viewModel.rules.openShared(intent.getStringExtra(Intent.EXTRA_TEXT))
         } else {
             intent.data?.let { uri -> viewModel.handleDeepLink(uri) }
         }

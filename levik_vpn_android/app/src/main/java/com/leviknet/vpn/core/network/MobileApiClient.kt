@@ -1,6 +1,7 @@
 package com.leviknet.vpn.core.network
 
 import com.leviknet.vpn.BuildConfig
+import com.leviknet.vpn.core.platform.RuleChange
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.URL
@@ -457,6 +458,31 @@ class MobileApiClient(
         return response.command
     }
 
+    /** The account's rules and the categories they may name. */
+    suspend fun accountRules(accessToken: String): RulesResponse {
+        val response = request<RulesResponse>(
+            method = METHOD_GET,
+            path = RULES_PATH,
+            body = EMPTY_BODY,
+            accessToken = accessToken,
+            requiresIntegrity = false,
+        )
+        checkSuccess(response.ok)
+        return response
+    }
+
+    suspend fun changeAccountRules(accessToken: String, change: RuleChange): AccountRules {
+        val response = request<RulesChanged>(
+            method = METHOD_POST,
+            path = RULES_PATH,
+            body = change.body().encodeToByteArray(),
+            accessToken = accessToken,
+            requiresIntegrity = false,
+        )
+        checkSuccess(response.ok)
+        return response.rules
+    }
+
     suspend fun referrals(accessToken: String): ReferralsResponse {
         val response = post<EmptyRequest, ReferralsResponse>(
             path = REFERRALS_PATH,
@@ -717,6 +743,7 @@ class MobileApiClient(
         private const val FAMILY_PATH = "/api/mobile/v1/family"
         private const val FAMILY_HELP_PATH = "/api/mobile/v1/family/help"
         private const val REFERRALS_PATH = "/api/mobile/v1/referrals"
+        private const val RULES_PATH = "/api/mobile/v1/rules"
         private const val METHOD_GET = "GET"
         private const val METHOD_POST = "POST"
         private const val METHOD_PUT = "PUT"
