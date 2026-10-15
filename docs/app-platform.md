@@ -369,7 +369,7 @@ in with the activation code and the website as before.
 `POST /api/mobile/v1/web-handoff` with `{ "target": "/dashboard…" }`, where
 the target is one of `/dashboard`, `/dashboard/subscriptions`,
 `/dashboard/plans`, `/dashboard/orders`, `/dashboard/devices`,
-`/dashboard/support`, `/dashboard/account-security`.
+`/dashboard/support`, `/dashboard/account-security`, `/dashboard/rules`.
 
 The response `{ ok, url, expiresAt }` contains a one-time link
 `https://leviknet.org/handoff?token=<43 characters>` that is valid for two
