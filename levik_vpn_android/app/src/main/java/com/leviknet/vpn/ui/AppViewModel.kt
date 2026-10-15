@@ -73,6 +73,8 @@ import com.leviknet.vpn.core.platform.CabinetTarget
 import com.leviknet.vpn.core.platform.FavoriteNodes
 import com.leviknet.vpn.core.platform.ServerMaintenance
 import com.leviknet.vpn.core.platform.OpenAppTarget
+import com.leviknet.vpn.core.platform.RemoteCommand
+import com.leviknet.vpn.core.platform.RemoteSnapshot
 import com.leviknet.vpn.core.platform.RemoteConfigPolicy
 import com.leviknet.vpn.vpn.isEligibleForAutomaticSelection
 import com.leviknet.vpn.vpn.telemetryProtocol
@@ -140,6 +142,10 @@ class AppViewModel(
     private var activationAuthorizationJob: Job? = null
     private var yandexSetupJob: Job? = null
     private var updateCheckJob: Job? = null
+    private var remotePolling: Job? = null
+    private val profileRefresher: suspend () -> Unit = {
+        check(refreshSubscriptionNow(showErrors = false)) { "Profile refresh failed" }
+    }
     private var cabinetJob: Job? = null
     private var pendingPairingToken: String? = null
     private var pendingOnboardingAction: OnboardingAction? = null
@@ -408,6 +414,13 @@ class AppViewModel(
                     mutableState.update { it.copy(pendingApprovals = approvals) }
                 }
             }
+            platform.remote?.let { remote ->
+                viewModelScope.launch {
+                    remote.snapshot.collect { snapshot -> mutableState.update { it.copy(remote = snapshot) } }
+                }
+                // While the app is on the screen, the remote refreshes the profile the way the button does.
+                platform.profileRefresher = profileRefresher
+            }
             viewModelScope.launch {
                 // The marks follow the clock: a server is marked from the lead time before its window.
                 combine(platform.maintenance, state.map { it.profile?.servers }.distinctUntilChanged()) { windows, servers ->
@@ -426,7 +439,7 @@ class AppViewModel(
                 }
             }
             viewModelScope.launch {
-                platform.maintenanceMoves.collect { switch ->
+                platform.serverSwitches.collect { switch ->
                     mutableState.update { current ->
                         current.copy(selectedServerId = switch.toServerId, pingMs = current.serverPings[switch.toServerId])
                     }
@@ -855,6 +868,80 @@ class AppViewModel(
     }
 
     /** [number] is the one picked, null answers "this is not me". */
+    /** The remote is part of the Direct build. */
+    val remoteAvailable: Boolean get() = appPlatform?.remote != null
+
+    /** Loads the user's other apps for the remote; events keep the list current meanwhile. */
+    fun refreshRemote() {
+        val remote = appPlatform?.remote ?: return
+        if (mutableState.value.remoteLoading) return
+        mutableState.update { it.copy(remoteLoading = true, remoteFailed = false) }
+        viewModelScope.launch {
+            val failed = try {
+                remote.refresh()
+                false
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                true
+            }
+            mutableState.update { it.copy(remoteLoading = false, remoteFailed = failed) }
+        }
+    }
+
+    fun openRemote(deviceId: String) {
+        if (mutableState.value.remote.devices.none { it.deviceId == deviceId && it.remote && !it.current }) return
+        mutableState.update { it.copy(remoteDeviceId = deviceId) }
+        remotePolling?.cancel()
+        remotePolling = viewModelScope.launch {
+            // Live events bring the answer; polling covers a dropped stream.
+            while (true) {
+                delay(REMOTE_POLL_MS)
+                val current = mutableState.value
+                val waiting = current.remoteDeviceId?.let(current.remote::latestFor)?.state?.final == false
+                if (waiting) runCatching { appPlatform?.remote?.refresh(watch = false) }
+            }
+        }
+    }
+
+    fun closeRemote() {
+        remotePolling?.cancel()
+        remotePolling = null
+        mutableState.update { it.copy(remoteDeviceId = null) }
+    }
+
+    fun sendRemoteCommand(command: RemoteCommand) {
+        val remote = appPlatform?.remote ?: return
+        val deviceId = mutableState.value.remoteDeviceId ?: return
+        if (mutableState.value.remoteSending != null) return
+        mutableState.update { it.copy(remoteSending = command, remoteError = null) }
+        viewModelScope.launch {
+            val error = try {
+                remote.send(deviceId, command)
+                null
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                when ((error as? ApiException.Rejected)?.status) {
+                    429 -> RemoteSendError.RATE_LIMITED
+                    404 -> RemoteSendError.DEVICE_GONE
+                    else -> RemoteSendError.FAILED
+                }
+            }
+            mutableState.update { it.copy(remoteSending = null, remoteError = error) }
+        }
+    }
+
+    /** Opens a diagnostics report this phone decrypted itself. */
+    fun openRemoteNote(commandId: String) {
+        val link = appPlatform?.remote?.note(commandId) ?: return
+        viewModelScope.launch { effectChannel.send(AppEffect.OpenExternal(link)) }
+    }
+
+    override fun onCleared() {
+        // A newer screen may have registered its own already.
+        appPlatform?.let { platform -> if (platform.profileRefresher === profileRefresher) platform.profileRefresher = null }
+        super.onCleared()
+    }
+
     fun answerApproval(id: String, number: Int?) {
         val platform = appPlatform ?: return
         if (mutableState.value.answeringApproval) return
@@ -1050,42 +1137,48 @@ class AppViewModel(
 
     private fun refreshSubscription(showErrors: Boolean) {
         if (mutableState.value.refreshing) return
-        viewModelScope.launch {
-            mutableState.update { it.copy(refreshing = true, message = if (showErrors) null else it.message) }
-            try {
-                val hadCachedProfile = mutableState.value.profile != null
-                val account = repository.refreshAccount()
-                val profile = reconcileAuthenticatedProfile(
-                    account = account,
-                    hadCachedProfile = hadCachedProfile,
-                    forceProfileRefresh = true,
-                )
-                if (profile != null &&
-                    settings.automaticServer.value &&
-                    vpnController.state.value.state in PINGABLE_STATES
-                ) {
-                    selectBestServer(profile)
-                }
-                val selectedSub = account.subscriptions.firstOrNull { it.uuid == settings.selectedSubscriptionId.value }
-                    ?: account.subscriptions.firstOrNull()
-                if (selectedSub != null && appContext != null) {
-                    com.leviknet.vpn.core.notification.SubscriptionNotificationManager.checkAndNotify(
-                        appContext,
-                        selectedSub,
-                        settings,
-                    )
-                }
-                if (showErrors) {
-                    mutableState.update { it.copy(message = UiMessage.SUBSCRIPTION_UPDATED) }
-                }
-            } catch (error: Throwable) {
-                if (error is CancellationException) throw error
-                if (showErrors) {
-                    mutableState.update { it.copy(problem = error.toAppProblem()) }
-                }
-            } finally {
-                mutableState.update { it.copy(refreshing = false) }
+        viewModelScope.launch { refreshSubscriptionNow(showErrors) }
+    }
+
+    /** False when the refresh failed; a refresh already running counts as done. */
+    private suspend fun refreshSubscriptionNow(showErrors: Boolean): Boolean {
+        if (mutableState.value.refreshing) return true
+        mutableState.update { it.copy(refreshing = true, message = if (showErrors) null else it.message) }
+        try {
+            val hadCachedProfile = mutableState.value.profile != null
+            val account = repository.refreshAccount()
+            val profile = reconcileAuthenticatedProfile(
+                account = account,
+                hadCachedProfile = hadCachedProfile,
+                forceProfileRefresh = true,
+            )
+            if (profile != null &&
+                settings.automaticServer.value &&
+                vpnController.state.value.state in PINGABLE_STATES
+            ) {
+                selectBestServer(profile)
             }
+            val selectedSub = account.subscriptions.firstOrNull { it.uuid == settings.selectedSubscriptionId.value }
+                ?: account.subscriptions.firstOrNull()
+            if (selectedSub != null && appContext != null) {
+                com.leviknet.vpn.core.notification.SubscriptionNotificationManager.checkAndNotify(
+                    appContext,
+                    selectedSub,
+                    settings,
+                )
+            }
+            if (showErrors) {
+                mutableState.update { it.copy(message = UiMessage.SUBSCRIPTION_UPDATED) }
+            }
+            return true
+        } catch (error: Throwable) {
+            if (error is CancellationException) throw error
+            if (showErrors) {
+                mutableState.update { it.copy(problem = error.toAppProblem()) }
+            }
+            return false
+        } finally {
+            mutableState.update { it.copy(refreshing = false) }
         }
     }
 
@@ -2674,6 +2767,7 @@ class AppViewModel(
         private const val MAX_POLL_SECONDS = 10
         private const val SERVER_PING_INTERVAL_MS = 30_000L
         private const val MAINTENANCE_MARK_INTERVAL_MS = 30_000L
+        private const val REMOTE_POLL_MS = 5_000L
         private const val LTE_TRAFFIC_SYNC_INTERVAL_MS = 15_000L
         private val PINGABLE_STATES = setOf(
             VpnConnectionState.DISCONNECTED,
@@ -2911,6 +3005,14 @@ data class AppUiState(
     val serverMaintenance: Map<String, Long> = emptyMap(),
     /** An installed bank that may refuse to work through the VPN (Direct builds). */
     val directAppSuggestion: DirectAppSuggestion? = null,
+    /** The user's other apps for the remote (Direct builds). */
+    val remote: RemoteSnapshot = RemoteSnapshot(),
+    val remoteLoading: Boolean = false,
+    val remoteFailed: Boolean = false,
+    /** The device whose remote is open. */
+    val remoteDeviceId: String? = null,
+    val remoteSending: RemoteCommand? = null,
+    val remoteError: RemoteSendError? = null,
 ) {
     /** Asked while the VPN is on, when the bank would actually notice it, and never over a sign-in request. */
     fun directAppPrompt(now: java.time.Instant): DirectAppSuggestion? =
@@ -2986,6 +3088,8 @@ sealed interface LoginUiState {
     ) : LoginUiState
     data object Expired : LoginUiState
 }
+
+enum class RemoteSendError { FAILED, RATE_LIMITED, DEVICE_GONE }
 
 enum class UiMessage {
     PAIRING_ALREADY_SIGNED_IN,

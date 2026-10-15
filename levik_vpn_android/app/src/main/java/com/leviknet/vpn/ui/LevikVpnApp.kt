@@ -355,6 +355,17 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     onOpenCabinet = { viewModel.openCabinet() },
                     onSettingsSyncChanged = viewModel::setSettingsSyncEnabled,
                     onSharePresenceChanged = viewModel::setSharePresence,
+                    remoteDevices = {
+                        if (viewModel.remoteAvailable) {
+                            RemoteDevicesCard(
+                                remote = state.remote,
+                                loading = state.remoteLoading,
+                                failed = state.remoteFailed,
+                                onRefresh = viewModel::refreshRemote,
+                                onOpen = viewModel::openRemote,
+                            )
+                        }
+                    },
                 )
             }
         }
@@ -716,6 +727,20 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                 onLater = { viewModel.hideApproval(approval.id) },
             )
         }
+    }
+
+    state.remoteDeviceId?.let { deviceId -> state.remote.devices.firstOrNull { it.deviceId == deviceId } }?.let { device ->
+        val latest = state.remote.latestFor(device.deviceId)
+        RemoteControlDialog(
+            device = device,
+            latest = latest,
+            note = latest?.let { state.remote.notes[it.id] },
+            sending = state.remoteSending,
+            error = state.remoteError,
+            onSend = viewModel::sendRemoteCommand,
+            onOpenNote = viewModel::openRemoteNote,
+            onDismiss = viewModel::closeRemote,
+        )
     }
 
     state.directAppPrompt(java.time.Instant.now())?.let { suggestion ->
@@ -1382,6 +1407,7 @@ private fun MainContent(
     onOpenCabinet: () -> Unit,
     onSettingsSyncChanged: (Boolean) -> Unit,
     onSharePresenceChanged: (Boolean) -> Unit,
+    remoteDevices: @Composable () -> Unit = {},
 ) {
     val isTelevision = LocalConfiguration.current.uiMode and
         Configuration.UI_MODE_TYPE_MASK == Configuration.UI_MODE_TYPE_TELEVISION
@@ -1537,6 +1563,7 @@ private fun MainContent(
                 sharePresence = state.sharePresence,
                 onSharePresenceChanged = onSharePresenceChanged,
                 onOpenCabinet = onOpenCabinet,
+                remoteDevices = remoteDevices,
             )
             }
         }
@@ -3965,6 +3992,7 @@ private fun ProfileScreen(
     sharePresence: Boolean,
     onSharePresenceChanged: (Boolean) -> Unit,
     onOpenCabinet: () -> Unit,
+    remoteDevices: @Composable () -> Unit = {},
 ) {
     val activeSubscriptions = account?.subscriptions.orEmpty().filter {
         it.isActiveAt(Instant.now())
@@ -4110,6 +4138,7 @@ private fun ProfileScreen(
 
             if (session == SessionStatus.Authenticated) {
                 com.leviknet.vpn.ui.growth.FamilyEntryCard(onClick = onOpenFamily)
+                remoteDevices()
             }
 
             referralSummaryForDisplay(account)?.let { referrals ->

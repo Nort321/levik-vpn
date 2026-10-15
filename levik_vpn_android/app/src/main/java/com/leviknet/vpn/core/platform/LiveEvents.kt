@@ -17,6 +17,7 @@ enum class LiveEvent(val wireName: String) {
     PRESENCE("presence"),
     CONFIG("config"),
     APPROVALS("approvals"),
+    COMMANDS("commands"),
     ;
 
     companion object {

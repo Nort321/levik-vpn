@@ -310,6 +310,38 @@ class MobileApiClient(
         return response
     }
 
+    /** The account's apps with their live status and the remote commands sent lately. */
+    suspend fun remoteDevices(accessToken: String): JsonObject = jsonRequest(METHOD_GET, DEVICES_PATH, EMPTY_BODY, accessToken)
+
+    suspend fun issueCommand(accessToken: String, deviceId: String, command: String, replyKey: String?): JsonObject {
+        val fields = mutableMapOf<String, JsonElement>("deviceId" to JsonPrimitive(deviceId), "command" to JsonPrimitive(command))
+        if (replyKey != null) fields["replyKey"] = JsonPrimitive(replyKey)
+        return jsonRequest(METHOD_POST, COMMANDS_PATH, JsonObject(fields).toString().encodeToByteArray(), accessToken)
+    }
+
+    /** Commands waiting for this phone; asking also makes it reachable by the remote. */
+    suspend fun takeCommands(accessToken: String): JsonObject = jsonRequest(METHOD_GET, COMMANDS_PATH, EMPTY_BODY, accessToken)
+
+    suspend fun commandResult(accessToken: String, id: String, result: String, detail: String?) {
+        val body = JsonObject(
+            mapOf("id" to JsonPrimitive(id), "result" to JsonPrimitive(result), "detail" to (detail?.let(::JsonPrimitive) ?: JsonNull)),
+        ).toString().encodeToByteArray()
+        jsonRequest(METHOD_POST, COMMAND_RESULT_PATH, body, accessToken)
+    }
+
+    private suspend fun jsonRequest(method: String, path: String, body: ByteArray, accessToken: String): JsonObject {
+        val response: JsonElement = request(
+            method = method,
+            path = path,
+            body = body,
+            accessToken = accessToken,
+            requiresIntegrity = false,
+        )
+        val decoded = response as? JsonObject
+        checkSuccess((decoded?.get("ok") as? JsonPrimitive)?.booleanOrNull == true)
+        return decoded ?: JsonObject(emptyMap())
+    }
+
     suspend fun clearPresence(accessToken: String) {
         request<JsonElement>(
             method = METHOD_DELETE,
@@ -645,6 +677,9 @@ class MobileApiClient(
         private const val PRESENCE_PATH = "/api/mobile/v1/presence"
         private const val EVENTS_PATH = "/api/mobile/v1/events"
         private const val APPROVALS_PATH = "/api/mobile/v1/approvals"
+        private const val DEVICES_PATH = "/api/mobile/v1/devices"
+        private const val COMMANDS_PATH = "/api/mobile/v1/commands"
+        private const val COMMAND_RESULT_PATH = "/api/mobile/v1/commands/result"
 
         /** The server needs "number": null, which the shared Json leaves out, so the body is built by hand. */
         internal fun approvalDecisionBody(id: String, number: Int?): String = JsonObject(

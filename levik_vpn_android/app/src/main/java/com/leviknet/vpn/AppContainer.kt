@@ -39,10 +39,16 @@ import com.leviknet.vpn.vpn.TunnelEngineKind
 import com.leviknet.vpn.vpn.TunnelProfilePreparer
 import com.leviknet.vpn.vpn.createTunnelEngineRegistry
 import com.leviknet.vpn.vpn.relayCapabilityRevocationRequiresDisconnect
+import com.leviknet.vpn.core.logger.AppLogger
+import com.leviknet.vpn.core.network.MAX_SUPPORT_NOTE_BYTES
+import com.leviknet.vpn.core.network.NetworkDiagnostics
+import com.leviknet.vpn.core.network.SupportNoteClient
+import com.leviknet.vpn.core.network.supportNoteText
 import java.io.File
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
@@ -145,7 +151,23 @@ class AppContainer(application: Application) {
         directNetwork = whitelistDetector::directNetwork,
         scope = nativeCleanupScope,
         json = json,
+        updateManager = updateManager.takeIf { BuildConfig.SELF_UPDATE_ENABLED },
+        diagnosticsNote = ::diagnosticsNote,
     )
+
+    /** The same report as "Diagnostics → share as a note", for the remote. */
+    private suspend fun diagnosticsNote(): String {
+        val report = NetworkDiagnostics.runDiagnostics(
+            vpnSnapshot = vpnController.state.value,
+            apiClient = apiClient,
+            sendTelemetry = settings.anonymousTelemetryEnabled.value,
+            telemetryStillAllowed = { !BuildConfig.IS_PLAY_DISTRIBUTION || settings.anonymousTelemetryEnabled.value },
+        )
+        val text = withContext(Dispatchers.IO) {
+            supportNoteText(report.toFormattedString(), AppLogger.readDiskLog(MAX_SUPPORT_NOTE_BYTES))
+        }
+        return SupportNoteClient().create(text)
+    }
 
     private val wifiAutoConnectMonitor = WifiAutoConnectMonitor(
         context = application,

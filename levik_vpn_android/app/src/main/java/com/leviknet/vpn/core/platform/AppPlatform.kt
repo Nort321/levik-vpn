@@ -18,6 +18,7 @@ import com.leviknet.vpn.core.logger.AppLogger
 import com.leviknet.vpn.core.network.ApiException
 import com.leviknet.vpn.core.network.ServiceEndpoints
 import com.leviknet.vpn.core.notification.AppIconArtwork
+import com.leviknet.vpn.core.update.AppUpdateManager
 import com.leviknet.vpn.data.AppIconManager
 import com.leviknet.vpn.data.AppRepository
 import com.leviknet.vpn.data.AppSettings
@@ -84,6 +85,8 @@ class AppPlatform(
     private val directNetwork: () -> Network?,
     private val scope: CoroutineScope,
     private val json: Json,
+    updateManager: AppUpdateManager? = null,
+    diagnosticsNote: (suspend () -> String)? = null,
 ) {
     private val preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
     private val configFile = File(context.noBackupFilesDir, CONFIG_FILE)
@@ -120,10 +123,36 @@ class AppPlatform(
     /** Planned work on servers (Direct builds); the server list marks them and automatic choice skips them. */
     val maintenance: StateFlow<List<MaintenanceWindow>> = mutableMaintenance.asStateFlow()
 
-    private val mutableMaintenanceMoves = MutableSharedFlow<MaintenanceSwitch>(extraBufferCapacity = 1)
+    private val mutableServerSwitches = MutableSharedFlow<MaintenanceSwitch>(extraBufferCapacity = 1)
 
-    /** The connection moved off a server before its maintenance. */
-    val maintenanceMoves: SharedFlow<MaintenanceSwitch> = mutableMaintenanceMoves.asSharedFlow()
+    /** The app moved the connection by itself: before a server's maintenance, or for the remote. */
+    val serverSwitches: SharedFlow<MaintenanceSwitch> = mutableServerSwitches.asSharedFlow()
+
+    /** Set while the app is on the screen: refreshes the profile the way the refresh button does. */
+    @Volatile
+    var profileRefresher: (suspend () -> Unit)? = null
+
+    /** The remote (Direct builds), docs/app-platform.md "Remote". */
+    val remote: RemoteControl? = if (REMOTE_ENABLED && diagnosticsNote != null) {
+        RemoteControl(
+            context = context,
+            settings = settings,
+            repository = repository,
+            vpnController = vpnController,
+            updateManager = updateManager,
+            actions = object : RemoteActions {
+                override suspend fun moveToFastestServer() = this@AppPlatform.moveToFastestServer()
+                override suspend fun refreshProfile() {
+                    profileRefresher?.invoke() ?: repository.refreshAccount()
+                }
+                override suspend fun diagnosticsNote(): String = diagnosticsNote()
+            },
+            scope = scope,
+            notify = ::postMessage,
+        )
+    } else {
+        null
+    }
 
     private val mutableAnnouncements = MutableStateFlow<List<AppAnnouncement>>(emptyList())
     val announcements: StateFlow<List<AppAnnouncement>> = mutableAnnouncements.asStateFlow()
@@ -160,6 +189,7 @@ class AppPlatform(
                     SessionStatus.SignedOut -> {
                         forgetSyncState()
                         forgetApprovals()
+                        remote?.forget()
                     }
                     SessionStatus.Loading -> Unit
                 }
@@ -353,7 +383,7 @@ class AppPlatform(
                 now,
             )
             if (move == MaintenanceMove.STAY || (move == MaintenanceMove.WHEN_IDLE && !idleMeter.idle(now))) return
-            val target = maintenanceTarget(current, servers, now) ?: run {
+            val target = fastestOfKind(current, servers, now, includeCurrent = false) ?: run {
                 AppLogger.w(TAG, "No server to move to before maintenance")
                 return
             }
@@ -361,7 +391,7 @@ class AppPlatform(
             repository.selectServer(target.id)
             vpnController.switchServer(target.id)
             idleMeter.reset()
-            mutableMaintenanceMoves.tryEmit(MaintenanceSwitch(current.id, target.id))
+            mutableServerSwitches.tryEmit(MaintenanceSwitch(current.id, target.id))
             postMessage(
                 MAINTENANCE_NOTIFICATION_ID,
                 context.getString(R.string.maintenance_moved_title, current.name),
@@ -376,15 +406,33 @@ class AppPlatform(
         }
     }
 
+    /** The remote asked for the automatic server: move a running connection to the fastest one. */
+    private suspend fun moveToFastestServer() {
+        val snapshot = vpnController.state.value
+        if (snapshot.state != VpnConnectionState.CONNECTED) return
+        val servers = repository.tunnelProfile.value?.servers ?: return
+        val current = servers.firstOrNull { it.id == snapshot.serverId } ?: return
+        val target = fastestOfKind(current, servers, System.currentTimeMillis(), includeCurrent = true) ?: return
+        if (target.id == current.id) return
+        repository.selectServer(target.id)
+        vpnController.switchServer(target.id)
+        mutableServerSwitches.tryEmit(MaintenanceSwitch(current.id, target.id))
+    }
+
     /**
      * The fastest answering server of the same kind outside maintenance;
      * protocols that work on the user's operator first.
      */
-    private suspend fun maintenanceTarget(current: TunnelServer, servers: List<TunnelServer>, nowMs: Long): TunnelServer? {
+    private suspend fun fastestOfKind(
+        current: TunnelServer,
+        servers: List<TunnelServer>,
+        nowMs: Long,
+        includeCurrent: Boolean,
+    ): TunnelServer? {
         val mobile = current.isMobileServer()
         val pool = servers.filter {
-            it.id != current.id && it.isEligibleForAutomaticSelection() && it.isMobileServer() == mobile &&
-                !underMaintenance(it, nowMs)
+            (includeCurrent || it.id != current.id) && it.isEligibleForAutomaticSelection() &&
+                it.isMobileServer() == mobile && !underMaintenance(it, nowMs)
         }
         if (pool.isEmpty()) return null
         val measured = supervisorScope {
@@ -633,8 +681,9 @@ class AppPlatform(
             LiveEvent.SETTINGS -> scope.launch { syncSettings() }
             LiveEvent.CONFIG -> scope.launch { refreshConfig() }
             LiveEvent.DEVICES -> scope.launch { refreshAccountQuietly() }
-            LiveEvent.PRESENCE -> Unit
+            LiveEvent.PRESENCE, LiveEvent.COMMANDS -> Unit
         }
+        remote?.onEvent(event)
     }
 
     /**
@@ -828,6 +877,9 @@ class AppPlatform(
 
         /** Moving off servers before their maintenance is part of the Direct build only. */
         val MAINTENANCE_ENABLED = !BuildConfig.IS_PLAY_DISTRIBUTION
+
+        /** The remote is part of the Direct build only. */
+        val REMOTE_ENABLED = !BuildConfig.IS_PLAY_DISTRIBUTION
         const val PRESENCE_DEBOUNCE_MS = 1_500L
         const val MAX_EVENT_LINE = 4_096
         val INACTIVE_TUNNEL = setOf(VpnConnectionState.DISCONNECTED, VpnConnectionState.ERROR)

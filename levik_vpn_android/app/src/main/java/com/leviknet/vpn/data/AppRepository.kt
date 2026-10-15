@@ -582,6 +582,17 @@ class AppRepository(
     suspend fun decideApproval(id: String, number: Int?): Boolean =
         apiClient.decideApproval(requireToken(), id, number).state == "approved"
 
+    /** The account's apps and the commands sent lately; see core/platform/RemoteCommands.kt. */
+    suspend fun remoteDevices(): kotlinx.serialization.json.JsonObject = apiClient.remoteDevices(requireToken())
+
+    suspend fun issueCommand(deviceId: String, command: String, replyKey: String?): kotlinx.serialization.json.JsonObject =
+        apiClient.issueCommand(requireToken(), deviceId, command, replyKey)
+
+    suspend fun takeCommands(): kotlinx.serialization.json.JsonObject = apiClient.takeCommands(requireToken())
+
+    suspend fun commandResult(id: String, result: String, detail: String?) =
+        apiClient.commandResult(requireToken(), id, result, detail)
+
     /** The live event stream of this session; see core/platform/LiveEvents.kt. */
     suspend fun openEvents(): javax.net.ssl.HttpsURLConnection = apiClient.openEvents(requireToken())
 

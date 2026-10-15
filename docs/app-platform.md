@@ -191,6 +191,51 @@ nothing was stored. `DELETE` on sign-out and quit removes it at once. Node and
 country are sent only while the VPN is connected. The devices page of the
 website shows "online" and the country.
 
+## Remote
+
+The remote lets one of the user's apps, or the devices page of the website,
+ask another app of the same account to:
+
+| Command | The app |
+|---|---|
+| `connect` | connects with its current settings; already connected is `done` |
+| `auto_server` | turns on automatic server choice and, when connected, moves to the best server |
+| `refresh_profile` | fetches the account and the tunnel profile again |
+| `check_update` | looks for an update; `detail` is `available:<version>` or `up_to_date` |
+| `collect_diagnostics` | creates an encrypted support note with its diagnostics and logs and answers with the note link sealed to `replyKey` |
+
+**There is no command to disconnect.** The list is fixed in the database, in
+the server and in every app: an app answers `unsupported` to anything else.
+
+- `GET /api/mobile/v1/devices` lists the account's apps
+  (`deviceId` = X-HWID, `name`, `platform`, `appVersion`, `current`, `remote`,
+  `presence`) and the commands the account sent in the last 30 minutes
+  (`id`, `deviceId`, `deviceName`, `command`, `state`, `detail`). `remote` is
+  true for apps that ask for commands; only they are offered.
+- `POST /api/mobile/v1/commands` `{ deviceId, command, replyKey? }` queues a
+  command for 10 minutes. Repeating an open command returns it. `replyKey` is
+  required for `collect_diagnostics` only: the SPKI (base64) of a fresh RSA key,
+  2048–4096 bits, whose private half the sender keeps in memory.
+- `GET /api/mobile/v1/commands` returns the open commands for the calling app,
+  oldest first, and marks them delivered. Apps call it when their event stream
+  opens and on every `commands` [live event](#live-events).
+- `POST /api/mobile/v1/commands/result` `{ id, result, detail }` with `result`
+  `done`, `failed` or `unsupported`. `detail` is a short word
+  (`[A-Za-z0-9._:-]{1,80}`, for example `vpn_permission`) or, for diagnostics,
+  the note link encrypted with RSA-OAEP, SHA-256 and MGF1 SHA-256 to
+  `replyKey`, in base64. The server never sees the link.
+
+States: `pending` → `delivered` → `done` / `failed` / `unsupported`, or
+`expired` after 10 minutes. Every change sends `commands` to the sender's
+account. Android receives commands while its event stream is open (the VPN is on
+or the app is on the screen); otherwise when the app is opened next, and the
+remote says so. Each command is written to the audit log.
+
+An app shows a notification when a command connected it or collected its
+diagnostics. On Android, `connect` needs the VPN permission granted once on the
+phone itself; without it the answer is `failed` with `vpn_permission`. Only the
+Direct build takes part; Google Play builds neither take nor send commands.
+
 ## Approving a sign-in
 
 A new app asks the user to approve it somewhere they are already signed in,
