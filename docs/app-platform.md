@@ -279,7 +279,12 @@ not answer. The verdicts, first match wins:
    in the note.
 
 Android shows the verdict on top of its diagnostics (Direct builds); desktop
-apps on their support page.
+apps check as soon as "Report a problem" opens and put the verdict into the
+support report made within 30 minutes. Desktops check Telegram, YouTube,
+Discord and GitHub through the system's routing (Chromium's network stack)
+and look for a sign-in page with the operating system's own probe only while
+the VPN is off. They are never on a cellular whitelist themselves, and Linux
+has no network settings page to open.
 
 ## Device presence
 
