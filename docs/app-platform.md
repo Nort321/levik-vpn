@@ -153,6 +153,7 @@ data, only what to fetch again:
 | `commands` | fetches the commands sent to it ([Remote](#remote)) |
 | `rules` | fetches the tunnel profile again and applies it ([Account rules](#account-rules)) |
 | `notifications` | fetches its notifications and shows them ([Notifications](#notifications)) |
+| `road` | a desktop fetches its home exit again ([Home road](#home-road)) |
 
 Unknown events are ignored. The server pings every 25 seconds and ends a
 stream after 14 minutes or when the session is revoked; apps reconnect after
@@ -484,6 +485,78 @@ stops, the setting is turned off, or the home has not answered for three
 windows (15 minutes). Turning the VPN back on at home keeps it on until the
 next arrival. Only the Direct build of Android has Levik Home; the Google
 Play build is unchanged.
+
+## Home road
+
+«Дорога домой»: the owner's devices, and the family members (all their
+devices or just one) the owner chooses, go out to the internet through a
+computer or router at home, as if they were there. Every tariff has it; the
+traffic counts against the subscription each device connects with, like any
+other traffic.
+
+**Pieces.** The relay (`levik_home_road`, private) runs next to the website
+behind its Caddy at `/road/*`. Exits are the desktop apps (Windows, macOS,
+Linux) and routers with the Levik Home agent 1.1.0 or later. Devices are the
+apps whose tunnel profile carries «🏠» servers: the desktops and the Direct
+build of Android.
+
+**Exit.** A desktop asks `GET /api/mobile/v1/road/exit` → `{ ok, available,
+exit }` and turns itself into an exit with `POST { enabled }` (Settings →
+«Пускать ко мне домой»); Android gets `404 not_available`. A router gets the
+same `exit` as `road` in its heartbeat answer; the owner makes it an exit in
+the cabinet, which refuses agents older than 1.1.0 (`router_outdated`).
+
+```
+exit = { exitId, name, mode: "direct" | "vpn", lanAccess, vlessUuid, controlUrl: "wss://<host>/road/x/<token>", expiresAt }
+```
+
+The exit keeps a control WebSocket at `controlUrl`. For each device
+connection the relay sends `{"type":"open","id"}`; the exit opens
+`controlUrl + "/" + id` and VLESS ends at the exit: on a desktop in a second
+Xray (VLESS on 127.0.0.1, config through stdin), on a router in the agent
+itself (TCP, UDP and XUDP). `direct` leaves through the physical (WAN)
+interface, past the exit's own VPN; `vpn` follows the exit's routing.
+Loopback and port 25 are always closed; the home network (private,
+link-local, CGNAT, multicast) only with `lanAccess`. On macOS and Linux the
+Kill Switch lets only the tunnel out, so `direct` cannot leave while it is
+on and Settings say so; the Windows Kill Switch lets `xray.exe` out. Desktops
+fetch the exit at start, at sign-in, on `ready`, `resync`, `devices` and
+`road`, and every 6 hours; tokens last 30 days, and a fresh token alone does
+not restart the exit.
+
+**Devices.** With `X-Levik-Road: 1` on `POST /api/mobile/v1/tunnel-profile`
+the profile gets one link per exit the device may use, never its own:
+
+```
+vless://<vlessUuid>@<host>:443?encryption=none&security=tls&sni=<host>&alpn=http/1.1&fp=chrome&type=ws&host=<host>&path=/road/c/<token>#🏠 <name>
+```
+
+Automatic selection and failover never pick a «🏠» server. The Play build
+does not send the header. When a link appears, changes or goes, the device
+gets `rules` and fetches its profile again.
+
+**Access.** The cabinet (`/dashboard/road`, `GET`/`POST
+/api/account/v1/road` with `op` `router`, `update`, `remove`, `allow`,
+`deny`) lists the exits, their mode and network access, who may connect and
+how much each used. A new exit lets in all of the owner's devices; family
+members come from the family roster, with all their devices or one. At most
+5 exits per account and 40 grants per exit.
+
+**Relay.** It holds no account data. Every 30 seconds it fetches `GET
+/api/road/v1/relay/state` (exits, and per grant and device the exit and the
+subscription), refuses everyone once the list is older than 10 minutes, and
+ends open streams whose access is gone. Every 60 seconds it reports bytes
+per grant and device with `POST /api/road/v1/relay/usage` and a batch id,
+repeated until accepted; the website counts each batch once.
+
+**Traffic.** The website passes the bytes to the bot (`/road/traffic`, in
+idempotent chunks). The bot lowers Remnawave's traffic limit of the user that
+carries the subscription's traffic (the mobile part of a multi subscription)
+to the paid limit minus the road bytes of the current period, never below
+one byte; a new period gives them back, and purchases see the paid limit. A
+subscription that is used up, expired or unknown to the bot is reported as
+not allowed (`/road/status`), and the relay stops letting it through.
+Unlimited subscriptions pass.
 
 ## Approving a sign-in
 
