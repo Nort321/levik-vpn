@@ -9,6 +9,7 @@ import com.leviknet.vpn.vpn.TunnelServerCategory
 import com.leviknet.vpn.vpn.hasUnlimitedTraffic
 import com.leviknet.vpn.vpn.isAllowlistMobileServer
 import com.leviknet.vpn.vpn.isEligibleForAutomaticSelection
+import com.leviknet.vpn.vpn.isHomeRoadServer
 import com.leviknet.vpn.vpn.isRussianServer
 import com.leviknet.vpn.vpn.isStandardMobileServer
 import kotlinx.serialization.decodeFromString
@@ -99,6 +100,21 @@ class FreeProxyAndServerCategoryTest {
         assertFalse(russian.isEligibleForAutomaticSelection())
         assertTrue(german.isEligibleForAutomaticSelection())
         assertTrue(german.copy(name = "LTE Germany").isEligibleForAutomaticSelection())
+    }
+
+    @Test
+    fun `a home exit is never picked automatically`() {
+        val home = TunnelServer(
+            id = "home",
+            tag = "home",
+            name = "\uD83C\uDFE0 Домашний ПК",
+            countryCode = "",
+            outbound = JsonObject(emptyMap()),
+        )
+
+        assertTrue(home.isHomeRoadServer())
+        assertFalse(home.isEligibleForAutomaticSelection())
+        assertFalse(home.copy(name = "Germany").isHomeRoadServer())
     }
 
     @Test

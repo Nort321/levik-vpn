@@ -263,5 +263,9 @@ internal fun legacyServerCategory(name: String, tag: String): TunnelServerCatego
 fun TunnelServer.isRussianServer(): Boolean =
     countryCode.trim().equals("RU", ignoreCase = true)
 
+/** The website names the servers of home exits «🏠 <name>» (docs/app-platform.md "Home road"). */
+fun TunnelServer.isHomeRoadServer(): Boolean = name.trimStart().startsWith("\uD83C\uDFE0")
+
+// A home exit is only ever the user's own choice.
 fun TunnelServer.isEligibleForAutomaticSelection(): Boolean =
-    engine == TunnelEngineKind.XRAY && (!isRussianServer() || isStandardMobileServer())
+    engine == TunnelEngineKind.XRAY && !isHomeRoadServer() && (!isRussianServer() || isStandardMobileServer())

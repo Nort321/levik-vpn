@@ -155,6 +155,8 @@ class MobileApiClient(
             request = TunnelProfileRequest(subscriptionId, engine),
             accessToken = accessToken,
             requiresIntegrity = true,
+            // «🏠» servers of the account's home exits (docs/app-platform.md "Home road"): Direct build only.
+            extraHeaders = if (!BuildConfig.IS_PLAY_DISTRIBUTION && engine == null) ROAD_HEADERS else emptyMap(),
         )
         checkSuccess(response.ok)
         return response.profile
@@ -559,12 +561,14 @@ class MobileApiClient(
         request: Request,
         accessToken: String?,
         requiresIntegrity: Boolean,
+        extraHeaders: Map<String, String> = emptyMap(),
     ): Response = request(
         method = METHOD_POST,
         path = path,
         body = json.encodeToString(request).encodeToByteArray(),
         accessToken = accessToken,
         requiresIntegrity = requiresIntegrity,
+        extraHeaders = extraHeaders,
     )
 
     private suspend inline fun <reified Response : Any> request(
@@ -573,6 +577,7 @@ class MobileApiClient(
         body: ByteArray,
         accessToken: String?,
         requiresIntegrity: Boolean,
+        extraHeaders: Map<String, String> = emptyMap(),
     ): Response = withContext(Dispatchers.IO) {
         val origin = try { endpoints.resolve() } catch (error: IOException) { throw ApiException.Network(error) }
         val url = URL(origin, path)
@@ -617,6 +622,7 @@ class MobileApiClient(
                 accessToken?.let { token ->
                     setRequestProperty("Authorization", "Bearer $token")
                 }
+                extraHeaders.forEach { (name, value) -> setRequestProperty(name, value) }
                 if (method == METHOD_POST || method == METHOD_PUT) {
                     doOutput = true
                     setFixedLengthStreamingMode(body.size)
@@ -729,6 +735,7 @@ class MobileApiClient(
         private const val ORDER_CREATE_PATH = "/api/mobile/v1/orders/create"
         private const val ORDER_PAYMENT_PATH = "/api/mobile/v1/orders/payment"
         private const val TUNNEL_PROFILE_PATH = "/api/mobile/v1/tunnel-profile"
+        private val ROAD_HEADERS = mapOf("X-Levik-Road" to "1")
         private val SUPPORTED_TUNNEL_ENGINES = setOf("xray", "levik-relay")
         private const val CHECK_IP_PATH = "/api/check"
         private const val STATUS_PATH = "/api/status"
