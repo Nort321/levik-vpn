@@ -500,24 +500,41 @@ Linux) and routers with the Levik Home agent 1.1.0 or later. Devices are the
 apps whose tunnel profile carries «🏠» servers: the desktops and the Direct
 build of Android.
 
+**Encryption.** Every exit makes an X25519 key pair and keeps the private
+half (desktops in the secure store, routers in the agent's private state).
+It reports the public half (base64url, 32 bytes): desktops in `POST`, routers
+as `roadKey` in every heartbeat. The devices' links carry it, so their Xray
+encrypts each stream to the exit with VLESS Encryption
+(`mlkem768x25519plus`: ML-KEM-768 and X25519, forward secret, 0-RTT after the
+first handshake). The relay passes ciphertext and sees sizes and timing only;
+the website never has the private key. An exit without a reported key gets
+no links; a new key sends `rules` to everyone who may use it.
+
 **Exit.** A desktop asks `GET /api/mobile/v1/road/exit` → `{ ok, available,
-exit }` and turns itself into an exit with `POST { enabled }` (Settings →
-«Пускать ко мне домой»); Android gets `404 not_available`. A router gets the
-same `exit` as `road` in its heartbeat answer; the owner makes it an exit in
-the cabinet, which refuses agents older than 1.1.0 (`router_outdated`).
+exit }` and turns itself into an exit with `POST { enabled: true, key }`
+(Settings → «Пускать ко мне домой»; again whenever `exit.key` is not its own
+key) or `POST { enabled: false }`; Android gets `404 not_available`. A router
+gets the same `exit` as `road` in its heartbeat answer; the owner makes it an
+exit in the cabinet, which refuses agents older than 1.1.0 (`router_outdated`).
 
 ```
-exit = { exitId, name, mode: "direct" | "vpn", lanAccess, vlessUuid, controlUrl: "wss://<host>/road/x/<token>", expiresAt }
+exit = { exitId, name, mode: "direct" | "vpn", lanAccess, vlessUuid, key, controlUrl: "wss://<host>/road/x/<token>", expiresAt }
 ```
 
 The exit keeps a control WebSocket at `controlUrl`. For each device
 connection the relay sends `{"type":"open","id"}`; the exit opens
-`controlUrl + "/" + id` and VLESS ends at the exit: on a desktop in a second
-Xray (VLESS on 127.0.0.1, config through stdin), on a router in the agent
-itself (TCP, UDP and XUDP). `direct` leaves through the physical (WAN)
+`controlUrl + "/" + id` and joins it to a local Xray that decrypts with the
+exit's private key (VLESS on 127.0.0.1, config with the key through stdin,
+errors-only log). A router uses its own Xray when it is 26.3.27 or newer,
+else the official 26.7.28 release for its processor: from the relay
+(`controlUrl + "/xray/26.7.28/Xray-linux-<arch>.zip"`, exit token only), then
+GitHub, unpacked as it downloads and run only when the archive matches the
+SHA-256 the agent pins; it is kept with the agent's files when 48 MB are free,
+else in memory. `direct` leaves through the physical (WAN)
 interface, past the exit's own VPN; `vpn` follows the exit's routing.
 Loopback and port 25 are always closed; the home network (private,
-link-local, CGNAT, multicast) only with `lanAccess`. On macOS and Linux the
+link-local, CGNAT, multicast) and a router's own addresses only with
+`lanAccess`. On macOS and Linux the
 Kill Switch lets only the tunnel out, so `direct` cannot leave while it is
 on and Settings say so; the Windows Kill Switch lets `xray.exe` out. Desktops
 fetch the exit at start, at sign-in, on `ready`, `resync`, `devices` and
@@ -528,7 +545,7 @@ not restart the exit.
 the profile gets one link per exit the device may use, never its own:
 
 ```
-vless://<vlessUuid>@<host>:443?encryption=none&security=tls&sni=<host>&alpn=http/1.1&fp=chrome&type=ws&host=<host>&path=/road/c/<token>#🏠 <name>
+vless://<vlessUuid>@<host>:443?encryption=mlkem768x25519plus.native.0rtt.<key>&security=tls&sni=<host>&alpn=http/1.1&fp=chrome&type=ws&host=<host>&path=/road/c/<token>#🏠 <name>
 ```
 
 Automatic selection and failover never pick a «🏠» server. The Play build
