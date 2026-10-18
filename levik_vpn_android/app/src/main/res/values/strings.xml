@@ -65,6 +65,7 @@
     <string name="not_available">—</string>
     <string name="subscription_required">An active subscription is required to connect.</string>
     <string name="servers_title">VPN servers</string>
+    <string name="servers_refresh">Refresh server list</string>
     <string name="servers_description">Choose the endpoint Levik VPN will use.</string>
     <string name="servers_empty">No compatible servers are available for this subscription.</string>
     <string name="server_automatic">Automatic</string>

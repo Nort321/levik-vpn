@@ -65,6 +65,7 @@
     <string name="not_available">—</string>
     <string name="subscription_required">Для подключения нужна активная подписка.</string>
     <string name="servers_title">VPN-серверы</string>
+    <string name="servers_refresh">Обновить список серверов</string>
     <string name="servers_description">Выберите точку подключения Levik VPN.</string>
     <string name="servers_empty">Для этой подписки нет совместимых серверов.</string>
     <string name="server_automatic">Автоматически</string>

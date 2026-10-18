@@ -1490,6 +1490,8 @@ private fun MainContent(
                 selectedServerId = displayedServerId(state),
                 connectionState = state.vpn.state,
                 loading = state.refreshing,
+                canRefresh = state.session == SessionStatus.Authenticated,
+                onRefresh = onRefresh,
                 onServerSelected = onServerSelected,
                 onYandexSetup = onYandexSetup,
                 yandexAvailable = state.yandexSupported && state.account?.subscriptions?.any {
@@ -2850,6 +2852,8 @@ private fun ServersScreen(
     selectedServerId: String?,
     connectionState: VpnConnectionState,
     loading: Boolean,
+    canRefresh: Boolean,
+    onRefresh: () -> Unit,
     onServerSelected: (String) -> Unit,
     onYandexSetup: (Boolean) -> Unit,
     yandexAvailable: Boolean,
@@ -2889,6 +2893,27 @@ private fun ServersScreen(
         ScreenHeader(
             title = stringResource(R.string.servers_title),
             subtitle = stringResource(R.string.servers_description),
+            action = {
+                val refreshDescription = stringResource(R.string.servers_refresh)
+                IconButton(
+                    onClick = onRefresh,
+                    enabled = canRefresh && !loading,
+                    modifier = Modifier.semantics { contentDescription = refreshDescription },
+                ) {
+                    if (loading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_refresh),
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+            },
         )
 
         levikStatus?.let { status ->
@@ -7214,18 +7239,32 @@ private fun ProfileLine(label: String, value: String) {
 }
 
 @Composable
-private fun ScreenHeader(title: String, subtitle: String? = null) {
+private fun ScreenHeader(
+    title: String,
+    subtitle: String? = null,
+    action: (@Composable () -> Unit)? = null,
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 22.dp, vertical = 20.dp),
     ) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onBackground,
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.weight(1f),
+            )
+            if (action != null) {
+                Spacer(Modifier.width(12.dp))
+                action()
+            }
+        }
         subtitle?.let {
             Spacer(Modifier.height(4.dp))
             Text(
