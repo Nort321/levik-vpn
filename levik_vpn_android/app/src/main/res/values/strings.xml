@@ -606,6 +606,10 @@
     <string name="maintenance_moved_title">Server “%1$s” is going into maintenance</string>
     <string name="maintenance_moved_body">Levik VPN moved you to “%1$s” ahead of time.</string>
     <string name="server_maintenance_until">Maintenance until %1$s</string>
+    <string name="server_load_free">Free</string>
+    <string name="server_load_busy">Busy</string>
+    <string name="server_load_full">Crowded</string>
+    <string name="smart_auto_switched">%1$s does not work on this network. Switched to %2$s</string>
     <string name="direct_app_title">%1$s may not work with a VPN</string>
     <string name="direct_app_body">Let it bypass the VPN? Only this app will connect directly; the others keep their route. You can change this under Split Tunneling.</string>
     <string name="direct_app_confirm">Bypass the VPN</string>

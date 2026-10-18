@@ -79,6 +79,7 @@ import com.leviknet.vpn.core.platform.RemoteSnapshot
 import com.leviknet.vpn.core.platform.RemoteConfigPolicy
 import com.leviknet.vpn.vpn.RankedServer
 import com.leviknet.vpn.vpn.SmartServerRanking
+import com.leviknet.vpn.vpn.SmartSwitch
 import com.leviknet.vpn.vpn.isEligibleForAutomaticSelection
 import com.leviknet.vpn.vpn.isSmartAutoCandidate
 import com.leviknet.vpn.vpn.smartProtocol
@@ -456,6 +457,17 @@ class AppViewModel(
                 platform.serverSwitches.collect { switch ->
                     mutableState.update { current ->
                         current.copy(selectedServerId = switch.toServerId, pingMs = current.serverPings[switch.toServerId])
+                    }
+                }
+            }
+            viewModelScope.launch {
+                platform.smartAuto.switches.collect { switch ->
+                    mutableState.update { current ->
+                        current.copy(
+                            selectedServerId = switch.toServerId,
+                            pingMs = current.serverPings[switch.toServerId],
+                            smartSwitch = switch.takeIf(SmartSwitch::protocolFailed) ?: current.smartSwitch,
+                        )
                     }
                 }
             }
@@ -1887,6 +1899,10 @@ class AppViewModel(
         mutableState.update { it.copy(message = null) }
     }
 
+    fun clearSmartSwitch() {
+        mutableState.update { it.copy(smartSwitch = null) }
+    }
+
     fun dismissProblem() {
         mutableState.update { it.copy(problem = null, message = null) }
     }
@@ -2197,6 +2213,14 @@ class AppViewModel(
             .sortedBy(RankedServer::score)
     }
 
+    private fun serverLoad(profile: PreparedTunnelProfile): Map<String, Double> {
+        val load = appPlatform?.nodeLoad().orEmpty()
+        if (load.isEmpty()) return emptyMap()
+        return profile.servers.mapNotNull { server ->
+            FavoriteNodes.nodeId(server)?.let(load::get)?.let { server.id to it }
+        }.toMap()
+    }
+
     /** Servers going into maintenance are left out while others remain. */
     private fun withoutMaintenance(profile: PreparedTunnelProfile, serverIds: Set<String>): Set<String> {
         val platform = appPlatform ?: return serverIds
@@ -2258,6 +2282,7 @@ class AppViewModel(
                                     selectedServerId = selected,
                                     pingMs = selected?.let(measured::get),
                                     serverPings = measured,
+                                    serverLoad = serverLoad(profile),
                                     pingingServers = false,
                                 )
                             } else {
@@ -3161,6 +3186,10 @@ data class AppUiState(
     val answeringApproval: Boolean = false,
     /** Servers under maintenance or about to be, with the time it ends. */
     val serverMaintenance: Map<String, Long> = emptyMap(),
+    /** How busy each server is, 0..1, by server id; empty when the website did not say. */
+    val serverLoad: Map<String, Double> = emptyMap(),
+    /** Smart Auto moved the connection to another protocol; shown once. */
+    val smartSwitch: SmartSwitch? = null,
     /** An installed bank that may refuse to work through the VPN (Direct builds). */
     val directAppSuggestion: DirectAppSuggestion? = null,
     /** The user's other apps for the remote (Direct builds). */

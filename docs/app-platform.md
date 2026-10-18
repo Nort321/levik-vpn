@@ -122,6 +122,16 @@ configuration again when its load is older than two minutes, waiting 2.5
 seconds at most. The server list moves the automatic choice only to a server
 scoring at least 25% better, and failover uses the same order.
 
+The check runs again mid-session when the tunnel looks frozen: over 12
+seconds at least 24 KB went out and less than half as much came back (at most
+once every two minutes; a false alarm costs one 64 KB download). When the
+ladder changes protocol, the app says so ("VLESS Reality does not work on this
+network. Switched to Hysteria 2"). The history also names, per network, the
+server that last passed the check; when the phone moves to a known network,
+the app reconnects straight to that server and checks it again, and a failed
+check clears it. The server list shows each server's load: free below 0.4,
+busy below 0.75, crowded above.
+
 ## Synced settings
 
 `GET` and `PUT /api/mobile/v1/settings`, authenticated with the app session

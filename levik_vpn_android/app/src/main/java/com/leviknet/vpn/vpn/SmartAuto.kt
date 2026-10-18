@@ -16,6 +16,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 
@@ -34,6 +37,18 @@ class SmartAuto(
 ) {
     /** Checks outlive the caller when it moves on; each one ends by its own deadline. */
     private val checkScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    private val mutableSwitches = MutableSharedFlow<SmartSwitch>(extraBufferCapacity = 1)
+
+    /** Smart Auto moved the connection to another server; the app follows it. */
+    val switches: SharedFlow<SmartSwitch> = mutableSwitches.asSharedFlow()
+
+    fun reportSwitch(switch: SmartSwitch) {
+        mutableSwitches.tryEmit(switch)
+    }
+
+    /** The server that last carried traffic on this network; reconnecting there skips the search. */
+    fun lastWinner(network: Network?): String? = networkKey(network)?.let(history.current()::winner)
 
     /** Best first. [latencies] come from [ServerPinger]; [network] is the physical network, by default the current one. */
     fun rank(
@@ -61,13 +76,13 @@ class SmartAuto(
 
     fun recordSuccess(server: TunnelServer, network: Network?) {
         val key = networkKey(network) ?: return
-        history.update { it.recordSuccess(key, server.smartProtocol(), clock()) }
+        history.update { it.recordSuccess(key, server.smartProtocol(), clock(), serverId = server.id) }
     }
 
     fun recordFailure(server: TunnelServer, network: Network?) {
         val key = networkKey(network) ?: return
         val node = FavoriteNodes.nodeId(server) ?: server.id
-        history.update { it.recordFailure(key, server.smartProtocol(), node, clock()) }
+        history.update { it.recordFailure(key, server.smartProtocol(), node, clock(), failedServerId = server.id) }
     }
 
     /**
@@ -192,6 +207,18 @@ class SmartAuto(
     }
 }
 
+/**
+ * Smart Auto moved the connection to [toServerId]; protocols by their telemetry
+ * names. [protocolFailed] when [fromProtocol] carried no traffic, which the app
+ * tells the user; otherwise the network's last winner was simply closer at hand.
+ */
+data class SmartSwitch(
+    val fromProtocol: String,
+    val toServerId: String,
+    val toProtocol: String,
+    val protocolFailed: Boolean,
+)
+
 /** Servers and protocols tried since the user connected; a few rungs at most, so a bad network cannot loop. */
 internal class SmartLadder(private val maxClimbs: Int = MAX_CLIMBS) {
     private val triedIds = mutableSetOf<String>()
@@ -228,6 +255,20 @@ internal class SmartLadder(private val maxClimbs: Int = MAX_CLIMBS) {
     private companion object {
         const val MAX_CLIMBS = 3
     }
+}
+
+/** A protocol's name for people, from its telemetry name. */
+fun smartProtocolLabel(protocol: String): String = when (protocol) {
+    "vless-reality" -> "VLESS Reality"
+    "vless-xhttp" -> "VLESS XHTTP"
+    "vless-ws" -> "VLESS WS"
+    "vless-grpc" -> "VLESS gRPC"
+    "vless-tcp" -> "VLESS"
+    "hysteria2" -> "Hysteria 2"
+    "tuic" -> "TUIC"
+    "trojan" -> "Trojan"
+    "shadowsocks" -> "Shadowsocks"
+    else -> protocol.uppercase()
 }
 
 /** The rung of the protocol ladder a server is on. */

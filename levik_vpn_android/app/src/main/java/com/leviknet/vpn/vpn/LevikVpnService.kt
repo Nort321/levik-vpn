@@ -135,6 +135,7 @@ class LevikVpnService : VpnService() {
     private var trafficCheckJob: Job? = null
     /** Smart Auto's protocol ladder since the user connected; a new network starts it over. */
     private val smartLadder = SmartLadder()
+    private val freezeDetector = TunnelFreezeDetector()
     private var automaticRollbackServerId: String? = null
     private var automaticTargetServerId: String? = null
     @Volatile
@@ -1222,6 +1223,7 @@ class LevikVpnService : VpnService() {
                 if (replacement != null) {
                     AppLogger.i(LOG_TAG, "Underlying network changed, triggering reconnect")
                     telemetry.record { it.network(networkType(replacement), NetworkState.CHANGED) }
+                    if (moveToNetworkWinner(server, replacement)) return@withLock
                     scheduleReconnectLocked(AttemptCause.NETWORK_CHANGE)
                     return@withLock
                 }
@@ -1235,6 +1237,32 @@ class LevikVpnService : VpnService() {
                 showForeground(VpnConnectionState.RECONNECTING, currentServerName)
             }
         }
+    }
+
+    /**
+     * Smart Auto: a network where another server carried traffic last time
+     * reconnects straight to it, without measuring every server first.
+     */
+    private fun moveToNetworkWinner(current: TunnelServer, network: Network): Boolean {
+        if (!container.settings.automaticServer.value || !current.isSmartAutoCandidate()) return false
+        val smartAuto = container.appPlatform.smartAuto
+        val winnerId = smartAuto.lastWinner(network)?.takeIf { it != current.id } ?: return false
+        val profile = runCatching { readPreparedProfile() }.getOrNull() ?: return false
+        val winner = profile.servers.firstOrNull { it.id == winnerId }
+            ?.takeIf { it.isSmartAutoCandidate() && !container.appPlatform.underMaintenance(it) }
+            ?: return false
+        pendingAutoFallback = null
+        container.secureStore.put(SecureFileStore.SELECTED_SERVER, winner.id.encodeToByteArray())
+        smartAuto.reportSwitch(SmartSwitch(current.smartProtocol(), winner.id, winner.smartProtocol(), protocolFailed = false))
+        AppLogger.i(LOG_TAG, "Smart Auto: ${winner.smartProtocol()} carried traffic on this network last time; reconnecting there")
+        nextAttemptCause = AttemptCause.NETWORK_CHANGE
+        reconnectJob?.cancel()
+        connectionJob?.cancel()
+        connectionJob = serviceScope.launch {
+            stopConnection(stopService = false)
+            connect()
+        }
+        return true
     }
 
     private fun scheduleReconnect(cause: AttemptCause) {
@@ -1413,6 +1441,8 @@ class LevikVpnService : VpnService() {
                     telemetry.record { it.connected() }
                     telemetry.flushSoon()
                     AppLogger.i(LOG_TAG, "VPN successfully reconnected")
+                    // A new network may block what worked on the old one.
+                    if (cause == AttemptCause.NETWORK_CHANGE) startTrafficCheck(server, network)
                 } catch (error: CancellationException) {
                     engine.stop(coreOwner, currentPreparedSession, coreLease)
                     coreRunning = false
@@ -1945,12 +1975,26 @@ class LevikVpnService : VpnService() {
     private fun startTrafficCheck(server: TunnelServer, network: Network) {
         trafficCheckJob?.cancel()
         trafficCheckJob = null
+        freezeDetector.reset()
+        launchTrafficCheck(server, network, TRAFFIC_CHECK_DELAY_MS)
+    }
+
+    /** The stats saw a tunnel that sends but hardly receives: check it the same way. */
+    private fun onFreezeSuspected() {
+        if (trafficCheckJob?.isActive == true) return
+        val server = currentServer ?: return
+        val network = currentNetwork ?: return
+        AppLogger.w(LOG_TAG, "Smart Auto: the tunnel sends but hardly receives; checking traffic")
+        launchTrafficCheck(server, network, initialDelayMs = 0L)
+    }
+
+    private fun launchTrafficCheck(server: TunnelServer, network: Network, initialDelayMs: Long) {
         if (!container.settings.automaticServer.value || !server.isSmartAutoCandidate()) return
         // Anti-Block sends unlisted sites around the tunnel: the check would pass without it.
         if (container.settings.routingPreset.value == RoutingPreset.BLOCKED_ONLY) return
         val smartAuto = container.appPlatform.smartAuto
         trafficCheckJob = serviceScope.launch {
-            delay(TRAFFIC_CHECK_DELAY_MS)
+            delay(initialDelayMs)
             val vpnNetwork = vpnNetwork() ?: return@launch
             val passed = smartAuto.checkTraffic(vpnNetwork)
             if (!coreRunning || currentServer?.id != server.id || currentNetwork != network) return@launch
@@ -1996,6 +2040,9 @@ class LevikVpnService : VpnService() {
         smartLadder.climbed()
         pendingAutoFallback = null
         container.secureStore.put(SecureFileStore.SELECTED_SERVER, next.id.encodeToByteArray())
+        smartAuto.reportSwitch(
+            SmartSwitch(failed.smartProtocol(), next.id, next.protocol, protocolFailed = next.protocol != failed.smartProtocol()),
+        )
         AppLogger.i(LOG_TAG, "Smart Auto: ${failed.smartProtocol()} carries no traffic here; trying ${next.protocol}")
         telemetry.record { it.recovery(RecoveryAction.FAILOVER) }
         nextAttemptCause = AttemptCause.FAILOVER
@@ -2336,6 +2383,7 @@ class LevikVpnService : VpnService() {
                 if (rxDelta > 0 || txDelta > 0) {
                     container.trafficHistoryStore.recordTraffic(rxDelta, txDelta)
                 }
+                if (freezeDetector.record(rx, tx, now)) onFreezeSuspected()
                 VpnStateStore.update(coreOwner) { state ->
                     state.copy(
                         downloadedBytes = (rx - initialRx).coerceAtLeast(0),

@@ -35,7 +35,11 @@ data class ProtocolRecord(
 data class ProtocolHistory(
     /** Network key → protocol → record, the most recently updated network last. */
     val networks: Map<String, Map<String, ProtocolRecord>> = emptyMap(),
+    /** Network key → the server that last carried traffic there. */
+    val winners: Map<String, String> = emptyMap(),
 ) {
+    fun winner(networkKey: String): String? = winners[networkKey]
+
     fun verdict(networkKey: String?, protocol: String, nowMs: Long): ProtocolVerdict {
         val record = networkKey?.let { networks[it]?.get(protocol) } ?: return ProtocolVerdict.UNKNOWN
         val sinceFailure = nowMs - record.lastFailureAtMs
@@ -47,19 +51,35 @@ data class ProtocolHistory(
         }
     }
 
-    fun recordSuccess(networkKey: String, protocol: String, nowMs: Long): ProtocolHistory =
-        update(networkKey, protocol) { ProtocolRecord(lastSuccessAtMs = nowMs, lastFailureAtMs = it.lastFailureAtMs) }
+    fun recordSuccess(networkKey: String, protocol: String, nowMs: Long, serverId: String? = null): ProtocolHistory {
+        val next = update(networkKey, protocol) { ProtocolRecord(lastSuccessAtMs = nowMs, lastFailureAtMs = it.lastFailureAtMs) }
+        if (serverId == null) return next
+        return next.copy(winners = next.winners + (networkKey to serverId))
+    }
 
     /**
      * A failure counts once per server: a dead server is not a blocked protocol,
      * the same protocol failing on a second server is. Failures older than a
      * day start over.
      */
-    fun recordFailure(networkKey: String, protocol: String, nodeId: String, nowMs: Long): ProtocolHistory =
+    fun recordFailure(
+        networkKey: String,
+        protocol: String,
+        nodeId: String,
+        nowMs: Long,
+        failedServerId: String? = null,
+    ): ProtocolHistory =
         update(networkKey, protocol) { record ->
             val fresh = nowMs - record.lastFailureAtMs < BLOCK_TTL_MS
             val nodes = if (fresh) record.failedNodes else emptySet()
             record.copy(failedNodes = (nodes + nodeId).toSortedSet().take(MAX_FAILED_NODES).toSet(), lastFailureAtMs = nowMs)
+        }.let { next ->
+            // A protocol that stopped working here no longer names the network's winner.
+            if (failedServerId != null && next.winners[networkKey] == failedServerId) {
+                next.copy(winners = next.winners - networkKey)
+            } else {
+                next
+            }
         }
 
     private fun update(networkKey: String, protocol: String, change: (ProtocolRecord) -> ProtocolRecord): ProtocolHistory {
@@ -67,7 +87,8 @@ data class ProtocolHistory(
         val next = records + (protocol to change(records[protocol] ?: ProtocolRecord()))
         // Re-inserting moves the network to the end; the oldest ones are forgotten.
         val all = (networks - networkKey) + (networkKey to next.entries.take(MAX_PROTOCOLS).associate { it.toPair() })
-        return ProtocolHistory(all.entries.toList().takeLast(MAX_NETWORKS).associate { it.toPair() })
+        val kept = all.entries.toList().takeLast(MAX_NETWORKS).associate { it.toPair() }
+        return ProtocolHistory(kept, winners.filterKeys(kept::containsKey))
     }
 
     companion object {

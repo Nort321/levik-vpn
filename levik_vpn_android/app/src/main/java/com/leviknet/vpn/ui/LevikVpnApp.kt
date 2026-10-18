@@ -111,6 +111,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -174,6 +175,7 @@ import com.leviknet.vpn.vpn.VpnConnectionState
 import com.leviknet.vpn.vpn.VpnFailure
 import com.leviknet.vpn.vpn.VpnSnapshot
 import com.leviknet.vpn.vpn.countryFlag
+import com.leviknet.vpn.vpn.smartProtocolLabel
 import com.leviknet.vpn.vpn.effectiveCategory
 import com.leviknet.vpn.vpn.TunnelEngineKind
 import com.leviknet.vpn.vpn.createYandexGuestIntent
@@ -236,6 +238,21 @@ fun LevikVpnApp(viewModel: AppViewModel) {
         if (message != null) {
             viewModel.clearMessage()
             snackbarHostState.showSnackbar(message)
+        }
+    }
+
+    val smartSwitch = state.smartSwitch
+    val resources = LocalResources.current
+    LaunchedEffect(smartSwitch) {
+        if (smartSwitch != null) {
+            viewModel.clearSmartSwitch()
+            snackbarHostState.showSnackbar(
+                resources.getString(
+                    R.string.smart_auto_switched,
+                    smartProtocolLabel(smartSwitch.fromProtocol),
+                    smartProtocolLabel(smartSwitch.toProtocol),
+                ),
+            )
         }
     }
 
@@ -1501,6 +1518,7 @@ private fun MainContent(
                 onAutomaticServer = onAutomaticServer,
                 serverPings = state.serverPings,
                 serverMaintenance = state.serverMaintenance,
+                serverLoad = state.serverLoad,
                 pingingServers = state.pingingServers,
                 favoriteServerIds = state.favoriteServerIds,
                 onToggleFavorite = onToggleFavorite,
@@ -2861,6 +2879,7 @@ private fun ServersScreen(
     onAutomaticServer: () -> Unit,
     serverPings: Map<String, Long?>,
     serverMaintenance: Map<String, Long>,
+    serverLoad: Map<String, Double>,
     pingingServers: Boolean,
     favoriteServerIds: Set<String>,
     onToggleFavorite: (String) -> Unit,
@@ -3175,6 +3194,7 @@ private fun ServersScreen(
                                         favoriteServerIds = favoriteServerIds,
                                         serverPings = serverPings,
                                         serverMaintenance = serverMaintenance,
+                                        serverLoad = serverLoad,
                                         pingingServers = pingingServers,
                                         isDark = isDark,
                                         onServerSelected = onServerSelection,
@@ -3216,6 +3236,7 @@ private fun ServersScreen(
                                     favoriteServerIds = favoriteServerIds,
                                     serverPings = serverPings,
                                     serverMaintenance = serverMaintenance,
+                                    serverLoad = serverLoad,
                                     pingingServers = pingingServers,
                                     isDark = isDark,
                                     onServerSelected = onServerSelection,
@@ -3233,6 +3254,7 @@ private fun ServersScreen(
                                 favoriteServerIds = favoriteServerIds,
                                 serverPings = serverPings,
                                 serverMaintenance = serverMaintenance,
+                                serverLoad = serverLoad,
                                 pingingServers = pingingServers,
                                 isDark = isDark,
                                 onServerSelected = onServerSelection,
@@ -3291,6 +3313,32 @@ private fun ServerCategoryHeader(
     }
 }
 
+/** Free, busy or full, from the website's node load; Smart Auto prefers free servers. */
+@Composable
+private fun ServerLoadBadge(load: Double, isDark: Boolean) {
+    val (label, color) = when {
+        load < SERVER_LOAD_BUSY -> R.string.server_load_free to if (isDark) Color(0xFF34D399) else Color(0xFF059669)
+        load < SERVER_LOAD_FULL -> R.string.server_load_busy to if (isDark) Color(0xFFFBBF24) else Color(0xFFD97706)
+        else -> R.string.server_load_full to if (isDark) Color(0xFFF87171) else Color(0xFFDC2626)
+    }
+    Surface(
+        shape = RoundedCornerShape(6.dp),
+        color = color.copy(alpha = 0.15f),
+        modifier = Modifier.padding(top = 4.dp),
+    ) {
+        Text(
+            text = stringResource(label),
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            color = color,
+        )
+    }
+}
+
+private const val SERVER_LOAD_BUSY = 0.4
+private const val SERVER_LOAD_FULL = 0.75
+
 /** One card per server; protocol variants of the same server switch inside the card. */
 @Composable
 private fun ServerGroupCard(
@@ -3300,6 +3348,7 @@ private fun ServerGroupCard(
     favoriteServerIds: Set<String>,
     serverPings: Map<String, Long?>,
     serverMaintenance: Map<String, Long>,
+    serverLoad: Map<String, Double>,
     pingingServers: Boolean,
     isDark: Boolean,
     onServerSelected: (String) -> Unit,
@@ -3314,6 +3363,7 @@ private fun ServerGroupCard(
         isFav = favoriteIds.isNotEmpty(),
         pingValue = serverPings[server.id],
         maintenanceEndsAt = serverMaintenance[server.id],
+        load = serverLoad[server.id],
         pingingServers = pingingServers,
         isDark = isDark,
         onServerSelected = onServerSelected,
@@ -3340,6 +3390,8 @@ private fun ServerItemCard(
     protocolVariants: List<TunnelServer> = emptyList(),
     /** When planned work on the server ends; the app moves off it beforehand. */
     maintenanceEndsAt: Long? = null,
+    /** How busy the server is, 0..1, docs/app-platform.md "Node load". */
+    load: Double? = null,
 ) {
     var showGuide by remember(server.id) { mutableStateOf(false) }
     if (showGuide) {
@@ -3427,6 +3479,8 @@ private fun ServerItemCard(
                                 color = warning,
                             )
                         }
+                    } else if (load != null) {
+                        ServerLoadBadge(load, isDark)
                     }
                 }
                 IconButton(

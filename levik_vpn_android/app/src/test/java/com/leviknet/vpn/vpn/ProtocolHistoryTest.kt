@@ -68,4 +68,30 @@ class ProtocolHistoryTest {
         val decoded = json.decodeFromString(ProtocolHistory.serializer(), json.encodeToString(ProtocolHistory.serializer(), history))
         assertEquals(history, decoded)
     }
+
+    @Test
+    fun `the last server that carried traffic is the network's winner until it fails`() {
+        val history = ProtocolHistory()
+            .recordSuccess("lte", "vless-reality", nowMs = 0, serverId = "de-reality")
+            .recordSuccess("wifi", "hysteria2", nowMs = 0, serverId = "nl-hy2")
+        assertEquals("de-reality", history.winner("lte"))
+        assertEquals("nl-hy2", history.winner("wifi"))
+        // Another server failing leaves the winner alone; the winner failing clears it.
+        val other = history.recordFailure("lte", "vless-reality", "n1nl", nowMs = hour, failedServerId = "nl-reality")
+        assertEquals("de-reality", other.winner("lte"))
+        val failed = other.recordFailure("lte", "vless-reality", "n1de", nowMs = hour, failedServerId = "de-reality")
+        assertEquals(null, failed.winner("lte"))
+        assertEquals("nl-hy2", failed.winner("wifi"))
+    }
+
+    @Test
+    fun `winners of forgotten networks are forgotten too`() {
+        var history = ProtocolHistory().recordSuccess("net-0", "tuic", nowMs = 0, serverId = "first")
+        for (index in 1..ProtocolHistory.MAX_NETWORKS) {
+            history = history.recordSuccess("net-$index", "tuic", nowMs = index.toLong(), serverId = "s$index")
+        }
+        assertEquals(null, history.winner("net-0"))
+        assertEquals("s${ProtocolHistory.MAX_NETWORKS}", history.winner("net-${ProtocolHistory.MAX_NETWORKS}"))
+        assertEquals(ProtocolHistory.MAX_NETWORKS, history.winners.size)
+    }
 }
