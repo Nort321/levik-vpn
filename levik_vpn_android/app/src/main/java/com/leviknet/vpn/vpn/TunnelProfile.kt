@@ -266,6 +266,8 @@ fun TunnelServer.isRussianServer(): Boolean =
 /** The website names the servers of home exits «🏠 <name>» (docs/app-platform.md "Home road"). */
 fun TunnelServer.isHomeRoadServer(): Boolean = name.trimStart().startsWith("\uD83C\uDFE0")
 
-// A home exit is only ever the user's own choice.
+// A home exit is only ever the user's own choice. TUIC is a rung of Smart Auto's protocol ladder.
 fun TunnelServer.isEligibleForAutomaticSelection(): Boolean =
-    engine == TunnelEngineKind.XRAY && !isHomeRoadServer() && (!isRussianServer() || isStandardMobileServer())
+    engine in AUTOMATIC_ENGINES && !isHomeRoadServer() && (!isRussianServer() || isStandardMobileServer())
+
+private val AUTOMATIC_ENGINES = setOf(TunnelEngineKind.XRAY, TunnelEngineKind.LEVIK_TUIC)

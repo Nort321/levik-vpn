@@ -35,7 +35,8 @@ identifier. Only the client header is sent.
   "protocols": { "preferred": ["vless-reality"], "avoid": ["hysteria2"] },
   "maintenance": [
     { "nodeId": "n1…", "startsAt": "ISO 8601", "endsAt": "ISO 8601" }
-  ]
+  ],
+  "nodeLoad": { "n1…": 0.42 }
 }
 ```
 
@@ -55,7 +56,13 @@ identifier. Only the client header is sent.
   allows it, keep the advice for 6 hours, and keep the previous advice when an
   answer came through the tunnel. Automatic server selection skips avoided
   protocols and tries preferred ones first; latency still picks the server.
-  If the advice would leave no server, it is ignored.
+  If the advice would leave no server, it is ignored. Android uses it as one
+  input of [Smart Auto](#smart-auto).
+- **Node load** tells how busy each server is, from 0 (idle) to 1 (full), by
+  [node id](#node-ids): the busier of the server's CPU and its online users,
+  rounded to hundredths. A server is listed under its own address and every
+  host bound to it. The website reads the panel at most every 30 seconds; an
+  unreachable panel gives an empty object. The apps use it for 10 minutes.
 
 The apps ask again after `refreshAfterSeconds` (clamped to 5 minutes–24
 hours), when they come to the screen, and keep the last answer for offline
@@ -80,6 +87,40 @@ From 15 minutes before the start until the end, the apps:
   notification and does not move back when the work ends.
 
 Android does this in the Direct build only; iOS does not take part.
+
+### Smart Auto
+
+The automatic server on Android picks among regular servers (VLESS, Hysteria 2
+and TUIC; mobile, relay and home-road servers stay separate choices) by
+
+    score = latency × (1 + 2 × load) × history × advice      (lower is better)
+
+- **Latency** is the TCP connect time, or the QUIC answer for UDP servers. A
+  TCP server that does not answer is down; a UDP server that does not answer
+  counts as 400 ms, since obfuscated servers ignore probes.
+- **Load** is the node load above, 0.35 when unknown; from 0.9 the server
+  counts twice as busy.
+- **History** is the phone's own record per network: ×0.8 for a protocol that
+  carried traffic here within a week, ×2 after one failed check (6 hours), and
+  left out after failures on two different servers (a day). A network is named
+  by a salted hash of the operator code (mobile data) or the gateway and DNS
+  servers (Wi-Fi); the record never leaves the phone and keeps 16 networks.
+- **Advice** from the website (×0.85 preferred, ×3 avoided) counts only until
+  the phone has its own experience with the protocol.
+
+After an automatic connection to a regular server, the app downloads 64 KB
+through the tunnel within 8 seconds (two rounds, two independent addresses).
+Operators that throttle a protocol often pass the handshake and small requests
+and freeze the connection after about 16 KB, so a ping or a status check says
+nothing. If the download fails while the phone's own network reaches foreign
+sites, the protocol is noted as failing and the app moves to the next rung of
+the ladder: the best server of a protocol not yet tried, else the best untried
+server, three moves at most until the user connects again or the network
+changes. In the Anti-Block routing mode the check is skipped, because
+unlisted sites go around the tunnel. Before connecting, the app asks for the
+configuration again when its load is older than two minutes, waiting 2.5
+seconds at most. The server list moves the automatic choice only to a server
+scoring at least 25% better, and failover uses the same order.
 
 ## Synced settings
 

@@ -49,6 +49,28 @@ class RemoteConfigPolicyTest {
     }
 
     @Test
+    fun `reads server load by node id and drops invalid entries`() {
+        val node = "n1" + "a".repeat(20)
+        val config = RemoteConfigPolicy.parse(
+            Json.parseToJsonElement(
+                """{"ok":true,"nodeLoad":{"$node":0.42,"n1bad":0.1,"${"n1" + "b".repeat(20)}":1.5,"${"n1" + "c".repeat(20)}":"0.3"}}""",
+            ),
+        )!!
+        assertEquals(mapOf(node to 0.42), config.nodeLoad)
+        assertTrue(RemoteConfigPolicy.parse(response)!!.nodeLoad.isEmpty())
+    }
+
+    @Test
+    fun `server load counts only while the configuration is fresh`() {
+        val node = "n1" + "a".repeat(20)
+        val response = Json.parseToJsonElement("""{"ok":true,"nodeLoad":{"$node":0.5}}""")
+        val stored = RemoteConfigPolicy.merge(null, response, RemoteConfigPolicy.parse(response)!!, start, direct = false)
+        assertEquals(mapOf(node to 0.5), RemoteConfigPolicy.currentNodeLoad(stored, start + 60_000L))
+        assertTrue(RemoteConfigPolicy.currentNodeLoad(stored, start + RemoteConfigPolicy.NODE_LOAD_TTL_MS).isEmpty())
+        assertTrue(RemoteConfigPolicy.currentNodeLoad(null, start).isEmpty())
+    }
+
+    @Test
     fun `reads transport hosts and drops invalid ones`() {
         val config = RemoteConfigPolicy.parse(
             Json.parseToJsonElement(

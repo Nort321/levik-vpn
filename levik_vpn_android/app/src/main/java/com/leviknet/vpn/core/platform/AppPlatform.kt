@@ -23,7 +23,9 @@ import com.leviknet.vpn.data.AppIconManager
 import com.leviknet.vpn.data.AppRepository
 import com.leviknet.vpn.data.AppSettings
 import com.leviknet.vpn.data.SessionStatus
+import com.leviknet.vpn.vpn.ProtocolHistoryStore
 import com.leviknet.vpn.vpn.ServerPinger
+import com.leviknet.vpn.vpn.SmartAuto
 import com.leviknet.vpn.vpn.TunnelServer
 import com.leviknet.vpn.vpn.VpnConnectionState
 import com.leviknet.vpn.vpn.VpnController
@@ -65,6 +67,7 @@ import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -304,6 +307,29 @@ class AppPlatform(
 
     fun protocolAdvice(): ProtocolAdvice? = RemoteConfigPolicy.currentAdvice(stored, System.currentTimeMillis())
 
+    /** Server load by node id while the configuration is fresh. */
+    fun nodeLoad(): Map<String, Double> = RemoteConfigPolicy.currentNodeLoad(stored, System.currentTimeMillis())
+
+    /** Smart Auto: free servers whose protocol works on this network, docs/app-platform.md "Smart Auto". */
+    val smartAuto = SmartAuto(
+        context = context,
+        history = ProtocolHistoryStore(context, json),
+        nodeLoad = ::nodeLoad,
+        advice = ::protocolAdvice,
+        physicalNetwork = directNetwork,
+    )
+
+    /**
+     * Asks for the configuration again when its server load is older than a
+     * couple of minutes, waiting [waitMs] at most: a slow answer serves the next choice.
+     */
+    suspend fun refreshNodeLoad(waitMs: Long = NODE_LOAD_WAIT_MS) {
+        val age = System.currentTimeMillis() - (stored?.fetchedAtMs ?: 0L)
+        if (age < NODE_LOAD_MAX_AGE_MS) return
+        val refresh = scope.async { refreshConfig() }
+        withTimeoutOrNull(waitMs) { refresh.await() }
+    }
+
     fun xhttpMuxHosts(): Set<String> = stored?.config?.xhttpMuxHosts.orEmpty()
 
     /** True while the server is under maintenance or about to be: it is not chosen automatically. */
@@ -455,8 +481,8 @@ class AppPlatform(
     }
 
     /**
-     * The fastest answering server of the same kind outside maintenance;
-     * protocols that work on the user's operator first.
+     * The best server of the same kind outside maintenance: Smart Auto for
+     * regular servers, the fastest answering one for mobile servers.
      */
     private suspend fun fastestOfKind(
         current: TunnelServer,
@@ -470,12 +496,22 @@ class AppPlatform(
                 it.isMobileServer() == mobile && !underMaintenance(it, nowMs)
         }
         if (pool.isEmpty()) return null
+        val loadRefresh = scope.async { if (!mobile) refreshNodeLoad() }
         val measured = supervisorScope {
-            pool.map { server -> async(Dispatchers.IO) { server to runCatching { ServerPinger.measure(server) }.getOrNull() } }
+            pool.map { server -> async(Dispatchers.IO) { server.id to runCatching { ServerPinger.measure(server) }.getOrNull() } }
                 .awaitAll()
-        }.mapNotNull { (server, latency) -> latency?.let { server to it } }
-        if (measured.isEmpty()) return null
-        val advised = RemoteConfigPolicy.candidates(measured, protocolAdvice()) { it.first.telemetryProtocol().wire }
+        }.toMap()
+        loadRefresh.await()
+        if (!mobile) {
+            // Moving a working connection only to a server that may be up.
+            return smartAuto.rank(pool, measured).firstNotNullOfOrNull { ranked ->
+                pool.firstOrNull { it.id == ranked.id }
+                    ?.takeIf { measured[it.id] != null || !ServerPinger.silenceMeansDown(it) }
+            }
+        }
+        val answering = pool.mapNotNull { server -> measured[server.id]?.let { server to it } }
+        if (answering.isEmpty()) return null
+        val advised = RemoteConfigPolicy.candidates(answering, protocolAdvice()) { it.first.telemetryProtocol().wire }
         return advised.minByOrNull { it.second }?.first
     }
 
@@ -986,6 +1022,8 @@ class AppPlatform(
         const val APPROVAL_EXPIRY_SLACK_MS = 1_000L
         const val MAINTENANCE_NOTIFICATION_ID = 5300
         const val MAINTENANCE_CHECK_MS = 15_000L
+        const val NODE_LOAD_MAX_AGE_MS = 2 * 60_000L
+        const val NODE_LOAD_WAIT_MS = 2_500L
         const val MAX_REMEMBERED = 200
         const val MAX_EXCHANGES = 2
         const val DEFAULT_REFRESH_S = 15 * 60L

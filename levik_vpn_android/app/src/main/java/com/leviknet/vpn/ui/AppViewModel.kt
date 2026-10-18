@@ -77,7 +77,11 @@ import com.leviknet.vpn.core.platform.OpenAppTarget
 import com.leviknet.vpn.core.platform.RemoteCommand
 import com.leviknet.vpn.core.platform.RemoteSnapshot
 import com.leviknet.vpn.core.platform.RemoteConfigPolicy
+import com.leviknet.vpn.vpn.RankedServer
+import com.leviknet.vpn.vpn.SmartServerRanking
 import com.leviknet.vpn.vpn.isEligibleForAutomaticSelection
+import com.leviknet.vpn.vpn.isSmartAutoCandidate
+import com.leviknet.vpn.vpn.smartProtocol
 import com.leviknet.vpn.vpn.telemetryProtocol
 import com.leviknet.vpn.vpn.isAllowlistMobileServer
 import com.leviknet.vpn.vpn.isMobileServer
@@ -2130,28 +2134,15 @@ class AppViewModel(
     }
 
     private suspend fun selectBestServer(profile: PreparedTunnelProfile): String {
+        // Fresh server load arrives while the servers are measured.
+        val loadRefresh = viewModelScope.async { appPlatform?.refreshNodeLoad() }
         val measured = measureServers(profile.servers)
-        val eligibleServerIds = profile.servers
-            .filter(TunnelServer::isEligibleForAutomaticSelection)
-            .mapTo(mutableSetOf(), TunnelServer::id)
-        require(eligibleServerIds.isNotEmpty()) {
+        loadRefresh.await()
+        val preferredServerIds = automaticServerIds(profile)
+        require(preferredServerIds.isNotEmpty()) {
             "No server is eligible for automatic selection"
         }
-        val regularServerIds = profile.servers
-            .filter { it.id in eligibleServerIds && !it.isMobileServer() }
-            .mapTo(mutableSetOf(), TunnelServer::id)
-        val preferredServerIds = withoutMaintenance(profile, regularServerIds.ifEmpty { eligibleServerIds })
-        // Protocols that work on the user's operator first, unless none of them answers.
-        val advisedServerIds = RemoteConfigPolicy.candidates(
-            profile.servers.filter { it.id in preferredServerIds },
-            appPlatform?.protocolAdvice(),
-        ) { it.telemetryProtocol().wire }.mapTo(mutableSetOf(), TunnelServer::id)
-        val candidateServerIds = advisedServerIds.takeIf { ids -> ids.any { measured[it] != null } }
-            ?: preferredServerIds
-        val selected = measured.entries
-            .filter { it.key in candidateServerIds && it.value != null }
-            .minByOrNull { requireNotNull(it.value) }
-            ?.key
+        val selected = rankAutomatic(profile, preferredServerIds, measured).firstOrNull()?.id
             ?: repository.selectedServerId()
                 ?.takeIf(preferredServerIds::contains)
             ?: profile.servers.first { it.id in preferredServerIds }.id
@@ -2170,6 +2161,40 @@ class AppViewModel(
             )
         }
         return selected
+    }
+
+    /** Regular servers outside maintenance; mobile servers only when the profile has nothing else. */
+    private fun automaticServerIds(profile: PreparedTunnelProfile): Set<String> {
+        val eligibleServerIds = profile.servers
+            .filter(TunnelServer::isEligibleForAutomaticSelection)
+            .mapTo(mutableSetOf(), TunnelServer::id)
+        val regularServerIds = profile.servers
+            .filter { it.id in eligibleServerIds && it.isSmartAutoCandidate() }
+            .mapTo(mutableSetOf(), TunnelServer::id)
+        return withoutMaintenance(profile, regularServerIds.ifEmpty { eligibleServerIds })
+    }
+
+    /**
+     * Best first. Regular servers go through Smart Auto (load, this network's
+     * protocol history, operator advice); mobile servers by latency, the
+     * operator's working protocols first, as before.
+     */
+    private fun rankAutomatic(
+        profile: PreparedTunnelProfile,
+        serverIds: Set<String>,
+        measured: Map<String, Long?>,
+    ): List<RankedServer> {
+        val servers = profile.servers.filter { it.id in serverIds }
+        val smartAuto = appPlatform?.smartAuto
+        if (smartAuto != null && servers.all(TunnelServer::isSmartAutoCandidate)) {
+            return smartAuto.rank(servers, measured)
+        }
+        // Protocols that work on the user's operator first, unless none of them answers.
+        val advised = RemoteConfigPolicy.candidates(servers, appPlatform?.protocolAdvice()) { it.telemetryProtocol().wire }
+        val candidates = advised.takeIf { list -> list.any { measured[it.id] != null } } ?: servers
+        return candidates
+            .mapNotNull { server -> measured[server.id]?.let { RankedServer(server.id, server.smartProtocol(), it.toDouble()) } }
+            .sortedBy(RankedServer::score)
     }
 
     /** Servers going into maintenance are left out while others remain. */
@@ -2207,17 +2232,13 @@ class AppViewModel(
                     val profile = snapshot.profile
                     if (profile != null && !snapshot.refreshing) {
                         val measured = measureServers(profile.servers)
-                        val eligibleServerIds = profile.servers
-                            .filter(TunnelServer::isEligibleForAutomaticSelection)
-                            .mapTo(mutableSetOf(), TunnelServer::id)
-                        val regularServerIds = profile.servers
-                            .filter { it.id in eligibleServerIds && !it.isMobileServer() }
-                            .mapTo(mutableSetOf(), TunnelServer::id)
-                        val preferredServerIds = withoutMaintenance(profile, regularServerIds.ifEmpty { eligibleServerIds })
-                        val bestServerId = measured.entries
-                            .filter { it.key in preferredServerIds && it.value != null }
-                            .minByOrNull { requireNotNull(it.value) }
-                            ?.key
+                        // The same choice as on connect, so the next round does not undo it.
+                        val ranked = rankAutomatic(profile, automaticServerIds(profile), measured)
+                        val best = ranked.firstOrNull()
+                        val currentScore = ranked.firstOrNull { it.id == snapshot.selectedServerId }?.score
+                        val bestServerId = best?.id?.takeIf {
+                            SmartServerRanking.worthSwitching(currentScore, best.score)
+                        }
                         if (snapshot.automaticServer &&
                             bestServerId != null &&
                             snapshot.vpn.state in PINGABLE_STATES

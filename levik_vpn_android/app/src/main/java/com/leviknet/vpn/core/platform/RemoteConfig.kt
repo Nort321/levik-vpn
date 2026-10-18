@@ -52,6 +52,8 @@ data class RemoteConfig(
     val xhttpMuxHosts: Set<String> = emptySet(),
     /** Planned work on servers within the next day, by node id. */
     val maintenance: List<MaintenanceWindow> = emptyList(),
+    /** How busy each server is, 0 (idle) to 1 (full), by node id. */
+    val nodeLoad: Map<String, Double> = emptyMap(),
 )
 
 data class StoredRemoteConfig(
@@ -67,6 +69,11 @@ data class StoredRemoteConfig(
 object RemoteConfigPolicy {
     /** Advice describes the operator at the time; an old one may be about another network. */
     const val PROTOCOL_ADVICE_TTL_MS = 6 * 60 * 60 * 1_000L
+
+    /** Load changes by the minute; an older answer no longer tells free servers from busy ones. */
+    const val NODE_LOAD_TTL_MS = 10 * 60 * 1_000L
+    private const val MAX_NODE_LOAD = 200
+    private val NODE_ID = Regex("^n1[0-9a-f]{20}$")
     private const val MIN_REFRESH_S = 5 * 60L
     private const val MAX_REFRESH_S = 24 * 60 * 60L
     private const val DEFAULT_REFRESH_S = 15 * 60L
@@ -103,7 +110,24 @@ object RemoteConfigPolicy {
             refreshAfterSeconds = refresh,
             xhttpMuxHosts = parseHosts((root["transport"] as? JsonObject)?.get("xhttpMuxHosts")),
             maintenance = ServerMaintenance.parse(root["maintenance"]),
+            nodeLoad = parseNodeLoad(root["nodeLoad"]),
         )
+    }
+
+    private fun parseNodeLoad(value: JsonElement?): Map<String, Double> = (value as? JsonObject).orEmpty()
+        .asSequence()
+        .mapNotNull { (id, raw) ->
+            val load = (raw as? JsonPrimitive)?.takeUnless(JsonPrimitive::isString)?.doubleOrNull
+                ?.takeIf { it.isFinite() && it in 0.0..1.0 }
+            if (NODE_ID.matches(id) && load != null) id to load else null
+        }
+        .take(MAX_NODE_LOAD)
+        .toMap()
+
+    /** Server load while the answer is fresh; empty otherwise. */
+    fun currentNodeLoad(stored: StoredRemoteConfig?, nowMs: Long): Map<String, Double> {
+        val current = stored ?: return emptyMap()
+        return if (nowMs - current.fetchedAtMs < NODE_LOAD_TTL_MS) current.config.nodeLoad else emptyMap()
     }
 
     private fun parseHosts(value: JsonElement?): Set<String> = (value as? JsonArray).orEmpty()

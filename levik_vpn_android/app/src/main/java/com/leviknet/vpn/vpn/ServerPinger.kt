@@ -37,6 +37,13 @@ object ServerPinger {
     fun measure(server: TunnelServer): Long? =
         if (server.engine == TunnelEngineKind.XRAY || server.engine == TunnelEngineKind.LEVIK_TUIC) measure(server.outbound) else null
 
+    /** A TCP server that does not answer is down; a UDP one may only ignore probes. */
+    fun silenceMeansDown(server: TunnelServer): Boolean {
+        if (server.engine != TunnelEngineKind.XRAY) return false
+        val protocol = (server.outbound["protocol"] as? JsonPrimitive)?.contentOrNull?.lowercase()
+        return protocol !in UNANSWERED_PROTOCOLS
+    }
+
     fun measure(outbound: JsonObject): Long? {
         val endpoint = extractEndpoint(outbound) ?: return null
         val protocol = (outbound["protocol"] as? JsonPrimitive)?.contentOrNull?.lowercase()
@@ -143,4 +150,5 @@ object ServerPinger {
     )
 
     private const val MAX_ENDPOINT_DEPTH = 6
+    private val UNANSWERED_PROTOCOLS = setOf("hysteria", "hysteria2", "tuic", "wireguard")
 }

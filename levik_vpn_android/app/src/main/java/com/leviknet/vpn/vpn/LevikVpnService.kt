@@ -132,6 +132,9 @@ class LevikVpnService : VpnService() {
     private var pauseJob: Job? = null
     private var mobileAutomationJob: Job? = null
     private var mobileNetworkEvaluationJob: Job? = null
+    private var trafficCheckJob: Job? = null
+    /** Smart Auto's protocol ladder since the user connected; a new network starts it over. */
+    private val smartLadder = SmartLadder()
     private var automaticRollbackServerId: String? = null
     private var automaticTargetServerId: String? = null
     @Volatile
@@ -228,6 +231,7 @@ class LevikVpnService : VpnService() {
                 automaticTargetServerId = null
                 pendingAutoFallback = null
                 tunnelHealthPolicy.reset()
+                smartLadder.reset()
                 pauseJob?.cancel()
                 pauseJob = null
                 connectionJob?.cancel()
@@ -262,6 +266,7 @@ class LevikVpnService : VpnService() {
                     automaticTargetServerId = null
                     pendingAutoFallback = null
                     tunnelHealthPolicy.reset()
+                    smartLadder.reset()
                     container.secureStore.put(SecureFileStore.SELECTED_SERVER, newServerId.encodeToByteArray())
                 }
                 connectionJob?.cancel()
@@ -295,6 +300,7 @@ class LevikVpnService : VpnService() {
                     showForeground(VpnConnectionState.CONNECTING, null)
                     return START_STICKY
                 }
+                smartLadder.reset()
                 if (wasPaused && telemetry.active) {
                     telemetry.record { it.unpause() }
                     nextAttemptCause = AttemptCause.RESUME
@@ -701,6 +707,7 @@ class LevikVpnService : VpnService() {
                 networkMonitor.start()
                 startStats()
                 startAutoHealing()
+                startTrafficCheck(selected, network)
                 startMobileServerAutomation()
                 startRelayEntitlementWatchdog(selected, prepared)
                 connectionExpiryDeadline?.let(::scheduleProfileExpiry)
@@ -863,6 +870,8 @@ class LevikVpnService : VpnService() {
         mobileAutomationJob = null
         mobileNetworkEvaluationJob?.cancel()
         mobileNetworkEvaluationJob = null
+        trafficCheckJob?.cancel()
+        trafficCheckJob = null
         networkMonitor.stop(releaseCellular = false)
         stopCoreAndTun()
         runCatching { container.trafficHistoryStore.flush() }
@@ -1209,6 +1218,7 @@ class LevikVpnService : VpnService() {
                 currentBootstrapDnsServer = replacementDns
                 underlyingNetwork.set(replacement)
                 tunnelHealthPolicy.onUnderlyingNetworkChanged(SystemClock.elapsedRealtime())
+                smartLadder.reset()
                 if (replacement != null) {
                     AppLogger.i(LOG_TAG, "Underlying network changed, triggering reconnect")
                     telemetry.record { it.network(networkType(replacement), NetworkState.CHANGED) }
@@ -1926,6 +1936,90 @@ class LevikVpnService : VpnService() {
         }
     }
 
+    /**
+     * Smart Auto, docs/app-platform.md "Smart Auto": a new automatic connection
+     * on a regular server must carry real traffic. If it does not while the
+     * phone's own network works, the protocol is noted as failing on this
+     * network and the next rung of the ladder is tried.
+     */
+    private fun startTrafficCheck(server: TunnelServer, network: Network) {
+        trafficCheckJob?.cancel()
+        trafficCheckJob = null
+        if (!container.settings.automaticServer.value || !server.isSmartAutoCandidate()) return
+        // Anti-Block sends unlisted sites around the tunnel: the check would pass without it.
+        if (container.settings.routingPreset.value == RoutingPreset.BLOCKED_ONLY) return
+        val smartAuto = container.appPlatform.smartAuto
+        trafficCheckJob = serviceScope.launch {
+            delay(TRAFFIC_CHECK_DELAY_MS)
+            val vpnNetwork = vpnNetwork() ?: return@launch
+            val passed = smartAuto.checkTraffic(vpnNetwork)
+            if (!coreRunning || currentServer?.id != server.id || currentNetwork != network) return@launch
+            if (passed) {
+                smartAuto.recordSuccess(server, network)
+                smartLadder.reset()
+                tunnelHealthPolicy.markCandidateHealthy(server.id)
+                AppLogger.i(LOG_TAG, "Smart Auto: traffic passes on ${server.smartProtocol()}")
+                return@launch
+            }
+            if (!smartAuto.physicalWorks(network)) {
+                AppLogger.w(LOG_TAG, "Smart Auto: traffic check failed while the network itself is offline; ignored")
+                return@launch
+            }
+            smartAuto.recordFailure(server, network)
+            tunnelHealthPolicy.markCandidateFailed(server.id, SystemClock.elapsedRealtime())
+            climbProtocolLadder(server, network)
+        }
+    }
+
+    private suspend fun climbProtocolLadder(failed: TunnelServer, network: Network) {
+        val smartAuto = container.appPlatform.smartAuto
+        smartLadder.tried(failed.id, failed.smartProtocol())
+        if (smartLadder.exhausted()) {
+            AppLogger.w(LOG_TAG, "Smart Auto: no rung of the protocol ladder carried traffic; staying")
+            return
+        }
+        val profile = runCatching { readPreparedProfile() }.getOrNull() ?: return
+        val nowMs = SystemClock.elapsedRealtime()
+        val pool = profile.servers.filter { server ->
+            server.id != failed.id &&
+                server.isSmartAutoCandidate() &&
+                !container.appPlatform.underMaintenance(server) &&
+                tunnelHealthPolicy.isCandidateEligible(server.id, nowMs)
+        }
+        if (pool.isEmpty()) return
+        val ranked = smartAuto.rank(pool, measureLatencies(pool), network)
+        val next = SmartServerRanking.nextRung(ranked, smartLadder.protocols(), smartLadder.ids()) ?: return
+        val accepted = connectionMutex.withLock {
+            coreRunning && currentServer?.id == failed.id && container.settings.automaticServer.value
+        }
+        if (!accepted) return
+        smartLadder.climbed()
+        pendingAutoFallback = null
+        container.secureStore.put(SecureFileStore.SELECTED_SERVER, next.id.encodeToByteArray())
+        AppLogger.i(LOG_TAG, "Smart Auto: ${failed.smartProtocol()} carries no traffic here; trying ${next.protocol}")
+        telemetry.record { it.recovery(RecoveryAction.FAILOVER) }
+        nextAttemptCause = AttemptCause.FAILOVER
+        connectionJob?.cancel()
+        connectionJob = serviceScope.launch {
+            stopConnection(stopService = false)
+            connect()
+        }
+    }
+
+    private suspend fun measureLatencies(servers: List<TunnelServer>): Map<String, Long?> = supervisorScope {
+        servers.map { server ->
+            async(Dispatchers.IO) { server.id to runCatching { ServerPinger.measure(server) }.getOrNull() }
+        }.awaitAll().toMap()
+    }
+
+    @Suppress("DEPRECATION") // Snapshot all visible networks, as checkConnectivity does.
+    private fun vpnNetwork(): Network? {
+        val manager = getSystemService(ConnectivityManager::class.java) ?: return null
+        return manager.allNetworks.firstOrNull { network ->
+            manager.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+        }
+    }
+
     private suspend fun tryAutoFallback(nowMs: Long): Boolean {
         if (!container.settings.autoFallbackServer.value) return false
         if (currentServer?.isMobileServer() == true) return false
@@ -1945,16 +2039,13 @@ class LevikVpnService : VpnService() {
         if (candidates.isEmpty()) return false
 
         AppLogger.i(LOG_TAG, "Current server seems stalled, testing ${candidates.size} fallback servers")
-        val alive = supervisorScope {
-            candidates.map { server ->
-                async(Dispatchers.IO) {
-                    server to runCatching { ServerPinger.measure(server) }.getOrNull()
-                }
-            }.awaitAll().mapNotNull { (server, latencyMs) ->
-                latencyMs?.let { server to it }
+        val measured = measureLatencies(candidates)
+        // Smart Auto's order (load, this network's protocol history), among servers that may be up.
+        val targetServer = container.appPlatform.smartAuto.rank(candidates, measured, currentNetwork)
+            .firstNotNullOfOrNull { ranked ->
+                candidates.firstOrNull { it.id == ranked.id }
+                    ?.takeIf { measured[it.id] != null || !ServerPinger.silenceMeansDown(it) }
             }
-        }
-        val targetServer = alive.minByOrNull { it.second }?.first
         if (targetServer == null) {
             AppLogger.w(LOG_TAG, "No fallback server passed the underlying-network reachability check")
             return false
@@ -2036,6 +2127,8 @@ class LevikVpnService : VpnService() {
         yandexRefreshJob = null
         relayEntitlementWatchdogJob?.cancel()
         relayEntitlementWatchdogJob = null
+        trafficCheckJob?.cancel()
+        trafficCheckJob = null
         lockdownActive = false
         networkMonitor.stop(releaseCellular = false)
         val serverNameBeforePause = currentServerName
@@ -2485,6 +2578,7 @@ class LevikVpnService : VpnService() {
         private const val MOBILE_AUTOMATION_INITIAL_DELAY_MS = 8_000L
         private const val MOBILE_AUTOMATION_INTERVAL_MS = 30_000L
         private const val AUTOMATIC_SWITCH_ROLLBACK_DELAY_MS = 1_000L
+        private const val TRAFFIC_CHECK_DELAY_MS = 1_500L
         private const val STATS_INTERVAL_MS = 1_000L
         private const val AUTO_HEALING_FAILURE_ROUNDS = 3
         private const val AUTO_HEALING_NETWORK_GRACE_MS = 20_000L
