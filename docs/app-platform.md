@@ -132,6 +132,15 @@ the app reconnects straight to that server and checks it again, and a failed
 check clears it. The server list shows each server's load: free below 0.4,
 busy below 0.75, crowded above.
 
+The Windows, macOS and Linux apps use the same score, history, ladder, freeze
+check and load labels (`src/main/vpn/smartAuto.ts`), with these differences:
+a network is named by a salted hash of its adapters' subnets and the IPv6
+prefix the provider assigned; the download goes through the core's local
+health proxy; a failed download counts against the protocol only when a TLS
+handshake through the tunnel still works, since without one the tunnel is
+simply down; TUIC stays a manual choice; the notice appears in the status
+line; and the network's last winner only counts through the history.
+
 ## Synced settings
 
 `GET` and `PUT /api/mobile/v1/settings`, authenticated with the app session
