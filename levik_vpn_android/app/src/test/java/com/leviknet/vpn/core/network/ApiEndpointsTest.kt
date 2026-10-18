@@ -7,6 +7,7 @@ import java.security.cert.Certificate
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import javax.net.ssl.HttpsURLConnection
@@ -25,7 +26,7 @@ class ApiEndpointsTest {
     fun `allow-list fallback wins while public host is blocked and cancels its socket`() {
         val blockedStarted = CountDownLatch(1)
         lateinit var blocked: FakeConnection
-        val endpoints = ApiEndpoints(DEFAULT_API_ORIGIN, openHealthConnection = { url ->
+        val endpoints = ApiEndpoints(DEFAULT_API_ORIGIN, probeBudgetNanos = TimeUnit.MILLISECONDS.toNanos(500), openHealthConnection = { url ->
             when (url.host) {
                 "api.cloudnote-sync.xyz" -> FakeConnection(url) {
                     blockedStarted.countDown()
@@ -46,6 +47,52 @@ class ApiEndpointsTest {
         assertEquals("/api/health", blocked.url.path)
         assertFalse(blocked.instanceFollowRedirects)
         assertEquals(mapOf("Accept" to listOf("application/json")), blocked.requestProperties)
+    }
+
+    @Test(timeout = 5_000)
+    fun `prefers a healthy ordinary origin over an earlier healthy allow-list fallback`() {
+        val primaryStarted = CountDownLatch(1)
+        val fallbackStarted = CountDownLatch(1)
+        val releasePrimary = CountDownLatch(1)
+        val endpoints = ApiEndpoints(
+            DEFAULT_API_ORIGIN,
+            probeBudgetNanos = TimeUnit.SECONDS.toNanos(3),
+            openHealthConnection = { url ->
+                when (url.host) {
+                    "api.cloudnote-sync.xyz" -> FakeConnection(url) {
+                        primaryStarted.countDown()
+                        assertTrue(releasePrimary.await(3, TimeUnit.SECONDS))
+                        200
+                    }
+                    "leva.levikfartik.ru" -> FakeConnection(url) {
+                        fallbackStarted.countDown()
+                        200
+                    }
+                    else -> FakeConnection(url, status = { 503 })
+                }
+            },
+        )
+        val caller = Executors.newSingleThreadExecutor()
+        try {
+            val result = caller.submit<URL> { endpoints.resolve() }
+            assertTrue(primaryStarted.await(1, TimeUnit.SECONDS))
+            assertTrue(fallbackStarted.await(1, TimeUnit.SECONDS))
+            assertThrows(TimeoutException::class.java) { result.get(250, TimeUnit.MILLISECONDS) }
+            releasePrimary.countDown()
+            assertEquals(DEFAULT_API_ORIGIN, result.get(1, TimeUnit.SECONDS).toString())
+        } finally {
+            releasePrimary.countDown()
+            caller.shutdownNow()
+        }
+    }
+
+    @Test(timeout = 5_000)
+    fun `returns a healthy allow-list fallback as soon as ordinary probes have failed`() {
+        val endpoints = ApiEndpoints(DEFAULT_API_ORIGIN, openHealthConnection = { url ->
+            FakeConnection(url, status = { if (url.host == "leva.levikfartik.ru") 200 else 503 })
+        })
+
+        assertEquals(ServiceEndpoints.ALLOWLIST_API_ORIGIN, endpoints.resolve().toString())
     }
 
     @Test

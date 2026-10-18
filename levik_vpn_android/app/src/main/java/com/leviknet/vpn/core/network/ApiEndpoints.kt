@@ -23,6 +23,7 @@ internal class ApiEndpoints(
         it.openConnection() as HttpsURLConnection
     },
     private val nanoTime: () -> Long = System::nanoTime,
+    private val probeBudgetNanos: Long = PROBE_BUDGET_NANOS,
 ) {
     /** Null in production: the hosts come from the signed endpoints document. */
     private val fixed: URL?
@@ -30,6 +31,7 @@ internal class ApiEndpoints(
     private var verifiedUntilNanos = 0L
 
     init {
+        require(probeBudgetNanos > 0L) { "API health probe budget must be positive" }
         val origin = URL(baseUrl)
         require(origin.protocol == "https" && origin.host.isNotBlank() &&
             origin.userInfo == null && origin.query == null && origin.ref == null &&
@@ -70,7 +72,8 @@ internal class ApiEndpoints(
         val completion = ExecutorCompletionService<URL?>(executor)
         val connections = mutableListOf<HttpsURLConnection>()
         val futures = mutableListOf<Future<URL?>>()
-        val deadline = System.nanoTime() + PROBE_BUDGET_NANOS
+        val deadline = System.nanoTime() + probeBudgetNanos
+        var healthyFallback: URL? = null
         try {
             candidates.forEach { origin ->
                 val connection = try {
@@ -89,21 +92,26 @@ internal class ApiEndpoints(
                     }
                 })
             }
-            repeat(futures.size) {
+            for (index in futures.indices) {
                 val remaining = deadline - System.nanoTime()
-                if (remaining <= 0L) return null
-                val finished = completion.poll(remaining, TimeUnit.NANOSECONDS) ?: return null
+                if (remaining <= 0L) break
+                val finished = completion.poll(remaining, TimeUnit.NANOSECONDS) ?: break
                 val origin = try {
                     finished.get()
                 } catch (_: ExecutionException) {
                     null
                 }
                 if (origin != null) {
-                    selected = origin
-                    verifiedUntilNanos = nanoTime() + VERIFIED_ORIGIN_TTL_NANOS
-                    return origin
+                    if (origin.toString() == ServiceEndpoints.ALLOWLIST_API_ORIGIN) {
+                        // The allow-list ingress shares a forwarding IP. Prefer a reachable
+                        // ordinary origin so normal sign-ins keep their individual IP limits.
+                        healthyFallback = origin
+                    } else {
+                        return rememberVerified(origin)
+                    }
                 }
             }
+            return healthyFallback?.let(::rememberVerified)
         } catch (error: InterruptedException) {
             Thread.currentThread().interrupt()
             throw IOException("Levik API health check interrupted", error)
@@ -113,7 +121,12 @@ internal class ApiEndpoints(
             connections.forEach { connection -> runCatching { connection.disconnect() } }
             executor.shutdownNow()
         }
-        return null
+    }
+
+    private fun rememberVerified(origin: URL): URL {
+        selected = origin
+        verifiedUntilNanos = nanoTime() + VERIFIED_ORIGIN_TTL_NANOS
+        return origin
     }
 
     private fun healthy(connection: HttpsURLConnection): Boolean {
