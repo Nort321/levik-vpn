@@ -175,6 +175,7 @@ import com.leviknet.vpn.vpn.VpnConnectionState
 import com.leviknet.vpn.vpn.VpnFailure
 import com.leviknet.vpn.vpn.VpnSnapshot
 import com.leviknet.vpn.vpn.countryFlag
+import com.leviknet.vpn.vpn.SmartSwitchReason
 import com.leviknet.vpn.vpn.smartProtocolLabel
 import com.leviknet.vpn.vpn.effectiveCategory
 import com.leviknet.vpn.vpn.TunnelEngineKind
@@ -246,13 +247,22 @@ fun LevikVpnApp(viewModel: AppViewModel) {
     LaunchedEffect(smartSwitch) {
         if (smartSwitch != null) {
             viewModel.clearSmartSwitch()
-            snackbarHostState.showSnackbar(
-                resources.getString(
+            val servers = state.profile?.servers.orEmpty()
+            val from = servers.firstOrNull { it.id == smartSwitch.fromServerId }?.name
+                ?: smartProtocolLabel(smartSwitch.fromProtocol)
+            val to = servers.firstOrNull { it.id == smartSwitch.toServerId }?.name
+                ?: smartProtocolLabel(smartSwitch.toProtocol)
+            val notice = when (smartSwitch.reason) {
+                SmartSwitchReason.ALLOWLIST_ON -> resources.getString(R.string.smart_auto_allowlist_on, to)
+                SmartSwitchReason.ALLOWLIST_NEXT -> resources.getString(R.string.smart_auto_allowlist_next, from, to)
+                SmartSwitchReason.ALLOWLIST_OFF -> resources.getString(R.string.smart_auto_allowlist_off, to)
+                else -> resources.getString(
                     R.string.smart_auto_switched,
                     smartProtocolLabel(smartSwitch.fromProtocol),
                     smartProtocolLabel(smartSwitch.toProtocol),
-                ),
-            )
+                )
+            }
+            snackbarHostState.showSnackbar(notice)
         }
     }
 

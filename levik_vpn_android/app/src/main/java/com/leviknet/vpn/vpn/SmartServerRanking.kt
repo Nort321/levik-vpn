@@ -14,6 +14,8 @@ data class SmartCandidate(
     /** 0 (idle) to 1 (full); null when the website did not say. */
     val load: Double?,
     val verdict: ProtocolVerdict,
+    /** Below 1 favours the server, above 1 holds it back; relays are slower than mobile servers. */
+    val preference: Double = 1.0,
 )
 
 data class RankedServer(val id: String, val protocol: String, val score: Double)
@@ -66,7 +68,7 @@ object SmartServerRanking {
             candidate.protocol in advice.preferred -> 0.85
             else -> 1.0
         }
-        return latency * loadFactor * history * operator
+        return latency * loadFactor * history * operator * candidate.preference
     }
 
     /**

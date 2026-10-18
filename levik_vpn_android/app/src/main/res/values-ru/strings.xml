@@ -610,6 +610,9 @@
     <string name="server_load_busy">Средняя нагрузка</string>
     <string name="server_load_full">Загружен</string>
     <string name="smart_auto_switched">%1$s не работает в этой сети. Переключились на %2$s</string>
+    <string name="smart_auto_allowlist_on">Включились белые списки. Переключились на %1$s</string>
+    <string name="smart_auto_allowlist_next">%1$s не работает при белых списках. Пробуем %2$s</string>
+    <string name="smart_auto_allowlist_off">Белые списки выключились. Вернулись на %1$s</string>
     <string name="direct_app_title">%1$s может не работать с VPN</string>
     <string name="direct_app_body">Пускать его напрямую? Без VPN будет работать только это приложение, остальные — как раньше. Изменить можно в разделе «Раздельное туннелирование».</string>
     <string name="direct_app_confirm">Пускать напрямую</string>

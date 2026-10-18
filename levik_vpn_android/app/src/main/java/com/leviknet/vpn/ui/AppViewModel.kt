@@ -466,7 +466,7 @@ class AppViewModel(
                         current.copy(
                             selectedServerId = switch.toServerId,
                             pingMs = current.serverPings[switch.toServerId],
-                            smartSwitch = switch.takeIf(SmartSwitch::protocolFailed) ?: current.smartSwitch,
+                            smartSwitch = switch.takeIf { it.reason.noticed } ?: current.smartSwitch,
                         )
                     }
                 }

@@ -50,6 +50,48 @@ class SmartAuto(
     /** The server that last carried traffic on this network; reconnecting there skips the search. */
     fun lastWinner(network: Network?): String? = networkKey(network)?.let(history.current()::winner)
 
+    /** The mobile server that last carried traffic under this network's allowlists. */
+    fun lastAllowlistWinner(network: Network?): String? =
+        networkKey(network, allowlist = true)?.let(history.current()::winner)
+
+    /**
+     * Mobile servers under allowlists, best first. An operator lets through
+     * some addresses and not others, so the record is about servers, not
+     * protocols, and kept apart from the same network without allowlists.
+     */
+    fun rankAllowlist(
+        servers: List<TunnelServer>,
+        latencies: Map<String, Long?>,
+        network: Network?,
+    ): List<RankedServer> {
+        val key = networkKey(network, allowlist = true)
+        val load = nodeLoad()
+        val snapshot = history.current()
+        val now = clock()
+        val candidates = servers.map { server ->
+            SmartCandidate(
+                id = server.id,
+                protocol = server.smartProtocol(),
+                latencyMs = latencies[server.id],
+                silenceMeansDown = ServerPinger.silenceMeansDown(server),
+                load = FavoriteNodes.nodeId(server)?.let(load::get),
+                verdict = snapshot.verdict(key, allowlistRecord(server), now),
+                preference = if (server.isAllowlistMobileServer()) RELAY_PREFERENCE else 1.0,
+            )
+        }
+        return SmartServerRanking.rank(candidates, advice = null)
+    }
+
+    fun recordAllowlistSuccess(server: TunnelServer, network: Network?) {
+        val key = networkKey(network, allowlist = true) ?: return
+        history.update { it.recordSuccess(key, allowlistRecord(server), clock(), serverId = server.id) }
+    }
+
+    fun recordAllowlistFailure(server: TunnelServer, network: Network?) {
+        val key = networkKey(network, allowlist = true) ?: return
+        history.update { it.recordFailure(key, allowlistRecord(server), server.id, clock(), failedServerId = server.id) }
+    }
+
     /** Best first. [latencies] come from [ServerPinger]; [network] is the physical network, by default the current one. */
     fun rank(
         servers: List<TunnelServer>,
@@ -90,10 +132,10 @@ class SmartAuto(
      * often let the handshake and small requests through and freeze the
      * connection after about 16 KB, so a ping or a status check says nothing.
      */
-    suspend fun checkTraffic(vpnNetwork: Network): Boolean {
+    suspend fun checkTraffic(vpnNetwork: Network, size: TrafficCheckSize = TrafficCheckSize.REGULAR): Boolean {
         repeat(TRAFFIC_CHECK_ROUNDS) { round ->
             if (round > 0) delay(TRAFFIC_CHECK_RETRY_MS)
-            if (anyAnswers(TRAFFIC_CHECK_URLS) { download(vpnNetwork, it) }) return true
+            if (anyAnswers(TRAFFIC_CHECK_URLS) { download(vpnNetwork, it, size) }) return true
         }
         return false
     }
@@ -106,7 +148,7 @@ class SmartAuto(
      * A salted hash naming the network without its name or addresses: the
      * operator code (MCC-MNC) on mobile data, the gateway and DNS servers otherwise.
      */
-    fun networkKey(network: Network?): String? {
+    fun networkKey(network: Network?, allowlist: Boolean = false): String? {
         val target = network ?: return null
         val manager = context.getSystemService(ConnectivityManager::class.java) ?: return null
         val capabilities = manager.getNetworkCapabilities(target) ?: return null
@@ -122,7 +164,8 @@ class SmartAuto(
             if (gateways.isEmpty() && dns.isEmpty()) return null
             "lan|${gateways.sorted().joinToString(",")}|${dns.sorted().joinToString(",")}|${link.domains.orEmpty()}"
         }
-        val digest = MessageDigest.getInstance("SHA-256").digest("levik-net-v1|$raw".toByteArray(Charsets.UTF_8))
+        val scope = if (allowlist) "allowlist|" else ""
+        val digest = MessageDigest.getInstance("SHA-256").digest("levik-net-v1|$scope$raw".toByteArray(Charsets.UTF_8))
         return digest.take(NETWORK_KEY_BYTES).joinToString("") { "%02x".format(it) }
     }
 
@@ -137,8 +180,8 @@ class SmartAuto(
         return result.await()
     }
 
-    private fun download(network: Network, url: String): Boolean {
-        val deadline = SystemClock.elapsedRealtime() + TRAFFIC_CHECK_DEADLINE_MS
+    private fun download(network: Network, url: String, size: TrafficCheckSize): Boolean {
+        val deadline = SystemClock.elapsedRealtime() + size.deadlineMs
         var connection: HttpURLConnection? = null
         return try {
             connection = (network.openConnection(URL(url)) as HttpURLConnection).apply {
@@ -154,14 +197,14 @@ class SmartAuto(
             connection.inputStream.use { input ->
                 val buffer = ByteArray(16 * 1024)
                 var total = 0
-                while (total < TRAFFIC_CHECK_BYTES) {
+                while (total < size.bytes) {
                     // A trickle that never reaches the size in time is a throttled tunnel.
                     if (SystemClock.elapsedRealtime() > deadline) return false
                     val count = input.read(buffer)
                     if (count < 0) break
                     total += count
                 }
-                total >= TRAFFIC_CHECK_BYTES
+                total >= size.bytes
             }
         } catch (_: Exception) {
             false
@@ -188,10 +231,9 @@ class SmartAuto(
     }
 
     private companion object {
-        const val TRAFFIC_CHECK_BYTES = 64 * 1024
         const val TRAFFIC_CHECK_ROUNDS = 2
         const val TRAFFIC_CHECK_RETRY_MS = 1_500L
-        const val TRAFFIC_CHECK_DEADLINE_MS = 8_000L
+        const val RELAY_PREFERENCE = 1.5
         const val CHECK_TIMEOUT_MS = 5_000
         const val NETWORK_KEY_BYTES = 8
         val TRAFFIC_CHECK_URLS = listOf(
@@ -207,17 +249,48 @@ class SmartAuto(
     }
 }
 
-/**
- * Smart Auto moved the connection to [toServerId]; protocols by their telemetry
- * names. [protocolFailed] when [fromProtocol] carried no traffic, which the app
- * tells the user; otherwise the network's last winner was simply closer at hand.
- */
+/** Smart Auto moved the connection from [fromServerId] to [toServerId]; protocols by their telemetry names. */
 data class SmartSwitch(
+    val fromServerId: String,
     val fromProtocol: String,
     val toServerId: String,
     val toProtocol: String,
-    val protocolFailed: Boolean,
+    val reason: SmartSwitchReason,
 )
+
+enum class SmartSwitchReason(
+    /** Whether the app tells the user; otherwise it only follows the new server. */
+    val noticed: Boolean,
+) {
+    /** The protocol carried no traffic on this network. */
+    PROTOCOL_FAILED(noticed = true),
+
+    /** Another server of the same protocol is tried. */
+    SERVER_FAILED(noticed = false),
+
+    /** The network's last winner was closer at hand. */
+    NETWORK_WINNER(noticed = false),
+
+    /** The operator turned allowlists on: a mobile server carries traffic then. */
+    ALLOWLIST_ON(noticed = true),
+
+    /** A mobile server carried nothing under allowlists; the next one is tried. */
+    ALLOWLIST_NEXT(noticed = true),
+
+    /** Allowlists are off: back to the server used before them. */
+    ALLOWLIST_OFF(noticed = true),
+}
+
+/** How much a traffic check downloads and how long it may take. */
+enum class TrafficCheckSize(val bytes: Int, val deadlineMs: Long) {
+    REGULAR(bytes = 64 * 1024, deadlineMs = 8_000L),
+
+    /** Relays under allowlists are slow by design; they only need to carry traffic at all. */
+    ALLOWLIST(bytes = 32 * 1024, deadlineMs = 12_000L),
+}
+
+/** Under allowlists the record is per server: the operator lets some addresses through. */
+private fun allowlistRecord(server: TunnelServer): String = "server:${server.id}"
 
 /** Servers and protocols tried since the user connected; a few rungs at most, so a bad network cannot loop. */
 internal class SmartLadder(private val maxClimbs: Int = MAX_CLIMBS) {

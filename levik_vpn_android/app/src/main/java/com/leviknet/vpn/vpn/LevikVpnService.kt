@@ -47,6 +47,7 @@ import com.leviknet.vpn.core.telemetry.telemetryNetworkType
 import com.leviknet.vpn.data.DnsProvider
 import com.leviknet.vpn.data.RoutingPreset
 import com.leviknet.vpn.data.SplitTunnelMode
+import com.leviknet.vpn.data.hasUsableYandexAuth
 import com.leviknet.vpn.data.isActiveAt
 import com.leviknet.vpn.data.isRelayAccessDenied
 import java.net.DatagramSocket
@@ -136,6 +137,13 @@ class LevikVpnService : VpnService() {
     /** Smart Auto's protocol ladder since the user connected; a new network starts it over. */
     private val smartLadder = SmartLadder()
     private val freezeDetector = TunnelFreezeDetector()
+    /** Mobile servers tried under allowlists since they came on; apart from the protocol ladder. */
+    private val allowlistLadder = SmartLadder(maxClimbs = ALLOWLIST_MAX_CLIMBS)
+    /** The user chose a regular server under allowlists: kept until the network changes. */
+    @Volatile
+    private var allowlistOverride = false
+    @Volatile
+    private var lastWhitelistMode = WhitelistMode.UNKNOWN
     private var automaticRollbackServerId: String? = null
     private var automaticTargetServerId: String? = null
     @Volatile
@@ -233,6 +241,8 @@ class LevikVpnService : VpnService() {
                 pendingAutoFallback = null
                 tunnelHealthPolicy.reset()
                 smartLadder.reset()
+                allowlistLadder.reset()
+                allowlistOverride = false
                 pauseJob?.cancel()
                 pauseJob = null
                 connectionJob?.cancel()
@@ -268,6 +278,12 @@ class LevikVpnService : VpnService() {
                     pendingAutoFallback = null
                     tunnelHealthPolicy.reset()
                     smartLadder.reset()
+                    allowlistLadder.reset()
+                    // A regular server picked by hand under allowlists is the user's to keep.
+                    allowlistOverride = !container.settings.automaticServer.value &&
+                        lastWhitelistMode == WhitelistMode.ACTIVE &&
+                        runCatching { readPreparedProfile() }.getOrNull()?.servers
+                            ?.firstOrNull { it.id == newServerId }?.isMobileServer() == false
                     container.secureStore.put(SecureFileStore.SELECTED_SERVER, newServerId.encodeToByteArray())
                 }
                 connectionJob?.cancel()
@@ -703,6 +719,8 @@ class LevikVpnService : VpnService() {
                 automaticRollbackServerId = null
                 automaticTargetServerId = null
             }
+            // Back on a regular server: the way back from allowlists is done.
+            if (!selected.isMobileServer()) container.secureStore.remove(SecureFileStore.ALLOWLIST_RETURN_SERVER)
             val published = lifecycleGate.withLock {
                 if (destroyed.get()) return@withLock false
                 networkMonitor.start()
@@ -775,6 +793,26 @@ class LevikVpnService : VpnService() {
                 telemetry.record { it.recovery(RecoveryAction.ROLLBACK) }
                 nextAttemptCause = AttemptCause.ROLLBACK
                 connectionJob = serviceScope.launch {
+                    delay(AUTOMATIC_SWITCH_ROLLBACK_DELAY_MS)
+                    connect()
+                }
+                return@connection
+            }
+            val failedAllowlistServer = attemptedServerId
+                ?.takeIf { fallbackAttempt == null && lastWhitelistMode == WhitelistMode.ACTIVE && allowlistSessionActive() }
+                ?.let { id -> runCatching { readPreparedProfile() }.getOrNull()?.servers?.firstOrNull { it.id == id } }
+                ?.takeIf(TunnelServer::isMobileServer)
+            if (failedAllowlistServer != null && !allowlistLadder.exhausted()) {
+                // Under allowlists the server left behind carries nothing: the next mobile server first.
+                VpnStateStore.update(coreOwner) {
+                    it.copy(state = VpnConnectionState.RECONNECTING, failure = null)
+                }
+                showForeground(VpnConnectionState.RECONNECTING, null)
+                val network = networkMonitor.activeNetwork()
+                connectionJob = serviceScope.launch {
+                    if (advanceAllowlist(failedAllowlistServer, network, requireRunning = false) == null) {
+                        rollBackAllowlistSwitch()
+                    }
                     delay(AUTOMATIC_SWITCH_ROLLBACK_DELAY_MS)
                     connect()
                 }
@@ -1046,20 +1084,21 @@ class LevikVpnService : VpnService() {
         if (violation != null) throw TunnelNetworkRequirementException(violation)
     }
 
+    /** Allowlists move both an automatic and a hand-picked server, docs/app-platform.md "Allowlists". */
     private fun startMobileServerAutomation() {
         mobileAutomationJob?.cancel()
-        if (!container.settings.automaticServer.value) return
         mobileAutomationJob = serviceScope.launch {
             delay(MOBILE_AUTOMATION_INITIAL_DELAY_MS)
-            while (coreRunning && container.settings.automaticServer.value) {
+            while (coreRunning) {
                 evaluateMobileServerPolicy(networkMonitor.activeNetwork())
-                delay(MOBILE_AUTOMATION_INTERVAL_MS)
+                // A switch waiting for its confirmation should not wait half a minute.
+                delay(if (mobileSwitchPolicy.hasPendingCandidate()) MOBILE_CONFIRM_INTERVAL_MS else MOBILE_AUTOMATION_INTERVAL_MS)
             }
         }
     }
 
     private fun scheduleMobilePolicyEvaluation(network: Network?) {
-        if (!coreRunning || !container.settings.automaticServer.value) return
+        if (!coreRunning) return
         mobileNetworkEvaluationJob?.cancel()
         mobileNetworkEvaluationJob = serviceScope.launch {
             delay(MOBILE_NETWORK_DEBOUNCE_MS)
@@ -1073,7 +1112,6 @@ class LevikVpnService : VpnService() {
             val server = connectionMutex.withLock {
                 currentServer?.takeIf { coreRunning && !lockdownActive }
             } ?: return@withLock
-            if (!container.settings.automaticServer.value) return@withLock
 
             val mode = try {
                 container.whitelistDetector.detect(network, forceRefresh = true)
@@ -1086,7 +1124,11 @@ class LevikVpnService : VpnService() {
                 snapshot.copy(whitelistMode = mode)
             }
             if (mode == WhitelistMode.UNKNOWN) return@withLock
+            lastWhitelistMode = mode
+            // Allowlists went off: the next time they come on, they move the user again.
+            if (mode == WhitelistMode.INACTIVE) allowlistOverride = false
 
+            val returnServerId = readSecureString(SecureFileStore.ALLOWLIST_RETURN_SERVER)
             val decision = mobileSwitchPolicy.evaluate(
                 automaticServer = container.settings.automaticServer.value,
                 currentServerIsMobile = server.isMobileServer(),
@@ -1094,24 +1136,32 @@ class LevikVpnService : VpnService() {
                 whitelistMode = mode,
                 networkIdentity = network.toString(),
                 nowMs = SystemClock.elapsedRealtime(),
+                returnPending = returnServerId != null,
+                userOverride = allowlistOverride,
             )
             if (decision == MobileServerSwitchDecision.NONE) return@withLock
             if (networkMonitor.activeNetwork() != network) return@withLock
 
             val profile = runCatching { readPreparedProfile() }.getOrNull() ?: return@withLock
-            val target = automaticSwitchTarget(profile, server, decision) ?: return@withLock
+            val target = when (decision) {
+                MobileServerSwitchDecision.TO_MOBILE -> {
+                    allowlistLadder.reset()
+                    allowlistTarget(profile, server, network)
+                }
+                MobileServerSwitchDecision.TO_REGULAR -> returnTarget(profile, returnServerId, network)
+                MobileServerSwitchDecision.NONE -> null
+            } ?: return@withLock
             val accepted = connectionMutex.withLock {
-                coreRunning &&
-                    currentServer?.id == server.id &&
-                    container.settings.automaticServer.value
+                coreRunning && currentServer?.id == server.id
             }
             if (!accepted) return@withLock
 
-            if (!server.isMobileServer()) {
-                container.secureStore.put(
-                    SecureFileStore.LAST_REGULAR_SERVER,
-                    server.id.encodeToByteArray(),
-                )
+            if (server.isMobileServer()) {
+                allowlistLadder.reset()
+            } else {
+                container.secureStore.put(SecureFileStore.LAST_REGULAR_SERVER, server.id.encodeToByteArray())
+                // Where the user returns when allowlists end, whether Auto chose it or they did.
+                container.secureStore.put(SecureFileStore.ALLOWLIST_RETURN_SERVER, server.id.encodeToByteArray())
             }
             container.secureStore.put(
                 SecureFileStore.SELECTED_SERVER,
@@ -1119,6 +1169,14 @@ class LevikVpnService : VpnService() {
             )
             automaticRollbackServerId = server.id
             automaticTargetServerId = target.id
+            val reason = if (decision == MobileServerSwitchDecision.TO_MOBILE) {
+                SmartSwitchReason.ALLOWLIST_ON
+            } else {
+                SmartSwitchReason.ALLOWLIST_OFF
+            }
+            container.appPlatform.smartAuto.reportSwitch(
+                SmartSwitch(server.id, server.smartProtocol(), target.id, target.smartProtocol(), reason),
+            )
             AppLogger.i(
                 LOG_TAG,
                 "Carrier policy changed; automatically switching server class",
@@ -1131,31 +1189,101 @@ class LevikVpnService : VpnService() {
             }
         }
 
-    private fun automaticSwitchTarget(
+    /** Whether the app itself moved this connection for allowlists, or Auto may. */
+    private fun allowlistSessionActive(): Boolean =
+        container.settings.automaticServer.value ||
+            readSecureString(SecureFileStore.ALLOWLIST_RETURN_SERVER) != null
+
+    /**
+     * The mobile server to try under allowlists: the one that last carried
+     * traffic on this network, else Smart Auto's best among those not tried yet.
+     */
+    private suspend fun allowlistTarget(
         profile: PreparedTunnelProfile,
         current: TunnelServer,
-        decision: MobileServerSwitchDecision,
-    ): TunnelServer? = when (decision) {
-        MobileServerSwitchDecision.NONE -> null
-        MobileServerSwitchDecision.TO_MOBILE -> profile.servers
-            .asSequence()
-            .filter(TunnelServer::isMobileServer)
-            .sortedBy { server ->
-                when (server.effectiveCategory()) {
-                    TunnelServerCategory.MOBILE -> 0
-                    TunnelServerCategory.MOBILE_ALLOWLIST -> 1
-                    TunnelServerCategory.REGULAR -> 2
-                }
-            }
-            .firstOrNull { it.id != current.id }
-        MobileServerSwitchDecision.TO_REGULAR -> {
-            val regular = profile.servers.filter { server ->
-                server.isEligibleForAutomaticSelection() && !server.isMobileServer()
-            }
-            readSecureString(SecureFileStore.LAST_REGULAR_SERVER)
-                ?.let { saved -> regular.firstOrNull { it.id == saved } }
-                ?: regular.firstOrNull()
+        network: Network?,
+    ): TunnelServer? {
+        val nowMs = SystemClock.elapsedRealtime()
+        val tried = allowlistLadder.ids()
+        val pool = profile.servers.filter { server ->
+            server.id != current.id && server.id !in tried && isAllowlistCandidate(server, nowMs)
         }
+        if (pool.isEmpty()) return null
+        val smartAuto = container.appPlatform.smartAuto
+        smartAuto.lastAllowlistWinner(network)?.let { winnerId ->
+            pool.firstOrNull { it.id == winnerId }?.let { return it }
+        }
+        val ranked = smartAuto.rankAllowlist(pool, measureLatencies(pool), network)
+        return ranked.firstNotNullOfOrNull { item -> pool.firstOrNull { it.id == item.id } }
+    }
+
+    private fun isAllowlistCandidate(server: TunnelServer, nowMs: Long): Boolean =
+        server.isMobileServer() &&
+            !server.isHomeRoadServer() &&
+            !container.appPlatform.underMaintenance(server) &&
+            tunnelHealthPolicy.isCandidateEligible(server.id, nowMs) &&
+            // Yandex needs the user's own sign-in; without it the server cannot start.
+            (server.engine != TunnelEngineKind.LEVIK_YANDEX || server.hasUsableYandexAuth())
+
+    /**
+     * Where to go when allowlists end: the server used before them unless it
+     * is gone or under maintenance, else Smart Auto's best regular server.
+     */
+    private suspend fun returnTarget(
+        profile: PreparedTunnelProfile,
+        returnServerId: String?,
+        network: Network?,
+    ): TunnelServer? {
+        val saved = (returnServerId ?: readSecureString(SecureFileStore.LAST_REGULAR_SERVER))
+            ?.let { id -> profile.servers.firstOrNull { it.id == id } }
+            ?.takeIf { !it.isMobileServer() && !container.appPlatform.underMaintenance(it) }
+        if (saved != null) return saved
+        val pool = profile.servers.filter { it.isSmartAutoCandidate() && !container.appPlatform.underMaintenance(it) }
+        if (pool.isEmpty()) return null
+        val measured = measureLatencies(pool)
+        return container.appPlatform.smartAuto.rank(pool, measured, network).firstNotNullOfOrNull { item ->
+            pool.firstOrNull { it.id == item.id }
+                ?.takeIf { measured[it.id] != null || !ServerPinger.silenceMeansDown(it) }
+        }
+    }
+
+    /** The next mobile server after [failed] carried nothing under allowlists; null when none is left. */
+    private suspend fun advanceAllowlist(failed: TunnelServer, network: Network?, requireRunning: Boolean): TunnelServer? {
+        allowlistLadder.tried(failed.id, failed.smartProtocol())
+        if (allowlistLadder.exhausted()) {
+            AppLogger.w(LOG_TAG, "Allowlists: no mobile server carried traffic; giving up for now")
+            return null
+        }
+        val profile = runCatching { readPreparedProfile() }.getOrNull() ?: return null
+        val target = allowlistTarget(profile, failed, network) ?: run {
+            AppLogger.w(LOG_TAG, "Allowlists: no other mobile server to try")
+            return null
+        }
+        val accepted = !requireRunning || connectionMutex.withLock {
+            coreRunning && currentServer?.id == failed.id
+        }
+        if (!accepted) return null
+        allowlistLadder.climbed()
+        pendingAutoFallback = null
+        container.secureStore.put(SecureFileStore.SELECTED_SERVER, target.id.encodeToByteArray())
+        automaticTargetServerId = target.id
+        container.appPlatform.smartAuto.reportSwitch(
+            SmartSwitch(failed.id, failed.smartProtocol(), target.id, target.smartProtocol(), SmartSwitchReason.ALLOWLIST_NEXT),
+        )
+        AppLogger.i(LOG_TAG, "Allowlists: ${failed.smartProtocol()} server carries nothing; trying ${target.smartProtocol()}")
+        telemetry.record { it.recovery(RecoveryAction.FAILOVER) }
+        nextAttemptCause = AttemptCause.FAILOVER
+        return target
+    }
+
+    /** Every mobile server failed to start: back to the server used before allowlists. */
+    private fun rollBackAllowlistSwitch() {
+        val rollbackServerId = automaticRollbackServerId ?: return
+        automaticRollbackServerId = null
+        automaticTargetServerId = null
+        container.secureStore.put(SecureFileStore.SELECTED_SERVER, rollbackServerId.encodeToByteArray())
+        telemetry.record { it.recovery(RecoveryAction.ROLLBACK) }
+        nextAttemptCause = AttemptCause.ROLLBACK
     }
 
     private fun readSecureString(key: String): String? {
@@ -1220,6 +1348,9 @@ class LevikVpnService : VpnService() {
                 underlyingNetwork.set(replacement)
                 tunnelHealthPolicy.onUnderlyingNetworkChanged(SystemClock.elapsedRealtime())
                 smartLadder.reset()
+                allowlistLadder.reset()
+                allowlistOverride = false
+                lastWhitelistMode = WhitelistMode.UNKNOWN
                 if (replacement != null) {
                     AppLogger.i(LOG_TAG, "Underlying network changed, triggering reconnect")
                     telemetry.record { it.network(networkType(replacement), NetworkState.CHANGED) }
@@ -1253,7 +1384,9 @@ class LevikVpnService : VpnService() {
             ?: return false
         pendingAutoFallback = null
         container.secureStore.put(SecureFileStore.SELECTED_SERVER, winner.id.encodeToByteArray())
-        smartAuto.reportSwitch(SmartSwitch(current.smartProtocol(), winner.id, winner.smartProtocol(), protocolFailed = false))
+        smartAuto.reportSwitch(
+            SmartSwitch(current.id, current.smartProtocol(), winner.id, winner.smartProtocol(), SmartSwitchReason.NETWORK_WINNER),
+        )
         AppLogger.i(LOG_TAG, "Smart Auto: ${winner.smartProtocol()} carried traffic on this network last time; reconnecting there")
         nextAttemptCause = AttemptCause.NETWORK_CHANGE
         reconnectJob?.cancel()
@@ -1989,15 +2122,21 @@ class LevikVpnService : VpnService() {
     }
 
     private fun launchTrafficCheck(server: TunnelServer, network: Network, initialDelayMs: Long) {
-        if (!container.settings.automaticServer.value || !server.isSmartAutoCandidate()) return
+        val allowlist = server.isMobileServer() && allowlistSessionActive()
+        if (!allowlist && (!container.settings.automaticServer.value || !server.isSmartAutoCandidate())) return
         // Anti-Block sends unlisted sites around the tunnel: the check would pass without it.
         if (container.settings.routingPreset.value == RoutingPreset.BLOCKED_ONLY) return
         val smartAuto = container.appPlatform.smartAuto
         trafficCheckJob = serviceScope.launch {
             delay(initialDelayMs)
             val vpnNetwork = vpnNetwork() ?: return@launch
-            val passed = smartAuto.checkTraffic(vpnNetwork)
+            val size = if (allowlist) TrafficCheckSize.ALLOWLIST else TrafficCheckSize.REGULAR
+            val passed = smartAuto.checkTraffic(vpnNetwork, size)
             if (!coreRunning || currentServer?.id != server.id || currentNetwork != network) return@launch
+            if (allowlist) {
+                onAllowlistTrafficChecked(server, network, passed)
+                return@launch
+            }
             if (passed) {
                 smartAuto.recordSuccess(server, network)
                 smartLadder.reset()
@@ -2012,6 +2151,37 @@ class LevikVpnService : VpnService() {
             smartAuto.recordFailure(server, network)
             tunnelHealthPolicy.markCandidateFailed(server.id, SystemClock.elapsedRealtime())
             climbProtocolLadder(server, network)
+        }
+    }
+
+    private suspend fun onAllowlistTrafficChecked(server: TunnelServer, network: Network, passed: Boolean) {
+        val smartAuto = container.appPlatform.smartAuto
+        if (passed) {
+            if (lastWhitelistMode == WhitelistMode.ACTIVE) smartAuto.recordAllowlistSuccess(server, network)
+            tunnelHealthPolicy.markCandidateHealthy(server.id)
+            AppLogger.i(LOG_TAG, "Allowlists: traffic passes on ${server.smartProtocol()}")
+            return
+        }
+        // Only with allowlists on does a failure say something about this server under them.
+        val mode = try {
+            container.whitelistDetector.detect(network, forceRefresh = true)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Throwable) {
+            WhitelistMode.UNKNOWN
+        }
+        if (mode != WhitelistMode.ACTIVE) {
+            AppLogger.w(LOG_TAG, "Allowlists: traffic check failed while allowlists are not on; ignored")
+            return
+        }
+        lastWhitelistMode = mode
+        smartAuto.recordAllowlistFailure(server, network)
+        tunnelHealthPolicy.markCandidateFailed(server.id, SystemClock.elapsedRealtime())
+        advanceAllowlist(server, network, requireRunning = true) ?: return
+        connectionJob?.cancel()
+        connectionJob = serviceScope.launch {
+            stopConnection(stopService = false)
+            connect()
         }
     }
 
@@ -2041,7 +2211,13 @@ class LevikVpnService : VpnService() {
         pendingAutoFallback = null
         container.secureStore.put(SecureFileStore.SELECTED_SERVER, next.id.encodeToByteArray())
         smartAuto.reportSwitch(
-            SmartSwitch(failed.smartProtocol(), next.id, next.protocol, protocolFailed = next.protocol != failed.smartProtocol()),
+            SmartSwitch(
+                failed.id,
+                failed.smartProtocol(),
+                next.id,
+                next.protocol,
+                if (next.protocol != failed.smartProtocol()) SmartSwitchReason.PROTOCOL_FAILED else SmartSwitchReason.SERVER_FAILED,
+            ),
         )
         AppLogger.i(LOG_TAG, "Smart Auto: ${failed.smartProtocol()} carries no traffic here; trying ${next.protocol}")
         telemetry.record { it.recovery(RecoveryAction.FAILOVER) }
@@ -2625,6 +2801,8 @@ class LevikVpnService : VpnService() {
         private const val MOBILE_NETWORK_DEBOUNCE_MS = 1_500L
         private const val MOBILE_AUTOMATION_INITIAL_DELAY_MS = 8_000L
         private const val MOBILE_AUTOMATION_INTERVAL_MS = 30_000L
+        private const val MOBILE_CONFIRM_INTERVAL_MS = 6_000L
+        private const val ALLOWLIST_MAX_CLIMBS = 4
         private const val AUTOMATIC_SWITCH_ROLLBACK_DELAY_MS = 1_000L
         private const val TRAFFIC_CHECK_DELAY_MS = 1_500L
         private const val STATS_INTERVAL_MS = 1_000L

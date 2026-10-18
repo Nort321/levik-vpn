@@ -112,4 +112,14 @@ class SmartServerRankingTest {
         assertFalse(SmartServerRanking.worthSwitching(100.0, 90.0))
         assertTrue(SmartServerRanking.worthSwitching(100.0, 70.0))
     }
+
+    @Test
+    fun `under allowlists a relay waits behind a mobile server unless that one failed here`() {
+        val mobile = candidate("lte", latencyMs = 60, load = null)
+        val relay = candidate("relay", protocol = "relay", latencyMs = null, silenceMeansDown = false, load = null)
+            .copy(preference = 1.5)
+        assertEquals(listOf("lte", "relay"), SmartServerRanking.rank(listOf(relay, mobile), null).map { it.id })
+        val failed = mobile.copy(verdict = ProtocolVerdict.SUSPECT, latencyMs = 400)
+        assertEquals(listOf("relay", "lte"), SmartServerRanking.rank(listOf(relay, failed), null).map { it.id })
+    }
 }

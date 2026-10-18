@@ -149,6 +149,8 @@ class SecureFileStore(context: Context) {
         const val YANDEX_TELEMOST = "yandex_telemost"
         const val SELECTED_SERVER = "selected_server"
         const val LAST_REGULAR_SERVER = "last_regular_server"
+        /** The regular server the app left when allowlists came on; the way back leads there. */
+        const val ALLOWLIST_RETURN_SERVER = "allowlist_return_server"
         const val APP_DATA_DISCLOSURE_CONSENT = "app_data_disclosure_consent"
         const val VPN_DISCLOSURE_CONSENT = "vpn_disclosure_consent"
 

@@ -132,6 +132,31 @@ the app reconnects straight to that server and checks it again, and a failed
 check clears it. The server list shows each server's load: free below 0.4,
 busy below 0.75, crowded above.
 
+#### Allowlists
+
+While connected on mobile data, the Android app probes the physical network
+every 30 seconds and on every network change (domestic sites answer, foreign
+ones do not). Two probes in a row, the second 6 seconds after the first, move
+the connection to a mobile server, whether the server was chosen in Auto mode
+or by hand. A regular server the user picks by hand while allowlists are on
+stays until the network changes or allowlists end.
+
+The mobile server is the one that last carried traffic under this network's
+allowlists, else the best by Smart Auto's score. Under allowlists the history
+is per server, not per protocol, and apart from the same network without
+allowlists: the operator lets some addresses through and not others. Relays
+count 1.5 times slower than mobile servers, and Yandex is left out without the
+user's sign-in. Each mobile server must download 32 KB within 12 seconds. If
+it fails to start or to carry traffic while allowlists are still on, the next
+one is tried, four moves at most. When every move fails, the app returns to
+the server used before and tries again after 90 seconds.
+
+When allowlists end (two probes, at least 90 seconds after the last move), the
+app returns to the server used before them unless it is gone or under
+maintenance; then it takes Smart Auto's best regular server. In Auto mode this
+applies to any mobile server. With a server chosen by hand it applies only
+after the app made the move itself. The user is told each time.
+
 The Windows, macOS and Linux apps use the same score, history, ladder, freeze
 check and load labels (`src/main/vpn/smartAuto.ts`), with these differences:
 a network is named by a salted hash of its adapters' subnets and the IPv6
