@@ -31,6 +31,7 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 
 internal fun interface RelayNativeSessionFactory {
@@ -41,7 +42,7 @@ internal fun interface RelayNativeSessionFactory {
 }
 
 internal fun interface RelayVkTurnProvider {
-    fun obtain(hash: String, network: Network): RelayTurnCredentials
+    fun obtain(hash: String, network: Network, deadlineElapsedMs: Long): RelayTurnCredentials
 }
 
 internal interface RelayNativeSession {
@@ -279,16 +280,17 @@ private class AndroidRelayNativeSession(
     override suspend fun prepare(): LocalProxyEndpoint = withContext(Dispatchers.IO) {
         try {
             startProcess()
-            val prepareDeadline = minOf(
-                deadlineAfter(PREPARE_TIMEOUT_MS),
-                credentialDeadline.deadlineElapsedMs,
+            val prepareTimeout = RelayPreparationTimeout(
+                nowMs = SystemClock.elapsedRealtime(),
+                credentialDeadlineMs = credentialDeadline.deadlineElapsedMs,
+                transportTimeoutMs = PREPARE_TIMEOUT_MS,
             )
             if (credentialDeadline.isExpired(SystemClock.elapsedRealtime())) {
                 engineFailure("relay_credential_expired")
             }
             val control = connectAbstract(
                 socketName = controlSocketName,
-                deadlineElapsedMs = minOf(prepareDeadline, deadlineAfter(CHANNEL_CONNECT_TIMEOUT_MS)),
+                deadlineElapsedMs = minOf(prepareTimeout.deadlineMs, deadlineAfter(CHANNEL_CONNECT_TIMEOUT_MS)),
                 timeoutCode = "relay_control_connect_timeout",
             )
             controlSocket = control
@@ -312,9 +314,16 @@ private class AndroidRelayNativeSession(
             var preparedProxy: LocalProxyEndpoint? = null
             while (preparedProxy == null) {
                 currentCoroutineContext().ensureActive()
-                when (val action = nextControlAction(prepareDeadline)) {
-                    RelayControlAction.ConnectProtectChannel -> startProtectChannel(prepareDeadline)
-                    is RelayControlAction.RequestVkAuth -> provideVkCredentials(action.request)
+                when (val action = nextControlAction(prepareTimeout.deadlineMs)) {
+                    RelayControlAction.ConnectProtectChannel -> startProtectChannel(prepareTimeout.deadlineMs)
+                    is RelayControlAction.RequestVkAuth -> {
+                        val authStartedAt = SystemClock.elapsedRealtime()
+                        try {
+                            runInterruptible { provideVkCredentials(action.request) }
+                        } finally {
+                            prepareTimeout.accountForAuthentication(authStartedAt, SystemClock.elapsedRealtime())
+                        }
+                    }
                     is RelayControlAction.PreparedProxy -> preparedProxy = LocalProxyEndpoint(
                         address = action.address,
                         port = action.port,
@@ -366,7 +375,7 @@ private class AndroidRelayNativeSession(
 
     override fun stop() {
         if (!stopping.compareAndSet(false, true)) return
-        if (authenticating.get()) RelayVkAuthCoordinator.cancel("Relay session stopped")
+        if (authenticating.get()) RelayVkAuthCoordinator.cancel()
         val sendStop = runCatching { stateMachine.beginStop() }.getOrDefault(false)
         if (sendStop) {
             runCatching { writeControl(codec.encodeStop()) }
@@ -526,6 +535,9 @@ private class AndroidRelayNativeSession(
                     if (action is RelayControlAction.RequestVkAuth) {
                         try {
                             provideVkCredentials(action.request)
+                        } catch (error: TunnelEngineFailureException) {
+                            recordBackgroundFailure(error.code)
+                            return@submit
                         } catch (_: Throwable) {
                             recordBackgroundFailure("relay_vk_auth_failed")
                             return@submit
@@ -618,7 +630,13 @@ private class AndroidRelayNativeSession(
             vkTurnProvider.obtain(
                 request.hash,
                 environment.network ?: engineFailure("relay_network_required"),
+                credentialDeadline.deadlineElapsedMs,
             )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: RelayVkAuthException) {
+            if (credentialDeadline.isExpired(SystemClock.elapsedRealtime())) engineFailure("relay_credential_expired")
+            engineFailure(error.stableCode)
         } catch (_: Throwable) {
             engineFailure("relay_vk_auth_failed")
         } finally {

@@ -2,11 +2,13 @@ package com.leviknet.vpn.vpn
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 
 class NetworkMonitor(
@@ -44,6 +46,24 @@ class NetworkMonitor(
                 handleAvailable(network)
             }
         }
+
+        override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
+            if (connectivityManager.getNetworkCapabilities(network).isUsableUnderlyingNetwork()) {
+                handleAvailable(network)
+            }
+        }
+    }
+
+    fun bootstrapDnsServer(network: Network): String? =
+        selectBootstrapDnsServer(connectivityManager.getLinkProperties(network)?.dnsServers.orEmpty())
+
+    suspend fun awaitBootstrapDnsServer(network: Network): String? {
+        // onAvailable can precede LinkProperties, especially for a requested cellular network.
+        repeat(BOOTSTRAP_DNS_RETRIES) {
+            bootstrapDnsServer(network)?.let { return it }
+            delay(BOOTSTRAP_DNS_RETRY_DELAY_MS)
+        }
+        return bootstrapDnsServer(network)
     }
 
     fun activeNetwork(
@@ -213,6 +233,8 @@ class NetworkMonitor(
 
     private companion object {
         const val CELLULAR_REQUEST_TIMEOUT_MS = 15_000
+        const val BOOTSTRAP_DNS_RETRIES = 5
+        const val BOOTSTRAP_DNS_RETRY_DELAY_MS = 200L
     }
 }
 

@@ -123,7 +123,8 @@ sealed interface TunnelEngineRequest {
 data class TunnelEngineEnvironment(
     val network: Network?,
     val protector: TunnelFileDescriptorProtector,
-    val dnsServer: String,
+    /** Protected bootstrap resolver on [network]; never the user-selected tunnel DNS. */
+    val dnsServer: String?,
     /** VPN exclusion without physical-network binding, used by Xray's local relay proxy. */
     val unboundSocketProtector: (Long) -> Boolean,
     /** Stable-code callback for an engine that fails after [TunnelEngineAdapter.start] returns. */

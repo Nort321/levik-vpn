@@ -388,6 +388,7 @@ class AppRepository(
             }
             val cachedRelay = cached
                 ?.takeIf { relayCapabilityEnabled && it.subscriptionId == subscriptionId }
+                ?.takeIf { hasUsableRelayCredential(it) }
             val freshRelay = if (relayCapabilityEnabled) {
                 try {
                     fetchPreparedTunnelProfile(
@@ -401,17 +402,17 @@ class AppRepository(
                 } catch (error: ApiException.Unauthorized) {
                     clearAuthentication(expectedToken = token)
                     throw error
-                } catch (_: Throwable) {
+                } catch (error: Throwable) {
                     AppLogger.w(
                         "AppRepository",
-                        "Relay profile refresh failed; retaining cached relay configuration",
+                        "Relay profile refresh failed",
                     )
-                    null
+                    cachedRelay?.takeIf { canUseCachedProfileAfter(error) }
                 }
             } else {
                 null
             }
-            val base = mergePreparedProfiles(xrayPrepared, freshRelay ?: cachedRelay)
+            val base = mergePreparedProfiles(xrayPrepared, freshRelay)
             sessionCacheMutex.withLock {
                 requireCurrentSession(token)
                 val cachedYandex = cached?.takeIf {
@@ -433,6 +434,87 @@ class AppRepository(
                 prepared
             }
         }
+
+    /** Refreshes the short-lived relay access without depending on a regular-server profile fetch. */
+    suspend fun prepareRelayConnection(
+        subscriptionId: String,
+        forceRefresh: Boolean = false,
+    ): PreparedTunnelProfile {
+        // A device-bound credential remains valid during a temporary account API outage.
+        // Known revocation still fails closed; the relay endpoint authorizes every renewal.
+        return profileMutex.withLock connection@{
+            require(subscriptionId.matches(UUID_OR_SAFE_ID)) { "Invalid subscription id" }
+            val token = requireToken()
+            if (TunnelEngineKind.LEVIK_RELAY !in supportedTunnelEngines) {
+                throw ApiException.Rejected("relay_not_available", retryable = false, status = 403)
+            }
+            val knownAccount = _account.value
+            val cached = sessionCacheMutex.withLock {
+                requireCurrentSession(token)
+                (_tunnelProfile.value ?: withContext(Dispatchers.IO) { cachedTunnelBlocking() })
+                    ?.takeIf { it.subscriptionId == subscriptionId }
+            }
+            if (!forceRefresh && cached != null &&
+                canReuseRelayCache(cached, knownAccount?.subscriptions, Instant.now()) &&
+                !relayProfileRefreshDue(cached, Instant.now())
+            ) {
+                return@connection cached
+            }
+            val expectedDeviceId = withContext(Dispatchers.IO) { deviceIdentity.deviceId() }
+            val relay = try {
+                fetchPreparedTunnelProfile(
+                    token = token,
+                    subscriptionId = subscriptionId,
+                    expectedDeviceId = expectedDeviceId,
+                    engine = RELAY_ENGINE_WIRE_NAME,
+                )
+            } catch (error: ApiException.Unauthorized) {
+                clearAuthentication(expectedToken = token)
+                throw error
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                if (cached != null && isRelayAccessDenied(error)) {
+                    sessionCacheMutex.withLock {
+                        requireCurrentSession(token)
+                        val revoked = withoutRelayServers(cached)
+                        persistPreparedTunnel(revoked)
+                        _tunnelProfile.value = revoked
+                    }
+                }
+                if (cached == null || !canUseCachedRelayProfileAfter(
+                        error, cached, Instant.now(), knownAccount?.subscriptions,
+                    )
+                ) throw error
+                return@connection sessionCacheMutex.withLock {
+                    requireCurrentSession(token)
+                    requireRelayEntitlement(subscriptionId)
+                    // Time spent retrying the API must not carry the cache past its hard expiry.
+                    if (!hasUsableRelayCredential(cached, Instant.now())) throw error
+                    cached
+                }
+            }
+            val prepared = replaceRelayProfile(cached, relay)
+            sessionCacheMutex.withLock {
+                requireCurrentSession(token)
+                // This successful authenticated endpoint supersedes an old account snapshot
+                // (for example after payment). A newer explicit denial still wins the race.
+                if (_account.value !== knownAccount) requireRelayEntitlement(subscriptionId)
+                persistPreparedTunnel(prepared)
+                _tunnelProfile.value = prepared
+            }
+            prepared
+        }
+    }
+
+    private fun requireRelayEntitlement(subscriptionId: String) {
+        if (TunnelEngineKind.LEVIK_RELAY !in supportedTunnelEngines) {
+            throw ApiException.Rejected("relay_not_available", retryable = false, status = 403)
+        }
+        relayEntitlementFailure(subscriptionId, _account.value?.subscriptions, Instant.now())?.let { code ->
+            throw ApiException.Rejected(code, retryable = false, status = 403)
+        }
+    }
 
     private suspend fun fetchPreparedTunnelProfile(
         token: String,
@@ -888,12 +970,89 @@ internal fun hasUsableRelayCredential(
     profile: PreparedTunnelProfile,
     now: Instant = Instant.now(),
 ): Boolean {
-    val expiresAt = profile.relayCredentialExpiresAt
-        ?: profile.servers.firstNotNullOfOrNull { it.relayConfig?.bootstrap?.expiresAt }
-        ?: return false
-    return runCatching { Instant.parse(expiresAt).isAfter(now) }.getOrDefault(false) &&
-        profile.servers.any { it.engine == TunnelEngineKind.LEVIK_RELAY }
+    profile.subscriptionExpiresAt?.let { expiry ->
+        if (!runCatching { Instant.parse(expiry).isAfter(now) }.getOrDefault(false)) return false
+    }
+    val expiries = relayCredentialExpiries(profile)
+    return expiries.isNotEmpty() && expiries.all { value ->
+        runCatching { Instant.parse(value).isAfter(now) }.getOrDefault(false)
+    }
 }
+
+internal fun relayProfileRefreshDue(
+    profile: PreparedTunnelProfile,
+    now: Instant,
+    refreshLeadSeconds: Long = 5 * 60L,
+): Boolean {
+    require(refreshLeadSeconds >= 0)
+    return !hasUsableRelayCredential(profile, now.plusSeconds(refreshLeadSeconds))
+}
+
+private fun relayCredentialExpiries(profile: PreparedTunnelProfile): List<String> {
+    val servers = profile.servers.filter { it.engine == TunnelEngineKind.LEVIK_RELAY }
+    if (servers.isEmpty()) return emptyList()
+    return listOfNotNull(profile.relayCredentialExpiresAt) + servers.map { server ->
+        server.relayConfig?.bootstrap?.expiresAt ?: return emptyList()
+    }
+}
+
+internal fun replaceRelayProfile(
+    cached: PreparedTunnelProfile?,
+    relay: PreparedTunnelProfile,
+    now: Instant = Instant.now(),
+): PreparedTunnelProfile {
+    require(hasUsableRelayCredential(relay, now)) { "Relay credential is expired or missing" }
+    if (cached == null) return relay
+    // A fresh, authenticated profile is authoritative for the same subscription's expiry.
+    // Keeping the old cache's earlier date would undo a paid renewal during relay refresh.
+    val merged = mergePreparedProfiles(cached.copy(subscriptionExpiresAt = relay.subscriptionExpiresAt), relay)
+    return merged.copy(
+        servers = cached.servers.filter { it.engine != TunnelEngineKind.LEVIK_RELAY } +
+            relay.servers.filter { it.engine == TunnelEngineKind.LEVIK_RELAY },
+    )
+}
+
+internal fun relayEntitlementFailure(
+    subscriptionId: String,
+    knownSubscriptions: List<com.leviknet.vpn.core.network.SubscriptionSummary>?,
+    now: Instant,
+): String? {
+    if (knownSubscriptions == null) return null
+    val subscription = knownSubscriptions.firstOrNull { it.uuid == subscriptionId }
+    return when {
+        subscription?.isActiveAt(now) != true -> "subscription_inactive"
+        !subscription.capabilities.whitelistRelay -> "relay_not_available"
+        else -> null
+    }
+}
+
+internal fun canUseCachedRelayProfileAfter(
+    error: Throwable,
+    profile: PreparedTunnelProfile,
+    now: Instant,
+    knownSubscriptions: List<com.leviknet.vpn.core.network.SubscriptionSummary>? = null,
+): Boolean = canUseCachedProfileAfter(error) && canReuseRelayCache(profile, knownSubscriptions, now)
+
+internal fun canReuseRelayCache(
+    profile: PreparedTunnelProfile,
+    knownSubscriptions: List<com.leviknet.vpn.core.network.SubscriptionSummary>?,
+    now: Instant,
+): Boolean = relayEntitlementFailure(profile.subscriptionId, knownSubscriptions, now) == null &&
+    hasUsableRelayCredential(profile, now)
+
+internal fun isRelayAccessDenied(error: Throwable): Boolean = when (error) {
+    is ApiException.Unauthorized -> true
+    is ApiException.Rejected -> !error.retryable && error.status in setOf(401, 403, 404) &&
+        error.code in RELAY_ACCESS_DENIAL_CODES
+    else -> false
+}
+
+private val RELAY_ACCESS_DENIAL_CODES = setOf(
+    "authentication_required", "session_expired", "account_not_found", "invalid_device_binding",
+    "subscription_not_found", "subscription_expired", "subscription_inactive", "relay_not_available",
+    "device_not_found", "relay_device_not_registered", "device_limit_reached", "hwid_limit_reached",
+    "device_limit_exceeded", "traffic_limit_reached", "traffic_exhausted", "traffic_limit_exceeded",
+)
 
 internal fun withoutRelayServers(profile: PreparedTunnelProfile): PreparedTunnelProfile =
     profile.copy(

@@ -5,6 +5,7 @@ import java.io.File
 import java.io.IOException
 import java.net.URI
 import java.net.URL
+import java.net.SocketTimeoutException
 import java.security.KeyFactory
 import java.security.PublicKey
 import java.security.Signature
@@ -36,6 +37,8 @@ data class ServiceEndpointsDocument(
 )
 
 object ServiceEndpoints {
+    internal const val ALLOWLIST_API_ORIGIN = "https://leva.levikfartik.ru"
+
     val BUILT_IN = ServiceEndpointsDocument(
         sequence = 0,
         apiOrigins = listOf(
@@ -43,6 +46,7 @@ object ServiceEndpoints {
             "https://api.leviknet.org",
             "https://leviknet.org",
             "https://leviknet.com",
+            ALLOWLIST_API_ORIGIN,
         ),
         webOrigin = "https://leviknet.org",
         subscriptionOrigins = listOf("https://sub.cloudnote-sync.xyz", "https://sub.leviknet.org"),
@@ -164,20 +168,31 @@ fun interface EndpointsFetcher {
     fun get(url: String, limit: Int): ByteArray?
 }
 
-internal val httpsFetcher = EndpointsFetcher { url, limit ->
+internal val httpsFetcher = httpsFetcherWithDeadline(null)
+
+private fun httpsFetcherWithDeadline(deadlineNanos: Long?) = EndpointsFetcher { url, limit ->
+    fun remainingTimeoutMillis(): Int {
+        if (deadlineNanos == null) return 10_000
+        val remaining = deadlineNanos - System.nanoTime()
+        if (remaining <= 0L) throw SocketTimeoutException("Service endpoints discovery timed out")
+        return minOf(10_000L, (remaining / 1_000_000L).coerceAtLeast(1L)).toInt()
+    }
     val connection = URL(url).openConnection() as HttpsURLConnection
     try {
         connection.requestMethod = "GET"
-        connection.connectTimeout = 10_000
-        connection.readTimeout = 10_000
+        connection.connectTimeout = remainingTimeoutMillis()
+        connection.readTimeout = remainingTimeoutMillis()
         connection.instanceFollowRedirects = false
         connection.useCaches = false
         connection.setRequestProperty("Cache-Control", "no-store")
+        connection.connect()
+        connection.readTimeout = remainingTimeoutMillis()
         if (connection.responseCode != 200 || connection.contentLengthLong > limit) return@EndpointsFetcher null
         connection.inputStream.use { input ->
             val output = ByteArrayOutputStream()
             val buffer = ByteArray(4_096)
             while (true) {
+                connection.readTimeout = remainingTimeoutMillis()
                 val count = input.read(buffer)
                 if (count < 0) break
                 output.write(buffer, 0, count)
@@ -198,10 +213,15 @@ fun fetchEndpointsDocument(
     minSequence: Long,
     fetcher: EndpointsFetcher = httpsFetcher,
 ): FetchedEndpoints? {
+    // A mobile allow-list can block every configuration mirror. Keep discovery within
+    // one budget instead of waiting a full connect/read timeout for each body/signature.
+    val deadline = System.nanoTime() + 12_000_000_000L
+    val boundedFetcher = if (fetcher === httpsFetcher) httpsFetcherWithDeadline(deadline) else fetcher
     for (url in urls) {
+        if (System.nanoTime() >= deadline) return null
         try {
-            val body = fetcher.get(url, ServiceEndpoints.MAX_DOCUMENT_BYTES) ?: continue
-            val signature = fetcher.get("$url.sig", ServiceEndpoints.MAX_SIGNATURE_BYTES)
+            val body = boundedFetcher.get(url, ServiceEndpoints.MAX_DOCUMENT_BYTES) ?: continue
+            val signature = boundedFetcher.get("$url.sig", ServiceEndpoints.MAX_SIGNATURE_BYTES)
                 ?.toString(Charsets.UTF_8) ?: continue
             val document = ServiceEndpoints.verify(body, signature) ?: continue
             if (document.sequence >= minSequence) return FetchedEndpoints(document, body, signature)

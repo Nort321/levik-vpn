@@ -1,14 +1,28 @@
 package com.leviknet.vpn.core.network
 
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.URL
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.ExecutorCompletionService
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
+import java.util.concurrent.TimeUnit
 import javax.net.ssl.HttpsURLConnection
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 
 internal const val DEFAULT_API_ORIGIN = "https://api.cloudnote-sync.xyz"
 
 internal class ApiEndpoints(
     baseUrl: String,
     private val refreshEndpoints: () -> Boolean = { false },
+    private val openHealthConnection: (URL) -> HttpsURLConnection = {
+        it.openConnection() as HttpsURLConnection
+    },
+    private val nanoTime: () -> Long = System::nanoTime,
 ) {
     /** Null in production: the hosts come from the signed endpoints document. */
     private val fixed: URL?
@@ -36,7 +50,7 @@ internal class ApiEndpoints(
     @Synchronized
     fun resolve(): URL {
         fixed?.let { return it }
-        selected?.let { if (System.nanoTime() < verifiedUntilNanos) return it }
+        selected?.let { if (nanoTime() < verifiedUntilNanos) return it }
         probe()?.let { return it }
         // When every known host fails, a newer signed document may name working ones.
         if (refreshEndpoints()) probe()?.let { return it }
@@ -44,29 +58,95 @@ internal class ApiEndpoints(
     }
 
     private fun probe(): URL? {
-        for (origin in ServiceEndpoints.current().apiOrigins.map(::URL)) {
-            val connection = URL(origin, "/api/health").openConnection() as HttpsURLConnection
-            try {
-                // Probe without session credentials before sending a mutation.
-                // A POST is never replayed after an ambiguous network failure.
-                connection.requestMethod = "GET"
-                connection.connectTimeout = 8_000
-                connection.readTimeout = 8_000
-                connection.instanceFollowRedirects = false
-                connection.useCaches = false
-                connection.setRequestProperty("Accept", "application/json")
-                if (connection.responseCode == 200 &&
-                    connection.contentType.orEmpty().contains("application/json", ignoreCase = true)) {
+        val origins = ServiceEndpoints.current().apiOrigins.map(::URL)
+        if (origins.isEmpty()) return null
+        // Put the mobile allow-list path in the first pool, even when an older signed
+        // document still lists several blocked public hosts before the built-in fallback.
+        val fallback = origins.firstOrNull { it.toString() == ServiceEndpoints.ALLOWLIST_API_ORIGIN }
+        val candidates = (listOfNotNull(origins.first(), fallback) + origins).distinctBy(URL::toString)
+        val executor = Executors.newFixedThreadPool(minOf(MAX_CONCURRENT_PROBES, candidates.size)) { task ->
+            Thread(task, "levik-api-health").apply { isDaemon = true }
+        }
+        val completion = ExecutorCompletionService<URL?>(executor)
+        val connections = mutableListOf<HttpsURLConnection>()
+        val futures = mutableListOf<Future<URL?>>()
+        val deadline = System.nanoTime() + PROBE_BUDGET_NANOS
+        try {
+            candidates.forEach { origin ->
+                val connection = try {
+                    openHealthConnection(URL(origin, "/api/health"))
+                } catch (_: IOException) {
+                    return@forEach
+                }
+                connections += connection
+                futures += completion.submit(java.util.concurrent.Callable {
+                    try {
+                        if (healthy(connection)) origin else null
+                    } catch (_: IOException) {
+                        null
+                    } finally {
+                        connection.disconnect()
+                    }
+                })
+            }
+            repeat(futures.size) {
+                val remaining = deadline - System.nanoTime()
+                if (remaining <= 0L) return null
+                val finished = completion.poll(remaining, TimeUnit.NANOSECONDS) ?: return null
+                val origin = try {
+                    finished.get()
+                } catch (_: ExecutionException) {
+                    null
+                }
+                if (origin != null) {
                     selected = origin
-                    verifiedUntilNanos = System.nanoTime() + 60_000_000_000L
+                    verifiedUntilNanos = nanoTime() + VERIFIED_ORIGIN_TTL_NANOS
                     return origin
                 }
-            } catch (_: IOException) {
-                // Only signed or built-in HTTPS origins can receive signed requests.
-            } finally {
-                connection.disconnect()
             }
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw IOException("Levik API health check interrupted", error)
+        } finally {
+            futures.forEach { it.cancel(true) }
+            // Interrupts alone do not reliably cancel Android's blocking HTTPS sockets.
+            connections.forEach { connection -> runCatching { connection.disconnect() } }
+            executor.shutdownNow()
         }
         return null
+    }
+
+    private fun healthy(connection: HttpsURLConnection): Boolean {
+        // Only this unauthenticated GET races. Signed API requests remain single-shot.
+        connection.requestMethod = "GET"
+        connection.connectTimeout = 8_000
+        connection.readTimeout = 8_000
+        connection.instanceFollowRedirects = false
+        connection.useCaches = false
+        connection.setRequestProperty("Accept", "application/json")
+        if (connection.responseCode != 200 ||
+            !connection.contentType.orEmpty().contains("application/json", ignoreCase = true) ||
+            connection.contentLengthLong > MAX_HEALTH_BYTES
+        ) return false
+        val body = connection.inputStream.use { input ->
+            val output = ByteArrayOutputStream()
+            val buffer = ByteArray(256)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                output.write(buffer, 0, count)
+                if (output.size() > MAX_HEALTH_BYTES) return false
+            }
+            output.toByteArray()
+        }
+        val payload = runCatching { Json.parseToJsonElement(body.decodeToString()) as? JsonObject }.getOrNull()
+        return (payload?.get("ok") as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull == true
+    }
+
+    private companion object {
+        const val MAX_CONCURRENT_PROBES = 4
+        const val MAX_HEALTH_BYTES = 1_024
+        const val PROBE_BUDGET_NANOS = 10_000_000_000L
+        const val VERIFIED_ORIGIN_TTL_NANOS = 60_000_000_000L
     }
 }

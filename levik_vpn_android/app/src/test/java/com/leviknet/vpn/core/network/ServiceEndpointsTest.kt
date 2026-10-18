@@ -99,6 +99,15 @@ class ServiceEndpointsTest {
     }
 
     @Test
+    fun `mobile allow-list API fallback remains available with older signed endpoints`() {
+        ServiceEndpoints.use(ServiceEndpoints.verify(body, signature))
+
+        assertTrue(ServiceEndpoints.BUILT_IN.apiOrigins.contains("https://leva.levikfartik.ru"))
+        assertTrue(ServiceEndpoints.current().apiOrigins.contains("https://leva.levikfartik.ru"))
+        assertEquals(1, ServiceEndpoints.current().apiOrigins.count { it == "https://leva.levikfartik.ru" })
+    }
+
+    @Test
     fun `skips broken mirrors and older documents`() {
         val fetcher = EndpointsFetcher { url, _ ->
             when {

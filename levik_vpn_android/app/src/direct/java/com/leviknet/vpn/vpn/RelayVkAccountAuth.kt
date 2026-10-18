@@ -30,140 +30,140 @@ import androidx.core.app.NotificationCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import com.leviknet.vpn.R
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
+import kotlin.coroutines.cancellation.CancellationException
 import java.util.concurrent.atomic.AtomicReference
-import java.util.concurrent.atomic.AtomicBoolean
 import org.json.JSONObject
 
 internal class AndroidRelayVkTurnProvider(
     private val context: Context?,
 ) : RelayVkTurnProvider {
-    override fun obtain(hash: String, network: Network): RelayTurnCredentials {
+    override fun obtain(hash: String, network: Network, deadlineElapsedMs: Long): RelayTurnCredentials {
         val appContext = context ?: throw IllegalStateException("VK auth context unavailable")
-        return RelayVkAuthCoordinator.obtain(appContext, hash, network)
+        return RelayVkAuthCoordinator.obtain(appContext, hash, network, deadlineElapsedMs)
     }
 }
 
 private data class CachedVkAuth(
     val hash: String,
+    val networkHandle: Long,
     val credentials: RelayTurnCredentials,
     val expiresAtElapsedMs: Long,
-)
-
-private data class PendingVkAuth(
-    val hash: String,
-    val latch: CountDownLatch = CountDownLatch(1),
-    val completed: AtomicBoolean = AtomicBoolean(false),
-    val credentials: AtomicReference<RelayTurnCredentials?> = AtomicReference(null),
-    val failure: AtomicReference<Throwable?> = AtomicReference(null),
 )
 
 internal object RelayVkAuthCoordinator {
     private const val CHANNEL_ID = "relay_vk_auth"
     private const val NOTIFICATION_ID = 0x4c56
-    private const val WAIT_SECONDS = 285L
+    const val REQUEST_ID_EXTRA = "com.leviknet.vpn.RELAY_VK_AUTH_REQUEST"
     private const val CACHE_LIFETIME_MS = 2 * 60_000L
-    private const val HEADLESS_WAIT_SECONDS = 45L
-    private val pending = AtomicReference<PendingVkAuth?>(null)
-    private val headless = AtomicReference<PendingVkAuth?>(null)
+    private val pending = AtomicReference<RelayVkAuthAttempt?>(null)
+    private val headless = AtomicReference<RelayVkAuthAttempt?>(null)
     private val cached = AtomicReference<CachedVkAuth?>(null)
 
-    fun obtain(context: Context, hash: String, network: Network): RelayTurnCredentials {
+    fun obtain(context: Context, hash: String, network: Network, deadlineElapsedMs: Long): RelayTurnCredentials {
         require(hash.matches(Regex("^[A-Za-z0-9_-]{16,256}$")))
         cached.get()?.takeIf {
-            it.hash == hash && SystemClock.elapsedRealtime() < it.expiresAtElapsedMs
+            it.hash == hash && it.networkHandle == network.networkHandle &&
+                SystemClock.elapsedRealtime() < it.expiresAtElapsedMs
         }?.let { return it.credentials }
         val connectivity = context.getSystemService(ConnectivityManager::class.java)
-            ?: throw IllegalStateException("Connectivity service unavailable")
-        val previousNetwork = connectivity.boundNetworkForProcess
-        val request = PendingVkAuth(hash)
+            ?: throw RelayVkAuthException("relay_vk_auth_network_unavailable")
+        val request = RelayVkAuthAttempt(hash)
         check(pending.compareAndSet(null, request)) { "VK auth is already active" }
+        val startedAt = SystemClock.elapsedRealtime()
+        var previousNetwork: Network? = null
+        var networkBound = false
         try {
-            // Authentication must remain reachable while the VPN core is stopped for handoff.
-            check(connectivity.bindProcessToNetwork(network)) { "Unable to bind VK auth to the underlying network" }
-            // A stored VK login needs no user: join the call in a window-less WebView, so a
-            // network change with the screen off does not wait for someone to tap the
-            // notification. Without a login, or if that fails, ask the user as before.
+            previousNetwork = connectivity.boundNetworkForProcess
+            networkBound = connectivity.bindProcessToNetwork(network)
+            if (!networkBound) {
+                throw RelayVkAuthException("relay_vk_auth_network_unavailable")
+            }
+            // Silent recovery and interactive login share the native request's single budget.
             if (hasStoredVkSession()) {
-                obtainHeadless(context, hash)?.let { credentials ->
-                    cached.set(CachedVkAuth(hash, credentials, SystemClock.elapsedRealtime() + CACHE_LIFETIME_MS))
+                obtainHeadless(context, hash, minOf(
+                    RelayVkAuthTiming.HEADLESS_TIMEOUT_MS,
+                    RelayVkAuthTiming.remaining(startedAt, SystemClock.elapsedRealtime(), deadlineElapsedMs),
+                ))?.let { credentials ->
+                    if (request.isCompleted) throw RelayVkAuthException("relay_vk_auth_cancelled")
+                    cached.set(CachedVkAuth(hash, network.networkHandle, credentials,
+                        SystemClock.elapsedRealtime() + CACHE_LIFETIME_MS))
                     return credentials
                 }
-                check(!request.completed.get()) { "VK auth cancelled" }
             }
-            showNotification(context)
+            if (request.isCompleted) throw RelayVkAuthException("relay_vk_auth_cancelled")
+            if (RelayVkAuthTiming.remaining(startedAt, SystemClock.elapsedRealtime(), deadlineElapsedMs) == 0L) {
+                throw RelayVkAuthException("relay_vk_auth_timeout")
+            }
+            showNotification(context, request.id)
             context.startActivity(
                 Intent(context, RelayVkAuthActivity::class.java).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    putExtra(REQUEST_ID_EXTRA, request.id)
                 },
             )
-            if (!request.latch.await(WAIT_SECONDS, TimeUnit.SECONDS)) {
-                throw IllegalStateException("VK auth timed out")
+            return when (val result = request.await(
+                RelayVkAuthTiming.remaining(startedAt, SystemClock.elapsedRealtime(), deadlineElapsedMs),
+            )) {
+                is RelayVkAuthResult.Success -> result.credentials.also { credentials ->
+                    cached.set(CachedVkAuth(hash, network.networkHandle, credentials,
+                        SystemClock.elapsedRealtime() + CACHE_LIFETIME_MS))
+                }
+                is RelayVkAuthResult.Failure -> throw result.error
+                null -> throw RelayVkAuthException("relay_vk_auth_timeout")
             }
-            request.failure.get()?.let { throw it }
-            val credentials = request.credentials.get()
-                ?: throw IllegalStateException("VK auth returned no credentials")
-            cached.set(CachedVkAuth(hash, credentials, SystemClock.elapsedRealtime() + CACHE_LIFETIME_MS))
-            return credentials
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw CancellationException("VK authentication interrupted")
         } finally {
-            if (!connectivity.bindProcessToNetwork(previousNetwork)) {
-                connectivity.bindProcessToNetwork(null)
+            request.cancel(RelayVkAuthException("relay_vk_auth_cancelled"))
+            try {
+                if (networkBound && !connectivity.bindProcessToNetwork(previousNetwork)) {
+                    connectivity.bindProcessToNetwork(null)
+                }
+                context.getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
+            } finally {
+                // Keep ownership until process-wide network and notification cleanup is
+                // complete, so an old request cannot reset a new request's binding.
+                pending.compareAndSet(request, null)
             }
-            pending.compareAndSet(request, null)
-            context.getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
         }
     }
 
-    fun currentHash(): String? = pending.get()?.hash
+    fun currentAttempt(requestId: String?): RelayVkAuthAttempt? =
+        pending.get()?.takeIf { it.id == requestId && !it.isCompleted }
 
-    fun complete(credentials: RelayTurnCredentials) {
-        val request = pending.get() ?: return
-        if (request.completed.compareAndSet(false, true)) {
-            request.credentials.set(credentials)
-            request.latch.countDown()
-        }
-    }
-
-    fun cancel(message: String = "VK auth cancelled") {
-        headless.get()?.let { attempt ->
-            if (attempt.completed.compareAndSet(false, true)) attempt.latch.countDown()
-        }
-        val request = pending.get() ?: return
-        if (request.completed.compareAndSet(false, true)) {
-            request.failure.set(IllegalStateException(message))
-            request.latch.countDown()
-        }
+    fun cancel() {
+        val failure = RelayVkAuthException("relay_vk_auth_cancelled")
+        headless.get()?.cancel(failure)
+        pending.get()?.cancel(failure)
     }
 
     /** Runs on the caller's background thread; the WebView lives on the main thread. */
-    private fun obtainHeadless(context: Context, hash: String): RelayTurnCredentials? {
-        val attempt = PendingVkAuth(hash)
+    private fun obtainHeadless(context: Context, hash: String, timeoutMs: Long): RelayTurnCredentials? {
+        val attempt = RelayVkAuthAttempt(hash)
         headless.set(attempt)
         val main = Handler(Looper.getMainLooper())
         val page = AtomicReference<HeadlessVkCallPage?>(null)
         try {
             main.post {
-                if (attempt.completed.get()) return@post
+                if (attempt.isCompleted) return@post
                 page.set(
                     HeadlessVkCallPage(context.applicationContext, hash) { result ->
-                        if (attempt.completed.compareAndSet(false, true)) {
-                            attempt.credentials.set(result)
-                            attempt.latch.countDown()
-                        }
+                        if (result == null) attempt.cancel(RelayVkAuthException("relay_vk_auth_failed"))
+                        else attempt.complete(result)
                     }.also { it.start() },
                 )
             }
-            attempt.latch.await(HEADLESS_WAIT_SECONDS, TimeUnit.SECONDS)
-            return attempt.credentials.get()
+            return (attempt.await(timeoutMs) as? RelayVkAuthResult.Success)
+                ?.credentials
         } finally {
-            attempt.completed.set(true)
+            attempt.cancel(RelayVkAuthException("relay_vk_auth_cancelled"))
             headless.compareAndSet(attempt, null)
             main.post { page.getAndSet(null)?.destroy() }
         }
     }
 
-    private fun showNotification(context: Context) {
+    private fun showNotification(context: Context, requestId: String) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
         manager.createNotificationChannel(
             NotificationChannel(
@@ -174,6 +174,7 @@ internal object RelayVkAuthCoordinator {
         )
         val intent = Intent(context, RelayVkAuthActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            putExtra(REQUEST_ID_EXTRA, requestId)
         }
         val pendingIntent = PendingIntent.getActivity(
             context,
@@ -205,13 +206,14 @@ private class HeadlessVkCallPage(
     private val onResult: (RelayTurnCredentials?) -> Unit,
 ) {
     private val handler = Handler(Looper.getMainLooper())
+    private val completionHandler = Handler(Looper.getMainLooper())
     private var webView: WebView? = null
     private var finished = false
 
     fun start() {
         val view = WebView(context)
         webView = view
-        configureVkCallWebView(view, onTurnServer = { credentials -> handler.post { finish(credentials) } })
+        configureVkCallWebView(view, onTurnServer = { credentials -> completionHandler.post { finish(credentials) } })
         view.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 if (isVkLoginPage(request.url.toString())) {
@@ -267,6 +269,7 @@ private class HeadlessVkCallPage(
     fun destroy() {
         finished = true
         handler.removeCallbacksAndMessages(null)
+        completionHandler.removeCallbacksAndMessages(null)
         webView?.apply {
             removeJavascriptInterface(VkCallPage.JS_BRIDGE)
             stopLoading()
@@ -351,6 +354,8 @@ internal class RelayVkAuthActivity : ComponentActivity() {
     private var completed = false
     private var joining = false
     private var joinAttempt = 0
+    private var attempt: RelayVkAuthAttempt? = null
+    private var completionObserver: (() -> Unit)? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -360,20 +365,43 @@ internal class RelayVkAuthActivity : ComponentActivity() {
                 if (::webView.isInitialized && webView.canGoBack() && !joining) {
                     webView.goBack()
                 } else {
-                    RelayVkAuthCoordinator.cancel()
+                    attempt?.cancel(RelayVkAuthException("relay_vk_auth_cancelled"))
                     finish()
                 }
             }
         })
-        val hash = RelayVkAuthCoordinator.currentHash()
-        if (hash == null) {
-            finish()
-            return
-        }
+        startAttempt(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        val requestId = intent.getStringExtra(RelayVkAuthCoordinator.REQUEST_ID_EXTRA)
+        if (attempt?.id == requestId || RelayVkAuthCoordinator.currentAttempt(requestId) == null) return
+        releaseWebView()
+        attempt?.cancel(RelayVkAuthException("relay_vk_auth_cancelled"))
+        setIntent(intent)
+        startAttempt(intent)
+    }
+
+    private fun startAttempt(intent: Intent) {
+        val current = RelayVkAuthCoordinator.currentAttempt(
+            intent.getStringExtra(RelayVkAuthCoordinator.REQUEST_ID_EXTRA),
+        ) ?: run { finish(); return }
+        attempt = current
+        completed = false
+        joining = false
+        joinAttempt = 0
         buildContent()
-        configureWebView(hash)
+        configureWebView(current)
+        val observer: () -> Unit = {
+            // Auto-join clears its own Handler queue; completion must survive that cleanup.
+            runOnUiThread { if (attempt === current) finish() }
+            Unit
+        }
+        completionObserver = observer
+        current.observeCompletion(observer)
         if (hasStoredVkSession()) {
-            loadJoin(hash)
+            loadJoin(current.hash)
         } else {
             status.setText(R.string.relay_vk_login_prompt)
             webView.loadUrl("https://m.vk.com/")
@@ -404,13 +432,12 @@ internal class RelayVkAuthActivity : ComponentActivity() {
         setContentView(root)
     }
 
-    private fun configureWebView(hash: String) {
+    private fun configureWebView(current: RelayVkAuthAttempt) {
         configureVkCallWebView(webView, onTurnServer = { credentials ->
             runOnUiThread {
-                if (completed) return@runOnUiThread
-                completed = true
-                RelayVkAuthCoordinator.complete(credentials)
-                finish()
+                if (completed || attempt !== current || current.isCompleted) return@runOnUiThread
+                completed = current.complete(credentials)
+                if (completed) finish()
             }
         })
         webView.webViewClient = object : WebViewClient() {
@@ -418,13 +445,23 @@ internal class RelayVkAuthActivity : ComponentActivity() {
                 !isAllowedVkNavigation(request.url)
 
             override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                if (attempt !== current || current.isCompleted) return
                 if (joining) view.evaluateJavascript(VkCallPage.INTERCEPTOR_JS, null)
             }
 
             override fun onPageFinished(view: WebView, url: String) {
+                if (attempt !== current || current.isCompleted) return
                 CookieManager.getInstance().flush()
+                if (isVkLoginPage(url)) {
+                    // A stale cookie can redirect a call back to login. Let the user sign in
+                    // instead of spending the whole timeout auto-clicking the login page.
+                    joining = false
+                    handler.removeCallbacksAndMessages(null)
+                    status.setText(R.string.relay_vk_login_prompt)
+                    return
+                }
                 if (!joining && hasStoredVkSession()) {
-                    loadJoin(hash)
+                    loadJoin(current.hash)
                     return
                 }
                 if (joining) {
@@ -455,14 +492,22 @@ internal class RelayVkAuthActivity : ComponentActivity() {
         })
     }
 
-    override fun onDestroy() {
+    private fun releaseWebView() {
+        completionObserver?.let { observer -> attempt?.removeObserver(observer) }
+        completionObserver = null
         handler.removeCallbacksAndMessages(null)
         if (::webView.isInitialized) {
             webView.removeJavascriptInterface(VkCallPage.JS_BRIDGE)
             webView.stopLoading()
             webView.destroy()
         }
-        if (isFinishing && !completed) RelayVkAuthCoordinator.cancel()
+    }
+
+    override fun onDestroy() {
+        releaseWebView()
+        if (isFinishing && !completed) {
+            attempt?.cancel(RelayVkAuthException("relay_vk_auth_cancelled"))
+        }
         super.onDestroy()
     }
 

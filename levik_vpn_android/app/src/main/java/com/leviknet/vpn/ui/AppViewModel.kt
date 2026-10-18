@@ -53,6 +53,7 @@ import com.leviknet.vpn.data.ThemeMode
 import com.leviknet.vpn.data.TrafficHistoryStore
 import com.leviknet.vpn.data.isActiveAt
 import com.leviknet.vpn.data.hasUsableYandexAuth
+import com.leviknet.vpn.data.relayProfileRefreshDue
 import com.leviknet.vpn.vpn.YandexProviderAuth
 import com.leviknet.vpn.vpn.refreshYandexGuest
 import com.leviknet.vpn.vpn.selectYandexGuestNetwork
@@ -1349,7 +1350,14 @@ class AppViewModel(
         if (mutableState.value.refreshing) return
         viewModelScope.launch {
             val account = mutableState.value.account
-            val cached = repository.cachedTunnel()
+            val storedProfile = repository.cachedTunnel()
+            val requestedServerId = repository.selectedServerId()
+            val requestedRelay = storedProfile?.servers?.firstOrNull {
+                !settings.automaticServer.value &&
+                    (subscriptionId == null || storedProfile.subscriptionId == subscriptionId) &&
+                    it.id == requestedServerId && it.engine == TunnelEngineKind.LEVIK_RELAY
+            }
+            val cached = storedProfile
                 ?.takeIf { cachedProfileIsUsable(it.subscriptionExpiresAt, Instant.now()) }
             val subscription = account?.let {
                 activeSubscription(
@@ -1358,11 +1366,11 @@ class AppViewModel(
                         ?: cached?.subscriptionId,
                 )
             }
-            if (account != null && subscription == null) {
+            if (account != null && subscription == null && requestedRelay == null) {
                 mutableState.update { it.copy(message = UiMessage.SUBSCRIPTION_REQUIRED) }
                 return@launch
             }
-            if (account == null && cached == null) {
+            if (account == null && cached == null && requestedRelay == null) {
                 mutableState.update { it.copy(message = UiMessage.SUBSCRIPTION_REQUIRED) }
                 return@launch
             }
@@ -1384,7 +1392,7 @@ class AppViewModel(
                     if (telemost != null) {
                         refreshedYandex = prepareTelemostWithRetry(subscription?.uuid ?: requireNotNull(cached).subscriptionId, savedConference ?: telemost.conferenceUrl)
                     } else {
-                    val document = cached?.servers?.firstNotNullOfOrNull {
+                    val document = cached.servers.firstNotNullOfOrNull {
                         it.yandexConfig?.bootstrap?.documentUrl
                     }.orEmpty()
                     val context = appContext
@@ -1399,7 +1407,11 @@ class AppViewModel(
                     refreshedYandex = prepareYandexWithRetry(subscription.uuid, document, auth)
                     }
                 }
-                val profile = if (yandexSelected || subscription == null) {
+                val profile = if (requestedRelay != null) {
+                    prepareRelayWithRetry(requireNotNull(storedProfile).subscriptionId).also { refreshed ->
+                        requireRelayServer(refreshed, requestedRelay.id)
+                    }
+                } else if (yandexSelected || subscription == null) {
                     refreshedYandex ?: requireNotNull(cached)
                 } else {
                     val reusableCached = cached?.takeIf { profile ->
@@ -1413,10 +1425,8 @@ class AppViewModel(
                         (
                             profileRefreshPending ||
                                 profileRefreshDue(reusableCached.issuedAt, Instant.now()) ||
-                                relayCredentialRefreshDue(
-                                    reusableCached.relayCredentialExpiresAt,
-                                    Instant.now(),
-                                )
+                                reusableCached.servers.any { it.engine == TunnelEngineKind.LEVIK_RELAY } &&
+                                    relayProfileRefreshDue(reusableCached, Instant.now())
                             )
                     if (reusableCached != null && !refreshRequested) {
                         reusableCached
@@ -1475,7 +1485,8 @@ class AppViewModel(
                     mutableState.update { it.copy(showVpnDisclosure = true) }
                 }
             } catch (error: Throwable) {
-                mutableState.update { it.copy(problem = error.toAppProblem(ProblemOperation.CONNECT, subscription?.uuid)) }
+                val failedSubscriptionId = if (requestedRelay != null) storedProfile.subscriptionId else subscription?.uuid
+                mutableState.update { it.copy(problem = error.toAppProblem(ProblemOperation.CONNECT, failedSubscriptionId)) }
             } finally {
                 mutableState.update { it.copy(refreshing = false) }
             }
@@ -1580,6 +1591,14 @@ class AppViewModel(
     private fun selectServerNow(serverId: String) {
         viewModelScope.launch {
             runCatching {
+                val profile = mutableState.value.profile
+                if (mutableState.value.vpn.state in ACTIVE_TUNNEL_STATES &&
+                    profile?.servers?.firstOrNull { it.id == serverId }?.engine == TunnelEngineKind.LEVIK_RELAY
+                ) {
+                    val refreshed = prepareRelayWithRetry(profile.subscriptionId)
+                    requireRelayServer(refreshed, serverId)
+                    mutableState.update { it.copy(profile = refreshed) }
+                }
                 settings.setAutomaticServer(false)
                 repository.selectServer(serverId)
             }
@@ -1596,7 +1615,9 @@ class AppViewModel(
                     }
                 }
                 .onFailure { error ->
-                    mutableState.update { it.copy(problem = error.toAppProblem()) }
+                    mutableState.update {
+                        it.copy(problem = error.toAppProblem(ProblemOperation.CONNECT, it.profile?.subscriptionId))
+                    }
                 }
         }
     }
@@ -1976,7 +1997,8 @@ class AppViewModel(
                 cached.subscriptionId != matchingSubscription.uuid ||
                 forceProfileRefresh ||
                 profileRefreshDue(cached.issuedAt, Instant.now()) ||
-                relayCredentialRefreshDue(cached.relayCredentialExpiresAt, Instant.now()) ||
+                cached.servers.any { it.engine == TunnelEngineKind.LEVIK_RELAY } &&
+                    relayProfileRefreshDue(cached, Instant.now()) ||
                 !equivalentSubscriptionExpiry(
                     cached.subscriptionExpiresAt,
                     matchingSubscription.expireAt,
@@ -2033,6 +2055,25 @@ class AppViewModel(
                 )
                 delay(retryDelay)
             }
+        }
+    }
+
+    private suspend fun prepareRelayWithRetry(subscriptionId: String): PreparedTunnelProfile {
+        var failedAttempts = 0
+        while (true) {
+            try {
+                return repository.prepareRelayConnection(subscriptionId)
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                val retryDelay = profileLoadRetryDelayMillis(error, failedAttempts++) ?: throw error
+                delay(retryDelay)
+            }
+        }
+    }
+
+    private fun requireRelayServer(profile: PreparedTunnelProfile, serverId: String) {
+        if (profile.servers.none { it.id == serverId && it.engine == TunnelEngineKind.LEVIK_RELAY }) {
+            throw ApiException.Rejected("relay_not_available", retryable = false, status = 503)
         }
     }
 

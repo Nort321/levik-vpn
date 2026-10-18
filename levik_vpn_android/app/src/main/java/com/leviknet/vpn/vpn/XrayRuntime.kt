@@ -186,8 +186,10 @@ class XrayRuntime(
                 LibXray.registerListenerController(processController)
                 listenerControllerRegistered = true
             }
-            // Relay connects to an IP-literal loopback proxy. Its DNS queries use
-            // Xray's routed DNS configuration, never a protected physical resolver.
+            // This override resolves upstream hostnames before a tunnel exists. It must use
+            // the physical network's DNS instead of a public DNS blocked by a mobile allow-list.
+            // IP-only/offline sessions and local relay proxies need no bootstrap override;
+            // user traffic continues to use Xray's separate, routed DNS/DoH configuration.
             if (dnsServer == null) {
                 LibXray.resetDNS()
             } else {

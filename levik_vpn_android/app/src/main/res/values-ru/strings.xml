@@ -830,4 +830,7 @@
     <string name="diagnosis_action_connect">Подключить VPN</string>
     <string name="diagnosis_action_best_server">Переключить на лучший сервер</string>
     <string name="diagnosis_action_mobile_servers">Выбрать сервер</string>
+    <string name="relay_auth_timeout">Не успели завершить вход. Подключитесь снова и завершите авторизацию.</string>
+    <string name="relay_auth_cancelled">Вход отменён. Подключитесь снова, когда будете готовы.</string>
+    <string name="relay_auth_failed">Не удалось завершить вход. Проверьте мобильный интернет и повторите подключение.</string>
 </resources>

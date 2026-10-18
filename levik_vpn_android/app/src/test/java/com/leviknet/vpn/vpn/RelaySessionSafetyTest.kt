@@ -36,4 +36,54 @@ class RelaySessionSafetyTest {
             )
         }
     }
+
+    @Test
+    fun `relay renewal starts before the hard deadline with bounded watchdog rounds`() {
+        assertFalse(relayCredentialRenewalDue(300_001L))
+        assertTrue(relayCredentialRenewalDue(300_000L))
+        assertTrue(relayCredentialRenewalDue(1L))
+        assertFalse(relayCredentialRenewalDue(0L))
+    }
+
+    @Test
+    fun `renewal extends access only for the same entitlement device and selected node`() {
+        val previous = relayConfig()
+        val renewed = previous.copy(bootstrap = previous.bootstrap.copy(
+            credentialId = "renewed",
+            accessToken = "renewed-access-token",
+            expiresAt = "2026-09-01T12:00:00Z",
+        ))
+        assertTrue(relayCredentialExtendsAccess(previous, renewed))
+        assertFalse(relayCredentialExtendsAccess(previous, previous))
+        assertFalse(relayCredentialHasSameBinding(previous, renewed.copy(
+            bootstrap = renewed.bootstrap.copy(deviceId = "another-device"),
+        )))
+        assertFalse(relayCredentialHasSameBinding(previous, renewed.copy(
+            bootstrap = renewed.bootstrap.copy(entitlementId = "another-entitlement"),
+        )))
+        assertFalse(relayCredentialHasSameBinding(previous, renewed.copy(
+            node = renewed.node.copy(id = "another-node"),
+        )))
+        assertFalse(relayCredentialExtendsAccess(previous, renewed.copy(
+            bootstrap = renewed.bootstrap.copy(expiresAt = "invalid"),
+        )))
+    }
+
+    private fun relayConfig(): RelayServerConfig {
+        val node = RelayNode("node", "Mobile", "DE", "relay.example", 443, "front.example", RelayTransport.TURN_DTLS, "key", listOf("hash"))
+        return RelayServerConfig(
+            bootstrap = RelayBootstrap(
+                version = 1,
+                protocol = "wdtt",
+                policy = RelayPolicy(1, RelayDeviceSlotsPolicy.REMNAWAVE_HWID_SHARED, RelayTrafficAccountingPolicy.RELAY_SEPARATE),
+                entitlementId = "entitlement",
+                deviceId = "device",
+                credentialId = "credential",
+                accessToken = "access-token",
+                expiresAt = "2026-08-31T12:00:00Z",
+                nodes = listOf(node),
+            ),
+            node = node,
+        )
+    }
 }
