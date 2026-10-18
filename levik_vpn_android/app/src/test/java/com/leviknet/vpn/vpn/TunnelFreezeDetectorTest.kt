@@ -36,4 +36,33 @@ class TunnelFreezeDetectorTest {
         assertFalse(detector.record(rxBytes = 0, txBytes = 0, nowMs = 30_000))
         assertTrue(detector.record(rxBytes = kb, txBytes = 40 * kb, nowMs = 42_000))
     }
+
+    @Test
+    fun `each false alarm doubles the wait for the next one, up to a limit`() {
+        val detector = TunnelFreezeDetector(cooldownMs = 60_000, maxCooldownMs = 4 * 60_000)
+        var now = 0L
+        // Twelve seconds of uploads that get almost nothing back.
+        fun upload(): Boolean {
+            val first = detector.record(now / 1_000, now * 4, now)
+            now += 12_000
+            return detector.record(now / 1_000, now * 4, now) || first
+        }
+        assertTrue(upload())
+        detector.checkPassed() // the next alarm waits 2 minutes
+        now += 60_000
+        assertFalse(upload())
+        now += 60_000
+        assertTrue(upload())
+        detector.checkPassed() // 4 minutes, the limit
+        detector.checkPassed()
+        now += 3 * 60_000
+        assertFalse(upload())
+        now += 60_000
+        assertTrue(upload())
+        // A new connection starts from the shortest wait again.
+        detector.reset()
+        assertTrue(upload())
+        now += 120_000
+        assertTrue(upload())
+    }
 }

@@ -70,6 +70,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
@@ -77,6 +78,7 @@ import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 class LevikVpnService : VpnService() {
     private val coreOwner = NEXT_CORE_OWNER.incrementAndGet()
@@ -144,6 +146,12 @@ class LevikVpnService : VpnService() {
     private var allowlistOverride = false
     @Volatile
     private var lastWhitelistMode = WhitelistMode.UNKNOWN
+    /** The last probe's answer, unknown included; it paces the next probe. */
+    @Volatile
+    private var lastProbeMode = WhitelistMode.UNKNOWN
+    private val allowlistProbeSchedule = AllowlistProbeSchedule()
+    /** Wakes the probe loop early: the tunnel struggles, which allowlists coming on look like. */
+    private val allowlistProbeWake = Channel<Unit>(Channel.CONFLATED)
     private var automaticRollbackServerId: String? = null
     private var automaticTargetServerId: String? = null
     @Volatile
@@ -1087,18 +1095,42 @@ class LevikVpnService : VpnService() {
     /** Allowlists move both an automatic and a hand-picked server, docs/app-platform.md "Allowlists". */
     private fun startMobileServerAutomation() {
         mobileAutomationJob?.cancel()
+        allowlistProbeSchedule.reset()
         mobileAutomationJob = serviceScope.launch {
             delay(MOBILE_AUTOMATION_INITIAL_DELAY_MS)
             while (coreRunning) {
-                evaluateMobileServerPolicy(networkMonitor.activeNetwork())
-                // A switch waiting for its confirmation should not wait half a minute.
-                delay(if (mobileSwitchPolicy.hasPendingCandidate()) MOBILE_CONFIRM_INTERVAL_MS else MOBILE_AUTOMATION_INTERVAL_MS)
+                val network = networkMonitor.activeNetwork()
+                val waitMs = if (allowlistProbeNeeded(network)) {
+                    evaluateMobileServerPolicy(network)
+                    // A switch waiting for its confirmation should not wait minutes.
+                    if (mobileSwitchPolicy.hasPendingCandidate()) {
+                        MOBILE_CONFIRM_INTERVAL_MS
+                    } else {
+                        allowlistProbeSchedule.next(lastProbeMode, currentServer?.isMobileServer() == true)
+                    }
+                } else {
+                    // Wi-Fi on a regular server: allowlists change nothing there; a new network wakes the loop.
+                    MOBILE_IDLE_INTERVAL_MS
+                }
+                withTimeoutOrNull(waitMs) { allowlistProbeWake.receive() }
             }
         }
     }
 
+    /** Allowlists move a connection only on mobile data, or back from a mobile server. */
+    private fun allowlistProbeNeeded(network: Network?): Boolean =
+        network != null && (networkMonitor.isCellular(network) || currentServer?.isMobileServer() == true)
+
+    /** The tunnel struggles: probe for allowlists now and at the short interval again. */
+    private fun wakeAllowlistProbe() {
+        allowlistProbeSchedule.reset()
+        allowlistProbeWake.trySend(Unit)
+    }
+
     private fun scheduleMobilePolicyEvaluation(network: Network?) {
         if (!coreRunning) return
+        // A new network: probe it at the short interval again.
+        allowlistProbeSchedule.reset()
         mobileNetworkEvaluationJob?.cancel()
         mobileNetworkEvaluationJob = serviceScope.launch {
             delay(MOBILE_NETWORK_DEBOUNCE_MS)
@@ -1120,6 +1152,7 @@ class LevikVpnService : VpnService() {
             } catch (_: Throwable) {
                 WhitelistMode.UNKNOWN
             }
+            lastProbeMode = mode
             VpnStateStore.update(coreOwner) { snapshot ->
                 snapshot.copy(whitelistMode = mode)
             }
@@ -2069,6 +2102,7 @@ class LevikVpnService : VpnService() {
                         AppLogger.d(LOG_TAG, "Ignoring tunnel health failure during network grace period")
                     }
                     TunnelHealthAssessment.DEGRADED -> {
+                        wakeAllowlistProbe()
                         AppLogger.w(
                             LOG_TAG,
                             "Auto-healing health check failed " +
@@ -2077,6 +2111,7 @@ class LevikVpnService : VpnService() {
                         )
                     }
                     TunnelHealthAssessment.UNHEALTHY -> {
+                        wakeAllowlistProbe()
                         AppLogger.w(
                             LOG_TAG,
                             "Tunnel health checks failed across all endpoints: ${probe.failureSummary()}",
@@ -2118,6 +2153,7 @@ class LevikVpnService : VpnService() {
         val server = currentServer ?: return
         val network = currentNetwork ?: return
         AppLogger.w(LOG_TAG, "Smart Auto: the tunnel sends but hardly receives; checking traffic")
+        wakeAllowlistProbe()
         launchTrafficCheck(server, network, initialDelayMs = 0L)
     }
 
@@ -2138,6 +2174,7 @@ class LevikVpnService : VpnService() {
                 return@launch
             }
             if (passed) {
+                freezeDetector.checkPassed()
                 smartAuto.recordSuccess(server, network)
                 smartLadder.reset()
                 tunnelHealthPolicy.markCandidateHealthy(server.id)
@@ -2157,6 +2194,7 @@ class LevikVpnService : VpnService() {
     private suspend fun onAllowlistTrafficChecked(server: TunnelServer, network: Network, passed: Boolean) {
         val smartAuto = container.appPlatform.smartAuto
         if (passed) {
+            freezeDetector.checkPassed()
             if (lastWhitelistMode == WhitelistMode.ACTIVE) smartAuto.recordAllowlistSuccess(server, network)
             tunnelHealthPolicy.markCandidateHealthy(server.id)
             AppLogger.i(LOG_TAG, "Allowlists: traffic passes on ${server.smartProtocol()}")
@@ -2800,7 +2838,7 @@ class LevikVpnService : VpnService() {
         private const val RECONNECT_DEBOUNCE_MS = 750L
         private const val MOBILE_NETWORK_DEBOUNCE_MS = 1_500L
         private const val MOBILE_AUTOMATION_INITIAL_DELAY_MS = 8_000L
-        private const val MOBILE_AUTOMATION_INTERVAL_MS = 30_000L
+        private const val MOBILE_IDLE_INTERVAL_MS = 5 * 60_000L
         private const val MOBILE_CONFIRM_INTERVAL_MS = 6_000L
         private const val ALLOWLIST_MAX_CLIMBS = 4
         private const val AUTOMATIC_SWITCH_ROLLBACK_DELAY_MS = 1_000L

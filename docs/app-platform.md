@@ -123,8 +123,10 @@ seconds at most. The server list moves the automatic choice only to a server
 scoring at least 25% better, and failover uses the same order.
 
 The check runs again mid-session when the tunnel looks frozen: over 12
-seconds at least 24 KB went out and less than half as much came back (at most
-once every two minutes; a false alarm costs one 64 KB download). When the
+seconds at least 24 KB went out and less than half as much came back. A false
+alarm costs one 64 KB download, and each one doubles the wait before the next
+alarm, from 2 to at most 16 minutes, since large uploads look the same; a new
+connection starts at 2 minutes again. When the
 ladder changes protocol, the app says so ("VLESS Reality does not work on this
 network. Switched to Hysteria 2"). The history also names, per network, the
 server that last passed the check; when the phone moves to a known network,
@@ -134,9 +136,15 @@ busy below 0.75, crowded above.
 
 #### Allowlists
 
-While connected on mobile data, the Android app probes the physical network
-every 30 seconds and on every network change (domestic sites answer, foreign
-ones do not). Two probes in a row, the second 6 seconds after the first, move
+While connected on mobile data or to a mobile server, the Android app probes
+the physical network for allowlists (domestic sites answer, foreign ones do
+not): on every network change, then every 30 seconds, every 2 minutes after
+two equal answers, and every 5 minutes after two more (2 minutes at most on a
+mobile server, whose traffic is limited). A changed answer, a new network, a
+failing health check or a tunnel that looks frozen starts over at 30 seconds.
+On Wi-Fi with a regular server the app does not probe at all, since
+allowlists change nothing there. Two probes in a row, the second 6 seconds
+after the first, move
 the connection to a mobile server, whether the server was chosen in Auto mode
 or by hand. A regular server the user picks by hand while allowlists are on
 stays until the network changes or allowlists end.
