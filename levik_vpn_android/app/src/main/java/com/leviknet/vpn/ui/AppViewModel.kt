@@ -2005,13 +2005,13 @@ class AppViewModel(
                 )
             )
         if (refreshRequired) {
-            if (vpnController.state.value.state in ACTIVE_TUNNEL_STATES) {
-                if (cached == null) {
-                    vpnController.disconnect(SessionEnd(EndBy.SYSTEM, null))
-                }
+            if (cached == null && vpnController.state.value.state in ACTIVE_TUNNEL_STATES) {
+                vpnController.disconnect(SessionEnd(EndBy.SYSTEM, null))
                 profileRefreshPending = true
                 return syncCachedProfile()
             }
+            // The service keeps its admitted server and engine request independently of this
+            // cache. Publishing a fresh list must not reconfigure or switch the running tunnel.
             return try {
                 val refreshed = prepareTunnelWithRetry(requireNotNull(matchingSubscription).uuid)
                 profileRefreshPending = false
