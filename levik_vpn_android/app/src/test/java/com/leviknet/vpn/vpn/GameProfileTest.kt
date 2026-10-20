@@ -139,6 +139,40 @@ class GameProfileTest {
         assertFalse(built.toString().contains(token))
     }
 
+    @Test
+    fun `with a carrier the match stays on Game and everything else takes the ordinary server`() {
+        val config = GameProfile.split(listOf(gameDe), access(), includeGame = true).game!!.gameConfig!!
+        val endpoint = GameSidecarEndpoint(
+            port = 40000,
+            uuid = "01234567-89ab-cdef-0123-456789abcdef",
+            socksPorts = listOf(40001),
+            socksPassword = "p".repeat(36),
+        )
+        val built = Json.parseToJsonElement(
+            XrayConfigBuilder(Json, Clock.fixed(Instant.parse("2026-10-20T12:00:00Z"), ZoneOffset.UTC))
+                .buildGame(config, 42, endpoint, carrier = ordinary, russianDirectCidrs = listOf("5.0.0.0/8")),
+        ).jsonObject
+
+        val outbounds = built.getValue("outbounds").jsonArray.map { it.jsonObject }
+        val carrier = outbounds.single { it.getValue("tag").jsonPrimitive.content == XrayConfigBuilder.GAME_CARRIER_TAG }
+        assertEquals("vless", carrier.getValue("protocol").jsonPrimitive.content)
+
+        val tunRules = built.getValue("routing").jsonObject.getValue("rules").jsonArray.map { it.jsonObject }
+            .filter { it["inboundTag"]?.jsonArray?.single()?.jsonPrimitive?.content == "levik-tun-in" }
+        fun target(network: String, port: String? = null, ip: String? = null) = tunRules.first { rule ->
+            (rule["network"]?.jsonPrimitive?.content ?: network) == network &&
+                (rule["port"] == null || rule["port"]?.jsonPrimitive?.content == port) &&
+                (rule["ip"] == null || rule["ip"]!!.jsonArray.any { it.jsonPrimitive.content == ip })
+        }.getValue("outboundTag").jsonPrimitive.content
+        assertEquals("levik-game-carrier", target("tcp", ip = "34.110.179.88"))
+        assertEquals("levik-game-carrier", target("udp", port = "53,443,853", ip = "34.110.179.88"))
+        assertEquals("levik-game-multipath", target("udp", port = "10326", ip = "34.110.179.88"))
+        assertEquals("levik-direct", target("tcp", ip = "5.0.0.0/8"))
+        // Russian game servers still get the two paths.
+        assertEquals("levik-game-multipath", target("udp", port = "7777", ip = "5.0.0.0/8"))
+        assertEquals("levik-block", target("tcp", ip = "::/0"))
+    }
+
     private fun server(id: String, address: String, port: Int) = TunnelServer(
         id = id,
         tag = id,

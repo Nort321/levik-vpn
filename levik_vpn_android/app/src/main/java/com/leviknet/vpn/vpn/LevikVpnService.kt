@@ -602,18 +602,28 @@ class LevikVpnService : VpnService() {
                         secondaryDns = secondaryDns,
                     ),
                 )
-                TunnelEngineKind.LEVIK_GAME -> TunnelEngineRequest.Game(
-                    config = requireNotNull(selected.gameConfig) {
+                TunnelEngineKind.LEVIK_GAME -> {
+                    val gameConfig = requireNotNull(selected.gameConfig) {
                         "Levik Game server has no configuration"
-                    },
+                    }
+                    // The game's sign-in, shop and chat (TCP, DNS, QUIC) take the fastest ordinary
+                    // server, so games that Russia blocks work; Levik Game alone keeps them direct.
+                    val carrier = if (gameConfig.only) null else gameCarrier(profile, network)
+                    GameStatusStore.setCarrier(carrier?.name)
+                    AppLogger.i(LOG_TAG, "Levik Game: other game traffic ${if (carrier == null) "goes direct" else "takes ${carrier.smartProtocol()}"}")
+                    TunnelEngineRequest.Game(
+                    config = gameConfig,
                     preferredExitId = container.settings.gameExitId.value,
                     configFactory = GameXrayConfigFactory { tunFileDescriptor, endpoint ->
                         XrayConfigBuilder(container.json).buildGame(
-                            config = requireNotNull(selected.gameConfig),
+                            config = gameConfig,
                             tunFileDescriptor = tunFileDescriptor,
                             endpoint = endpoint,
                             primaryDnsIp = primaryDns,
                             secondaryDnsIp = secondaryDns,
+                            carrier = carrier,
+                            russianDirectCidrs = container.russianRoutingData.cidrs,
+                            xhttpMuxHosts = container.appPlatform.xhttpMuxHosts(),
                         )
                     },
                     tunPlan = xrayTunPlan(
@@ -621,6 +631,7 @@ class LevikVpnService : VpnService() {
                         secondaryDns = secondaryDns,
                     ),
                 )
+                }
                 TunnelEngineKind.LEVIK_RELAY -> TunnelEngineRequest.Relay(
                     config = requireNotNull(selected.relayConfig) {
                         "Relay server has no bootstrap configuration"
@@ -983,7 +994,8 @@ class LevikVpnService : VpnService() {
     /** Levik Game carries only the selected games; null for every other server. */
     private fun gamePackagesFor(server: TunnelServer): Set<String>? {
         if (server.engine != TunnelEngineKind.LEVIK_GAME) return null
-        val packages = container.settings.gamePackages.value - packageName
+        // Saved or imported choices are checked again: only installed games without a VPN of their own.
+        val packages = GameApps.eligible(packageManager, container.settings.gamePackages.value, packageName)
         if (packages.isEmpty()) throw TunnelEngineFailureException("game_no_apps")
         return packages
     }
@@ -2302,6 +2314,18 @@ class LevikVpnService : VpnService() {
         connectionJob = serviceScope.launch {
             stopConnection(stopService = false)
             connect()
+        }
+    }
+
+    /** The fastest working ordinary Xray server for Levik Game's other traffic; null when there is none. */
+    private suspend fun gameCarrier(profile: PreparedTunnelProfile, network: Network?): TunnelServer? {
+        val pool = profile.servers.filter {
+            it.engine == TunnelEngineKind.XRAY && it.isSmartAutoCandidate() && !container.appPlatform.underMaintenance(it)
+        }
+        if (pool.isEmpty()) return null
+        val measured = measureLatencies(pool)
+        return container.appPlatform.smartAuto.rank(pool, measured, network).firstNotNullOfOrNull { item ->
+            pool.firstOrNull { it.id == item.id }?.takeIf { measured[it.id] != null }
         }
     }
 

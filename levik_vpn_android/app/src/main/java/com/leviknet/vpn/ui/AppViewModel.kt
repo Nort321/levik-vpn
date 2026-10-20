@@ -57,6 +57,7 @@ import com.leviknet.vpn.data.relayProfileRefreshDue
 import com.leviknet.vpn.vpn.YandexProviderAuth
 import com.leviknet.vpn.vpn.refreshYandexGuest
 import com.leviknet.vpn.vpn.selectYandexGuestNetwork
+import com.leviknet.vpn.vpn.GameApps
 import com.leviknet.vpn.vpn.GameRuntimeStatus
 import com.leviknet.vpn.vpn.GameStatusStore
 import com.leviknet.vpn.vpn.PreparedTunnelProfile
@@ -348,6 +349,9 @@ class AppViewModel(
         }
         viewModelScope.launch {
             GameStatusStore.status.collect { status -> mutableState.update { it.copy(gameStatus = status) } }
+        }
+        viewModelScope.launch {
+            GameStatusStore.carrier.collect { name -> mutableState.update { it.copy(gameCarrier = name) } }
         }
         viewModelScope.launch {
             settings.dnsProvider.collect { dns ->
@@ -2321,7 +2325,8 @@ class AppViewModel(
     }
 
     fun importGamePackages(text: String): Int {
-        val imported = SplitTunnelPackageList.parse(text) - BuildConfig.APPLICATION_ID
+        val games = mutableState.value.installedApps.filter(InstalledAppItem::game).mapTo(mutableSetOf(), InstalledAppItem::packageName)
+        val imported = SplitTunnelPackageList.parse(text) intersect games
         val added = imported - settings.gamePackages.value
         if (added.isNotEmpty()) {
             settings.setGamePackages(settings.gamePackages.value + added)
@@ -2475,6 +2480,7 @@ class AppViewModel(
                 AppLogger.w("AppViewModel", "Unable to load installed applications")
                 return@launch
             }
+            val vpnPackages = GameApps.vpnPackages(packageManager)
             val apps = applications.mapNotNull { info ->
                 val pkg = info.packageName
                 if (pkg == BuildConfig.APPLICATION_ID) return@mapNotNull null
@@ -2482,7 +2488,7 @@ class AppViewModel(
                 val name = runCatching { info.loadLabel(packageManager).toString() }
                     .getOrDefault(pkg)
                 val icon = runCatching { info.loadIcon(packageManager) }.getOrNull()
-                InstalledAppItem(packageName = pkg, label = name, icon = icon, game = isGameApplication(info))
+                InstalledAppItem(packageName = pkg, label = name, icon = icon, game = GameApps.isGame(info) && pkg !in vpnPackages)
             }.distinctBy { it.packageName }.sortedBy { it.label.lowercase(java.util.Locale.ROOT) }
             mutableState.update { it.copy(installedApps = apps) }
         }
@@ -3103,15 +3109,11 @@ data class InstalledAppItem(
     val packageName: String,
     val label: String,
     val icon: android.graphics.drawable.Drawable?,
-    /** The app declares itself a game: Levik Game lists it first. */
+    /** The app declares itself a game and has no VPN of its own: Levik Game may carry it. */
     val game: Boolean = false,
 )
 
-@Suppress("DEPRECATION")
-private fun isGameApplication(info: android.content.pm.ApplicationInfo): Boolean =
-    (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O &&
-        info.category == android.content.pm.ApplicationInfo.CATEGORY_GAME) ||
-        info.flags and android.content.pm.ApplicationInfo.FLAG_IS_GAME != 0
+
 
 data class AppTrafficUsage(
     val packageName: String,
@@ -3193,6 +3195,8 @@ data class AppUiState(
     val gamePackages: Set<String> = emptySet(),
     val gameExitId: String? = null,
     val gameStatus: GameRuntimeStatus? = null,
+    /** The ordinary server carrying the games' sign-in, shop and chat in this connection. */
+    val gameCarrier: String? = null,
     val installedApps: List<InstalledAppItem> = emptyList(),
     val perAppTraffic: List<AppTrafficUsage> = emptyList(),
     val liveSpeedHistory: List<SpeedSample> = emptyList(),

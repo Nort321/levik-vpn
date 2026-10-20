@@ -26,8 +26,15 @@ data class GameRuntimeStatus(
 object GameStatusStore {
     private val mutableStatus = MutableStateFlow<GameRuntimeStatus?>(null)
     val status: StateFlow<GameRuntimeStatus?> = mutableStatus.asStateFlow()
+    private val mutableCarrier = MutableStateFlow<String?>(null)
+    /** The ordinary server that carries the games' sign-in, shop and chat; null when they go direct. */
+    val carrier: StateFlow<String?> = mutableCarrier.asStateFlow()
 
     fun update(status: GameRuntimeStatus?) {
         mutableStatus.value = status
+    }
+
+    fun setCarrier(name: String?) {
+        mutableCarrier.value = name
     }
 }

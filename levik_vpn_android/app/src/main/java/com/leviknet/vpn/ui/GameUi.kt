@@ -82,6 +82,7 @@ internal fun GameSettingsRow(selectedCount: Int, onClick: () -> Unit) {
 @Composable
 internal fun GameSettingsDialog(
     config: GameServerConfig,
+    carrier: String?,
     selectedCount: Int,
     exitId: String?,
     status: GameRuntimeStatus?,
@@ -106,6 +107,15 @@ internal fun GameSettingsDialog(
                 Text(
                     text = stringResource(R.string.game_intro),
                     style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = when {
+                        config.only -> stringResource(R.string.game_other_traffic_direct)
+                        carrier != null -> stringResource(R.string.game_other_traffic_carrier, carrier)
+                        else -> stringResource(R.string.game_other_traffic_fastest)
+                    },
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 if (status != null) {

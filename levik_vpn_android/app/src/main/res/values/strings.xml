@@ -197,7 +197,11 @@
     <string name="game_title">Levik Game</string>
     <string name="game_no_games">Choose your games</string>
     <string name="game_games_count">Games: %1$d</string>
-    <string name="game_intro">Levik Game carries only the chosen games: their game traffic goes to the game server along two paths at once, so a lost packet does not cost you the round. Everything else, including game downloads and the other apps, stays on your own internet.</string>
+    <string name="game_intro">Levik Game carries only the chosen games. The match itself goes to the game server along two paths at once, so a lost packet does not cost you the round. Other apps work without the VPN.</string>
+    <string name="game_other_traffic_fastest">The game\'s sign-in, shop and chat take your fastest ordinary server, so games unavailable in Russia work too.</string>
+    <string name="game_other_traffic_carrier">The game\'s sign-in, shop and chat: through %1$s.</string>
+    <string name="game_other_traffic_direct">With Levik Game alone the game\'s sign-in, shop and chat use your own internet. A game unavailable in Russia needs an ordinary subscription.</string>
+    <string name="game_select_apps_note">Only games are listed: Levik Game does not carry browsers or apps with a VPN of their own.</string>
     <string name="game_select_apps">Choose games (%1$d selected)</string>
     <string name="game_exit_title">Game server</string>
     <string name="game_exit_auto">Auto (lowest ping)</string>

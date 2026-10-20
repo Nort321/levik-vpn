@@ -197,7 +197,11 @@
     <string name="game_title">Levik Game</string>
     <string name="game_no_games">Выберите игры</string>
     <string name="game_games_count">Игры: %1$d</string>
-    <string name="game_intro">Levik Game ведёт только выбранные игры: их игровой трафик идёт к игровому серверу сразу двумя путями, и потерянный пакет не стоит вам раунда. Всё остальное, включая загрузки игр и другие приложения, идёт через ваш обычный интернет.</string>
+    <string name="game_intro">Levik Game ведёт только выбранные игры. Сам матч идёт к игровому серверу сразу двумя путями, и потерянный пакет не стоит вам раунда. Другие приложения работают без VPN.</string>
+    <string name="game_other_traffic_fastest">Вход в игру, магазин и чат идут через ваш самый быстрый обычный сервер, поэтому работают и игры, недоступные в России.</string>
+    <string name="game_other_traffic_carrier">Вход в игру, магазин и чат: через %1$s.</string>
+    <string name="game_other_traffic_direct">На тарифе «только Game» вход в игру, магазин и чат идут через ваш обычный интернет. Для игры, недоступной в России, нужна обычная подписка.</string>
+    <string name="game_select_apps_note">Показаны только игры: Levik Game не ведёт браузеры и приложения со своим VPN.</string>
     <string name="game_select_apps">Выбрать игры (выбрано: %1$d)</string>
     <string name="game_exit_title">Игровой сервер</string>
     <string name="game_exit_auto">Авто (минимальный пинг)</string>

@@ -716,13 +716,13 @@ fun LevikVpnApp(viewModel: AppViewModel) {
 
     val gameConfig = state.profile?.servers?.firstOrNull { it.engine == TunnelEngineKind.LEVIK_GAME }?.gameConfig
     if (showGameDialog && gameConfig != null) {
+        val gameConnected = state.vpn.state == VpnConnectionState.CONNECTED && state.vpn.engine == TunnelEngineKind.LEVIK_GAME
         GameSettingsDialog(
             config = gameConfig,
+            carrier = state.gameCarrier.takeIf { gameConnected },
             selectedCount = state.gamePackages.size,
             exitId = state.gameExitId,
-            status = state.gameStatus.takeIf {
-                state.vpn.state == VpnConnectionState.CONNECTED && state.vpn.engine == TunnelEngineKind.LEVIK_GAME
-            },
+            status = state.gameStatus.takeIf { gameConnected },
             onSelectApps = { showGameAppSelectorDialog = true },
             onExitSelected = viewModel::setGameExit,
             onDismiss = { showGameDialog = false },
@@ -731,12 +731,14 @@ fun LevikVpnApp(viewModel: AppViewModel) {
 
     if (showGameAppSelectorDialog) {
         AppSelectorDialog(
-            apps = state.installedApps.sortedByDescending(InstalledAppItem::game),
+            // Only games: Levik Game is never a VPN for a browser or a proxy client.
+            apps = state.installedApps.filter(InstalledAppItem::game),
             selectedPackages = state.gamePackages,
             onTogglePackage = viewModel::toggleGamePackage,
             onImportPackages = viewModel::importGamePackages,
             onDismiss = { showGameAppSelectorDialog = false },
             title = stringResource(R.string.game_select_apps, state.gamePackages.size),
+            note = stringResource(R.string.game_select_apps_note),
         )
     }
 
@@ -5950,6 +5952,7 @@ private fun AppSelectorDialog(
     onImportPackages: (String) -> Int,
     onDismiss: () -> Unit,
     title: String = stringResource(R.string.split_tunnel_select_apps, selectedPackages.size),
+    note: String? = null,
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
@@ -5975,6 +5978,14 @@ private fun AppSelectorDialog(
         title = { Text(title, fontWeight = FontWeight.Bold) },
         text = {
             Column(modifier = Modifier.heightIn(max = 420.dp)) {
+                if (note != null) {
+                    Text(
+                        text = note,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(
                         enabled = selectedPackages.isNotEmpty(),

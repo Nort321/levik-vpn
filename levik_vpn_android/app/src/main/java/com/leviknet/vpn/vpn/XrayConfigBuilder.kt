@@ -351,9 +351,22 @@ class XrayConfigBuilder(
         endpoint: GameSidecarEndpoint,
         primaryDnsIp: String = PRIMARY_DNS_IP,
         secondaryDnsIp: String = SECONDARY_DNS_IP,
+        /** The ordinary server for everything but the match itself; null sends that direct. */
+        carrier: TunnelServer? = null,
+        /** With a carrier, Russian addresses still go direct, as on an ordinary server. */
+        russianDirectCidrs: List<String> = emptyList(),
+        xhttpMuxHosts: Set<String> = emptySet(),
     ): String {
         require(tunFileDescriptor >= 0) { "Invalid TUN file descriptor" }
         require(config.routes.isNotEmpty() && config.routes.size == endpoint.socksPorts.size) { "Game routes do not match the sidecar" }
+        val carrierOutbound = carrier?.let { server ->
+            require(server.engine == TunnelEngineKind.XRAY) { "The Game carrier must be an Xray server" }
+            validateServers(listOf(server))
+            val repaired = server.copy(outbound = enableXhttpMux(RealityRepair.repair(server.outbound), xhttpMuxHosts))
+            requireRealityServerNames(repaired)
+            JsonObject(repaired.outbound + ("tag" to JsonPrimitive(GAME_CARRIER_TAG)))
+        }
+        val other = if (carrierOutbound != null) GAME_CARRIER_TAG else DIRECT_TAG
         val routes = config.routes.map { route ->
             val protocol = (route.outbound["protocol"] as? JsonPrimitive)?.contentOrNull?.lowercase()
             require(protocol in SELECTABLE_PROTOCOLS && protocol != "socks") { "Unsupported Game route protocol" }
@@ -415,6 +428,7 @@ class XrayConfigBuilder(
                     put("settings", buildJsonObject { put("domainStrategy", "UseIPv4") })
                 })
                 routes.forEach(::add)
+                carrierOutbound?.let(::add)
                 add(buildJsonObject {
                     put("tag", GAME_MULTIPATH_TAG)
                     put("protocol", "vless")
@@ -468,14 +482,32 @@ class XrayConfigBuilder(
                     add(rule {
                         put("inboundTag", tun)
                         put("ip", buildJsonArray { add(JsonPrimitive(IPV6_DEFAULT_ROUTE)) })
-                        put("outboundTag", DIRECT_TAG)
+                        // The carrier is IPv4: IPv6 is refused so that the game falls back to it.
+                        put("outboundTag", if (carrierOutbound != null) BLOCK_TAG else DIRECT_TAG)
                     })
+                    if (carrierOutbound != null && russianDirectCidrs.isNotEmpty()) {
+                        val russian = JsonArray(russianDirectCidrs.distinct().map(::JsonPrimitive))
+                        add(rule {
+                            put("inboundTag", tun)
+                            put("ip", russian)
+                            put("network", "tcp")
+                            put("outboundTag", DIRECT_TAG)
+                        })
+                        add(rule {
+                            put("inboundTag", tun)
+                            put("ip", russian)
+                            put("port", "53,443,853")
+                            put("network", "udp")
+                            put("outboundTag", DIRECT_TAG)
+                        })
+                    }
                     add(rule {
                         put("inboundTag", tun)
                         put("port", "53,443,853")
                         put("network", "udp")
-                        put("outboundTag", DIRECT_TAG)
+                        put("outboundTag", other)
                     })
+                    // The match itself, Russian game servers included, goes through Levik Game.
                     add(rule {
                         put("inboundTag", tun)
                         put("network", "udp")
@@ -484,7 +516,7 @@ class XrayConfigBuilder(
                     add(rule {
                         put("inboundTag", tun)
                         put("network", "tcp")
-                        put("outboundTag", DIRECT_TAG)
+                        put("outboundTag", other)
                     })
                     add(rule {
                         put("network", "tcp,udp")
@@ -659,6 +691,7 @@ class XrayConfigBuilder(
         internal fun gameProbeTag(index: Int) = "levik-game-probe-$index"
         private const val IPV6_DEFAULT_ROUTE = "::/0"
         internal const val TUN_MTU = 1500
+        internal const val GAME_CARRIER_TAG = "levik-game-carrier"
         private const val MAX_SERVERS = 200
         private val SAFE_TAG = Regex("[A-Za-z0-9._:-]{1,128}")
         private val APP_OWNED_TAGS = setOf(TUN_INBOUND_TAG, DIRECT_TAG, BLOCK_TAG, FRAGMENT_TAG)
