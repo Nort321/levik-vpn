@@ -2320,13 +2320,22 @@ class LevikVpnService : VpnService() {
     /** The fastest working ordinary Xray server for Levik Game's other traffic; null when there is none. */
     private suspend fun gameCarrier(profile: PreparedTunnelProfile, network: Network?): TunnelServer? {
         val pool = profile.servers.filter {
-            it.engine == TunnelEngineKind.XRAY && it.isSmartAutoCandidate() && !container.appPlatform.underMaintenance(it)
+            it.engine == TunnelEngineKind.XRAY && it.isSmartAutoCandidate() && !container.appPlatform.underMaintenance(it) &&
+                // The Game configuration holds this one outbound: it cannot dial through another.
+                "dialerProxy" !in it.outbound.toString()
         }
-        if (pool.isEmpty()) return null
+        if (pool.isEmpty()) {
+            AppLogger.w(LOG_TAG, "Levik Game: the profile has no ordinary Xray server for the other game traffic")
+            return null
+        }
         val measured = measureLatencies(pool)
-        return container.appPlatform.smartAuto.rank(pool, measured, network).firstNotNullOfOrNull { item ->
-            pool.firstOrNull { it.id == item.id }?.takeIf { measured[it.id] != null }
-        }
+        val ranked = container.appPlatform.smartAuto.rank(pool, measured, network)
+            .mapNotNull { item -> pool.firstOrNull { it.id == item.id } }
+        // A ping that does not come back is not proof of a dead server: then the user's own
+        // last ordinary server, else Smart Auto's best by history.
+        val last = readSecureString(SecureFileStore.LAST_REGULAR_SERVER)?.let { id -> pool.firstOrNull { it.id == id } }
+        AppLogger.i(LOG_TAG, "Levik Game: ${pool.size} ordinary servers, ${measured.values.count { it != null }} answered")
+        return ranked.firstOrNull { measured[it.id] != null } ?: last ?: ranked.firstOrNull() ?: pool.first()
     }
 
     private suspend fun measureLatencies(servers: List<TunnelServer>): Map<String, Long?> = supervisorScope {
