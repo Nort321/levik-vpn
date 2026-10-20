@@ -288,6 +288,10 @@ class AppSettings(context: Context) {
     private val mutableSplitTunnelPackages = MutableStateFlow(
         preferences.getStringSet(SPLIT_TUNNEL_PACKAGES, emptySet()) ?: emptySet(),
     )
+    private val mutableGamePackages = MutableStateFlow(
+        preferences.getStringSet(GAME_PACKAGES, emptySet())?.toSet() ?: emptySet(),
+    )
+    private val mutableGameExitId = MutableStateFlow(preferences.getString(GAME_EXIT_ID, null))
     private val mutableDnsProvider = MutableStateFlow(
         runCatching {
             DnsProvider.valueOf(
@@ -366,6 +370,10 @@ class AppSettings(context: Context) {
     val automaticServer: StateFlow<Boolean> = mutableAutomaticServer.asStateFlow()
     val splitTunnelMode: StateFlow<SplitTunnelMode> = mutableSplitTunnelMode.asStateFlow()
     val splitTunnelPackages: StateFlow<Set<String>> = mutableSplitTunnelPackages.asStateFlow()
+    /** Apps Levik Game carries (Direct only); the VPN of Levik Game contains only these. */
+    val gamePackages: StateFlow<Set<String>> = mutableGamePackages.asStateFlow()
+    /** The Game node the user chose as exit; null means the fastest. */
+    val gameExitId: StateFlow<String?> = mutableGameExitId.asStateFlow()
     val dnsProvider: StateFlow<DnsProvider> = mutableDnsProvider.asStateFlow()
     val customDnsIpv4: StateFlow<String> = mutableCustomDnsIpv4.asStateFlow()
     val themeMode: StateFlow<ThemeMode> = mutableThemeMode.asStateFlow()
@@ -580,6 +588,18 @@ class AppSettings(context: Context) {
         mutableAnsweredDirectApps.value = answered
     }
 
+    fun setGamePackages(packages: Set<String>) {
+        preferences.edit(commit = true) { putStringSet(GAME_PACKAGES, packages) }
+        mutableGamePackages.value = packages
+    }
+
+    fun setGameExitId(nodeId: String?) {
+        preferences.edit(commit = true) {
+            if (nodeId == null) remove(GAME_EXIT_ID) else putString(GAME_EXIT_ID, nodeId)
+        }
+        mutableGameExitId.value = nodeId
+    }
+
     fun setSplitTunnelPackages(packages: Set<String>) {
         preferences.edit(commit = true) {
             putStringSet(SPLIT_TUNNEL_PACKAGES, packages)
@@ -756,6 +776,8 @@ class AppSettings(context: Context) {
         private const val AUTOMATIC_SERVER = "automatic_server"
         private const val SPLIT_TUNNEL_MODE = "split_tunnel_mode"
         private const val SPLIT_TUNNEL_PACKAGES = "split_tunnel_packages"
+        private const val GAME_PACKAGES = "game_packages"
+        private const val GAME_EXIT_ID = "game_exit_id"
         private const val DNS_PROVIDER = "dns_provider"
         private const val CUSTOM_DNS_IPV4 = "custom_dns_ipv4"
         private const val THEME_MODE = "theme_mode"

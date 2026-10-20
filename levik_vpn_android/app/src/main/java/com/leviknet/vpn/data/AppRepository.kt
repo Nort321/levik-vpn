@@ -924,7 +924,7 @@ internal fun mergeYandexProfile(base: PreparedTunnelProfile?, yandex: PreparedTu
     )
 }
 
-private val REGULAR_PROFILE_ENGINES = setOf(TunnelEngineKind.XRAY, TunnelEngineKind.LEVIK_TUIC)
+private val REGULAR_PROFILE_ENGINES = setOf(TunnelEngineKind.XRAY, TunnelEngineKind.LEVIK_TUIC, TunnelEngineKind.LEVIK_GAME)
 
 internal fun mergePreparedProfiles(
     xray: PreparedTunnelProfile,

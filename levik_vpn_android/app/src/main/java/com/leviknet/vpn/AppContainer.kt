@@ -135,6 +135,7 @@ class AppContainer(application: Application) {
         tunnelProfilePreparer = TunnelProfilePreparer(
             xrayRuntime,
             includeTuic = TunnelEngineKind.LEVIK_TUIC in tunnelEngineRegistry.supportedProfileEngines,
+            includeGame = TunnelEngineKind.LEVIK_GAME in tunnelEngineRegistry.supportedProfileEngines,
         ),
         supportedTunnelEngines = tunnelEngineRegistry.supportedProfileEngines,
         json = json,

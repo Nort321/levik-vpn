@@ -107,6 +107,8 @@ val yandexNativeProjectDir = rootProject.file("native/yandex")
 val yandexNativeJniDir = yandexNativeProjectDir.resolve("build/android/jniLibs")
 val tuicNativeProjectDir = rootProject.file("native/tuic")
 val tuicNativeJniDir = tuicNativeProjectDir.resolve("build/android/jniLibs")
+val gameNativeProjectDir = rootProject.file("native/game")
+val gameNativeJniDir = gameNativeProjectDir.resolve("build/android/jniLibs")
 val relayNativeProjectDir = rootProject.file("../levik_whitelist_relay")
 val relayNativeJniDir = rootProject.file("../levik_whitelist_relay/build/android/jniLibs")
 val relayNativeBuildScript = relayNativeProjectDir.resolve("scripts/build-android-client.sh")
@@ -272,7 +274,7 @@ android {
         }
     }
 
-    sourceSets.getByName("direct").jniLibs.srcDirs(relayNativeJniDir, yandexNativeJniDir, tuicNativeJniDir)
+    sourceSets.getByName("direct").jniLibs.srcDirs(relayNativeJniDir, yandexNativeJniDir, tuicNativeJniDir, gameNativeJniDir)
 
     buildFeatures {
         buildConfig = true
@@ -452,6 +454,33 @@ val validateDirectTuicNativeRuntime by tasks.registering {
     }
 }
 
+val buildDirectGameNative by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Builds the Direct-only Levik Game helper (standard library only) with pinned Go and NDK."
+    workingDir(gameNativeProjectDir)
+    val goBinary = providers.environmentVariable("GAME_GO_BIN")
+        .orElse(providers.environmentVariable("GO_BIN")).orElse("go")
+    environment("GO_BIN", goBinary.get())
+    inputs.property("gameGoBinary", goBinary)
+    commandLine("bash", gameNativeProjectDir.resolve("scripts/build-android-helper.sh").absolutePath)
+    inputs.files(gameNativeProjectDir.resolve("scripts/build-android-helper.sh"),
+        fileTree(gameNativeProjectDir.resolve("source")) {
+            include("**/*.go", "go.mod")
+            exclude("**/*_test.go")
+        })
+    outputs.dir(gameNativeJniDir)
+}
+
+val validateDirectGameNativeRuntime by tasks.registering {
+    group = "verification"
+    dependsOn(buildDirectGameNative)
+    doLast {
+        relayNativeAbis.forEach { (abi, expected) ->
+            validateRelayElf(gameNativeJniDir.resolve("$abi/liblevikgame.so"), abi, expected.first, expected.second)
+        }
+    }
+}
+
 val validateDirectRelayNativeRuntime by tasks.registering {
     group = "verification"
     description = "Fails Direct release builds without every audited relay native executable."
@@ -479,7 +508,7 @@ val verifyPlayRelayExclusion by tasks.registering {
         val leaked = forbiddenSourceRoots
             .filter(File::exists)
             .flatMap { root -> root.walkTopDown().filter(File::isFile).toList() }
-            .filter { it.name in setOf("liblevikrelay.so", "liblevikyandex.so", "libleviktuic.so") }
+            .filter { it.name in setOf("liblevikrelay.so", "liblevikyandex.so", "libleviktuic.so", "liblevikgame.so") }
         check(leaked.isEmpty()) {
             "Play-visible source sets contain Direct-only relay artifacts: " +
                 leaked.joinToString { it.absolutePath }
@@ -509,7 +538,7 @@ val verifyPlayPackagedRelayExclusion by tasks.registering {
                 val forbidden = zip.entries().asSequence()
                     .map { entry -> entry.name }
                     .filter { entry ->
-                        entry.substringAfterLast('/').lowercase() in setOf("liblevikrelay.so", "liblevikyandex.so", "libleviktuic.so")
+                        entry.substringAfterLast('/').lowercase() in setOf("liblevikrelay.so", "liblevikyandex.so", "libleviktuic.so", "liblevikgame.so")
                     }
                     .toList()
                 check(forbidden.isEmpty()) {
@@ -639,6 +668,7 @@ tasks.configureEach {
             validateDirectRelayNativeRuntime,
             validateDirectYandexNativeRuntime,
             validateDirectTuicNativeRuntime,
+            validateDirectGameNativeRuntime,
             verifyDirectReleaseRuntimeClasspath,
         )
     }
@@ -648,7 +678,7 @@ tasks.configureEach {
     if (name.startsWith("mergeDirect") &&
         (name.endsWith("JniLibFolders") || name.endsWith("NativeLibs"))
     ) {
-        dependsOn(validateDirectRelayNativeRuntime, validateDirectYandexNativeRuntime, validateDirectTuicNativeRuntime)
+        dependsOn(validateDirectRelayNativeRuntime, validateDirectYandexNativeRuntime, validateDirectTuicNativeRuntime, validateDirectGameNativeRuntime)
     }
     if (name.matches(Regex("^(assemble|bundle)Play(Debug|Release)$"))) {
         finalizedBy(verifyPlayPackagedRelayExclusion)

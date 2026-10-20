@@ -14,7 +14,10 @@ class TunnelEngineDistributionTest {
         )
 
         assertEquals(
-            setOf(TunnelEngineKind.XRAY, TunnelEngineKind.LEVIK_RELAY, TunnelEngineKind.LEVIK_YANDEX, TunnelEngineKind.LEVIK_TUIC),
+            setOf(
+                TunnelEngineKind.XRAY, TunnelEngineKind.LEVIK_RELAY, TunnelEngineKind.LEVIK_YANDEX, TunnelEngineKind.LEVIK_TUIC,
+                TunnelEngineKind.LEVIK_GAME,
+            ),
             registry.supportedProfileEngines,
         )
         assertTrue(
@@ -27,6 +30,10 @@ class TunnelEngineDistributionTest {
         assertTrue(
             "Direct must use the native TUIC sidecar adapter",
             registry.require(TunnelEngineKind.LEVIK_TUIC) is TuicTunnelEngineAdapter,
+        )
+        assertTrue(
+            "Direct must use the native Game sidecar adapter",
+            registry.require(TunnelEngineKind.LEVIK_GAME) is GameTunnelEngineAdapter,
         )
     }
 }

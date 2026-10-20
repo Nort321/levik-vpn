@@ -7,6 +7,8 @@ class TunnelProfilePreparer(
     private val xrayRuntime: XrayRuntime,
     /** True only where the TUIC sidecar is packaged (Direct). */
     private val includeTuic: Boolean = false,
+    /** True only where the Game sidecar is packaged (Direct). */
+    private val includeGame: Boolean = false,
 ) {
     fun prepare(profile: TunnelProfile): PreparedTunnelProfile {
         val converted = xrayRuntime.convertProfile(profile)
@@ -37,7 +39,9 @@ class TunnelProfilePreparer(
             ?.takeIf { includeTuic }
             ?.let { source -> TuicLinkParser.parse(source.content) }
             .orEmpty()
-        val servers = converted.servers + tuicServers + relayServers + yandexServers + telemostServers
+        // Game node links never become ordinary servers; Direct makes them one Levik Game server.
+        val game = GameProfile.split(converted.servers + tuicServers, profile.game, includeGame)
+        val servers = game.ordinary + listOfNotNull(game.game) + relayServers + yandexServers + telemostServers
 
         require(servers.isNotEmpty()) { "Tunnel profile has no servers" }
         require(servers.size <= MAX_SERVERS) { "Tunnel profile has too many servers" }
@@ -51,6 +55,7 @@ class TunnelProfilePreparer(
         return converted.copy(
             relayCredentialExpiresAt = profile.bootstrap?.expiresAt,
             servers = servers,
+            gameOnly = game.game?.gameConfig?.only == true,
         )
     }
 

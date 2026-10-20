@@ -28,5 +28,11 @@ internal fun createTunnelEngineRegistry(
             ),
             xrayRuntime,
         ),
+        GameTunnelEngineAdapter(
+            AndroidGameNativeSessionFactory(
+                java.io.File(nativeLibraryDir, "liblevikgame.so").absolutePath,
+            ),
+            xrayRuntime,
+        ),
     ),
 )

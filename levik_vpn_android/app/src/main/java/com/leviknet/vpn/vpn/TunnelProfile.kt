@@ -19,6 +19,8 @@ data class TunnelProfile(
     val yandexBootstrap: YandexBootstrap? = null,
     val telemostBootstrap: TelemostBootstrap? = null,
     val routing: TunnelRouting? = null,
+    /** Levik Game access: which links of [source] are game nodes (GameProfile.kt). */
+    val game: TunnelGameAccess? = null,
 )
 
 @Serializable
@@ -41,6 +43,10 @@ enum class TunnelEngineKind {
     /** TUIC v5 through the Direct-only sing-box sidecar; Xray keeps TUN and routing. */
     @SerialName("levik-tuic")
     LEVIK_TUIC,
+
+    /** Levik Game: only the selected games, their UDP through the Direct-only Game sidecar. */
+    @SerialName("levik-game")
+    LEVIK_GAME,
 }
 
 @Serializable
@@ -197,6 +203,8 @@ data class PreparedTunnelProfile(
     val directDomains: List<String> = emptyList(),
     val proxyDomains: List<String> = emptyList(),
     val directApps: List<String> = emptyList(),
+    /** Levik Game alone: the subscription has no ordinary servers, only [TunnelEngineKind.LEVIK_GAME]. */
+    val gameOnly: Boolean = false,
 )
 
 @Serializable
@@ -213,6 +221,7 @@ data class TunnelServer(
     val relayConfig: RelayServerConfig? = null,
     val yandexConfig: YandexServerConfig? = null,
     val tuicConfig: TuicServerConfig? = null,
+    val gameConfig: GameServerConfig? = null,
 )
 
 fun TunnelServer.effectiveCategory(): TunnelServerCategory = category ?: legacyCategory()

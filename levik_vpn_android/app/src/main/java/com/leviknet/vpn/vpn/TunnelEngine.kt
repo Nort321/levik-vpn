@@ -89,6 +89,29 @@ fun interface RelayXrayConfigFactory {
     fun build(tunFileDescriptor: Int, proxy: LocalProxyEndpoint): String
 }
 
+/** Loopback identity of the running Game sidecar and the SOCKS inbounds Xray must open for it. */
+data class GameSidecarEndpoint(
+    val port: Int,
+    val uuid: String,
+    val socksPorts: List<Int>,
+    val socksPassword: String,
+) {
+    init {
+        require(port in 1024..65_535) { "Invalid Game listener port" }
+        require(uuid.matches(Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"))) { "Invalid Game listener id" }
+        require(socksPorts.isNotEmpty() && socksPorts.all { it in 1024..65_535 } && socksPorts.distinct().size == socksPorts.size) {
+            "Invalid Game route ports"
+        }
+        require(socksPassword.matches(Regex("[A-Za-z0-9_-]{32,128}"))) { "Invalid Game route password" }
+    }
+
+    override fun toString(): String = "GameSidecarEndpoint(port=$port, routes=${socksPorts.size})"
+}
+
+fun interface GameXrayConfigFactory {
+    fun build(tunFileDescriptor: Int, endpoint: GameSidecarEndpoint): String
+}
+
 sealed interface TunnelEngineRequest {
     data class Xray(
         val configFactory: XrayConfigFactory,
@@ -110,6 +133,14 @@ sealed interface TunnelEngineRequest {
     data class Tuic(
         val config: TuicServerConfig,
         val configFactory: RelayXrayConfigFactory,
+        val tunPlan: TunPlan,
+    ) : TunnelEngineRequest
+
+    data class Game(
+        val config: GameServerConfig,
+        /** The node the user chose as exit; null means the fastest. */
+        val preferredExitId: String?,
+        val configFactory: GameXrayConfigFactory,
         val tunPlan: TunPlan,
     ) : TunnelEngineRequest
 }

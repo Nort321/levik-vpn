@@ -57,6 +57,8 @@ import com.leviknet.vpn.data.relayProfileRefreshDue
 import com.leviknet.vpn.vpn.YandexProviderAuth
 import com.leviknet.vpn.vpn.refreshYandexGuest
 import com.leviknet.vpn.vpn.selectYandexGuestNetwork
+import com.leviknet.vpn.vpn.GameRuntimeStatus
+import com.leviknet.vpn.vpn.GameStatusStore
 import com.leviknet.vpn.vpn.PreparedTunnelProfile
 import com.leviknet.vpn.vpn.ServerPinger
 import com.leviknet.vpn.vpn.TunnelServer
@@ -337,6 +339,15 @@ class AppViewModel(
             settings.splitTunnelPackages.collect { pkgs ->
                 mutableState.update { it.copy(splitTunnelPackages = pkgs) }
             }
+        }
+        viewModelScope.launch {
+            settings.gamePackages.collect { pkgs -> mutableState.update { it.copy(gamePackages = pkgs) } }
+        }
+        viewModelScope.launch {
+            settings.gameExitId.collect { id -> mutableState.update { it.copy(gameExitId = id) } }
+        }
+        viewModelScope.launch {
+            GameStatusStore.status.collect { status -> mutableState.update { it.copy(gameStatus = status) } }
         }
         viewModelScope.launch {
             settings.dnsProvider.collect { dns ->
@@ -2302,6 +2313,35 @@ class AppViewModel(
         }
     }
 
+    /** A changed game list or exit applies on the next Levik Game connection, like split tunneling. */
+    fun toggleGamePackage(packageName: String) {
+        val current = settings.gamePackages.value
+        settings.setGamePackages(if (packageName in current) current - packageName else current + packageName)
+        reconfigureIfGameConnected()
+    }
+
+    fun importGamePackages(text: String): Int {
+        val imported = SplitTunnelPackageList.parse(text) - BuildConfig.APPLICATION_ID
+        val added = imported - settings.gamePackages.value
+        if (added.isNotEmpty()) {
+            settings.setGamePackages(settings.gamePackages.value + added)
+            reconfigureIfGameConnected()
+        }
+        return added.size
+    }
+
+    fun setGameExit(nodeId: String?) {
+        settings.setGameExitId(nodeId)
+        reconfigureIfGameConnected()
+    }
+
+    private fun reconfigureIfGameConnected() {
+        val vpn = mutableState.value.vpn
+        if (vpn.state == VpnConnectionState.CONNECTED && vpn.engine == TunnelEngineKind.LEVIK_GAME) {
+            vpnController.reconfigure()
+        }
+    }
+
     fun toggleSplitTunnelPackage(packageName: String) {
         val current = settings.splitTunnelPackages.value.toMutableSet()
         if (current.contains(packageName)) {
@@ -2442,7 +2482,7 @@ class AppViewModel(
                 val name = runCatching { info.loadLabel(packageManager).toString() }
                     .getOrDefault(pkg)
                 val icon = runCatching { info.loadIcon(packageManager) }.getOrNull()
-                InstalledAppItem(packageName = pkg, label = name, icon = icon)
+                InstalledAppItem(packageName = pkg, label = name, icon = icon, game = isGameApplication(info))
             }.distinctBy { it.packageName }.sortedBy { it.label.lowercase(java.util.Locale.ROOT) }
             mutableState.update { it.copy(installedApps = apps) }
         }
@@ -3063,7 +3103,15 @@ data class InstalledAppItem(
     val packageName: String,
     val label: String,
     val icon: android.graphics.drawable.Drawable?,
+    /** The app declares itself a game: Levik Game lists it first. */
+    val game: Boolean = false,
 )
+
+@Suppress("DEPRECATION")
+private fun isGameApplication(info: android.content.pm.ApplicationInfo): Boolean =
+    (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O &&
+        info.category == android.content.pm.ApplicationInfo.CATEGORY_GAME) ||
+        info.flags and android.content.pm.ApplicationInfo.FLAG_IS_GAME != 0
 
 data class AppTrafficUsage(
     val packageName: String,
@@ -3142,6 +3190,9 @@ data class AppUiState(
     val automaticServer: Boolean = true,
     val splitTunnelMode: SplitTunnelMode = SplitTunnelMode.OFF,
     val splitTunnelPackages: Set<String> = emptySet(),
+    val gamePackages: Set<String> = emptySet(),
+    val gameExitId: String? = null,
+    val gameStatus: GameRuntimeStatus? = null,
     val installedApps: List<InstalledAppItem> = emptyList(),
     val perAppTraffic: List<AppTrafficUsage> = emptyList(),
     val liveSpeedHistory: List<SpeedSample> = emptyList(),

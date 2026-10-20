@@ -340,6 +340,163 @@ class XrayConfigBuilder(
     }
 
     /**
+     * Levik Game: the TUN carries only the selected games (addAllowedApplication). Their IPv4
+     * UDP goes to the Game sidecar, which reaches each game node's relay through the
+     * password-protected SOCKS inbound of that node's link; the link itself carries nothing
+     * else. DNS, QUIC, TCP and IPv6 of the games go directly.
+     */
+    fun buildGame(
+        config: GameServerConfig,
+        tunFileDescriptor: Int,
+        endpoint: GameSidecarEndpoint,
+        primaryDnsIp: String = PRIMARY_DNS_IP,
+        secondaryDnsIp: String = SECONDARY_DNS_IP,
+    ): String {
+        require(tunFileDescriptor >= 0) { "Invalid TUN file descriptor" }
+        require(config.routes.isNotEmpty() && config.routes.size == endpoint.socksPorts.size) { "Game routes do not match the sidecar" }
+        val routes = config.routes.map { route ->
+            val protocol = (route.outbound["protocol"] as? JsonPrimitive)?.contentOrNull?.lowercase()
+            require(protocol in SELECTABLE_PROTOCOLS && protocol != "socks") { "Unsupported Game route protocol" }
+            JsonObject(RealityRepair.repair(route.outbound) + ("tag" to JsonPrimitive(gameRouteTag(route.index))))
+        }
+        val socksSettings = buildJsonObject {
+            put("auth", "password")
+            put("accounts", buildJsonArray {
+                add(buildJsonObject {
+                    put("user", GAME_SOCKS_USER)
+                    put("pass", endpoint.socksPassword)
+                })
+            })
+            put("udp", true)
+            put("ip", LOOPBACK)
+        }
+        fun rule(build: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit) = buildJsonObject {
+            put("type", "field")
+            build()
+        }
+        val tun = buildJsonArray { add(JsonPrimitive(TUN_INBOUND_TAG)) }
+        val result = buildJsonObject {
+            put("log", buildJsonObject { put("loglevel", "none") })
+            put("env", buildJsonObject { put(TUN_FD_ENV, tunFileDescriptor.toString()) })
+            put("dns", buildJsonObject {
+                put("queryStrategy", "UseIPv4")
+                put("servers", buildJsonArray {
+                    add(JsonPrimitive(primaryDnsIp))
+                    add(JsonPrimitive(secondaryDnsIp))
+                })
+            })
+            put("inbounds", buildJsonArray {
+                add(buildJsonObject {
+                    put("tag", TUN_INBOUND_TAG)
+                    put("protocol", "tun")
+                    put("port", 0)
+                    put("settings", buildJsonObject {
+                        put("name", "levik0")
+                        put("mtu", TUN_MTU)
+                    })
+                    // Game UDP keeps its IP destination: the relay forwards to addresses only.
+                    put("sniffing", buildJsonObject { put("enabled", false) })
+                })
+                config.routes.forEachIndexed { position, route ->
+                    add(buildJsonObject {
+                        put("tag", gameProbeTag(route.index))
+                        put("listen", LOOPBACK)
+                        put("port", endpoint.socksPorts[position])
+                        put("protocol", "socks")
+                        put("settings", socksSettings)
+                    })
+                }
+            })
+            put("outbounds", buildJsonArray {
+                // First: Xray's own DNS queries and anything unmatched leave directly.
+                add(buildJsonObject {
+                    put("tag", DIRECT_TAG)
+                    put("protocol", "freedom")
+                    put("settings", buildJsonObject { put("domainStrategy", "UseIPv4") })
+                })
+                routes.forEach(::add)
+                add(buildJsonObject {
+                    put("tag", GAME_MULTIPATH_TAG)
+                    put("protocol", "vless")
+                    put("settings", buildJsonObject {
+                        put("vnext", buildJsonArray {
+                            add(buildJsonObject {
+                                put("address", LOOPBACK)
+                                put("port", endpoint.port)
+                                put("users", buildJsonArray {
+                                    add(buildJsonObject {
+                                        put("id", endpoint.uuid)
+                                        put("encryption", "none")
+                                    })
+                                })
+                            })
+                        })
+                    })
+                    put("mux", buildJsonObject {
+                        put("enabled", false)
+                        put("xudpConcurrency", -1)
+                    })
+                })
+                add(buildJsonObject {
+                    put("tag", BLOCK_TAG)
+                    put("protocol", "blackhole")
+                    put("settings", buildJsonObject {})
+                })
+            })
+            put("routing", buildJsonObject {
+                put("domainStrategy", "AsIs")
+                put("rules", buildJsonArray {
+                    config.routes.forEach { route ->
+                        // A game node link reaches only that node's relay.
+                        add(rule {
+                            put("inboundTag", buildJsonArray { add(JsonPrimitive(gameProbeTag(route.index))) })
+                            put("ip", buildJsonArray { add(JsonPrimitive(LOOPBACK)) })
+                            put("port", GAME_RELAY_PORT.toString())
+                            put("network", "udp")
+                            put("outboundTag", gameRouteTag(route.index))
+                        })
+                        add(rule {
+                            put("inboundTag", buildJsonArray { add(JsonPrimitive(gameProbeTag(route.index))) })
+                            put("outboundTag", BLOCK_TAG)
+                        })
+                    }
+                    add(rule {
+                        put("inboundTag", tun)
+                        put("ip", JsonArray(BUILT_IN_DIRECT_CIDRS.map(::JsonPrimitive)))
+                        put("outboundTag", DIRECT_TAG)
+                    })
+                    add(rule {
+                        put("inboundTag", tun)
+                        put("ip", buildJsonArray { add(JsonPrimitive(IPV6_DEFAULT_ROUTE)) })
+                        put("outboundTag", DIRECT_TAG)
+                    })
+                    add(rule {
+                        put("inboundTag", tun)
+                        put("port", "53,443,853")
+                        put("network", "udp")
+                        put("outboundTag", DIRECT_TAG)
+                    })
+                    add(rule {
+                        put("inboundTag", tun)
+                        put("network", "udp")
+                        put("outboundTag", GAME_MULTIPATH_TAG)
+                    })
+                    add(rule {
+                        put("inboundTag", tun)
+                        put("network", "tcp")
+                        put("outboundTag", DIRECT_TAG)
+                    })
+                    add(rule {
+                        put("network", "tcp,udp")
+                        put("outboundTag", BLOCK_TAG)
+                    })
+                })
+            })
+        }
+        return json.encodeToString(JsonObject.serializer(), result)
+    }
+
+    /**
      * Kill Switch lockdown config: captures the whole TUN traffic and drops it
      * into a blackhole outbound so nothing leaks while the tunnel is down.
      */
@@ -494,6 +651,12 @@ class XrayConfigBuilder(
         private const val BLOCK_TAG = "levik-block"
         private const val FRAGMENT_TAG = "levik-fragment"
         private const val RELAY_PROXY_TAG = "levik-relay-proxy"
+        private const val GAME_MULTIPATH_TAG = "levik-game-multipath"
+        private const val GAME_SOCKS_USER = "levik-game"
+        private const val GAME_RELAY_PORT = 37079
+        private const val LOOPBACK = "127.0.0.1"
+        internal fun gameRouteTag(index: Int) = "levik-game-route-$index"
+        internal fun gameProbeTag(index: Int) = "levik-game-probe-$index"
         private const val IPV6_DEFAULT_ROUTE = "::/0"
         internal const val TUN_MTU = 1500
         private const val MAX_SERVERS = 200

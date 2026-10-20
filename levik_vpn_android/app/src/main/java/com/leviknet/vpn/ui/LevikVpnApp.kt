@@ -222,6 +222,8 @@ fun LevikVpnApp(viewModel: AppViewModel) {
     var showSplitTunnelDialog by remember { mutableStateOf(false) }
     var pendingInstalledAppsAction by remember { mutableStateOf<(() -> Unit)?>(null) }
     var showAppSelectorDialog by remember { mutableStateOf(false) }
+    var showGameDialog by remember { mutableStateOf(false) }
+    var showGameAppSelectorDialog by remember { mutableStateOf(false) }
     var showDnsDialog by remember { mutableStateOf(false) }
     var showAppIconDialog by remember { mutableStateOf(false) }
     var showThemeDialog by remember { mutableStateOf(false) }
@@ -356,6 +358,17 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                         } else {
                             viewModel.loadInstalledApps(context.packageManager)
                             showSplitTunnelDialog = true
+                        }
+                    },
+                    onOpenGame = {
+                        if (!viewModel.hasInstalledAppsConsent()) {
+                            pendingInstalledAppsAction = {
+                                viewModel.loadInstalledApps(context.packageManager)
+                                showGameDialog = true
+                            }
+                        } else {
+                            viewModel.loadInstalledApps(context.packageManager)
+                            showGameDialog = true
                         }
                     },
                     onOpenDns = { showDnsDialog = true },
@@ -698,6 +711,32 @@ fun LevikVpnApp(viewModel: AppViewModel) {
             onTogglePackage = viewModel::toggleSplitTunnelPackage,
             onImportPackages = viewModel::importSplitTunnelPackages,
             onDismiss = { showAppSelectorDialog = false },
+        )
+    }
+
+    val gameConfig = state.profile?.servers?.firstOrNull { it.engine == TunnelEngineKind.LEVIK_GAME }?.gameConfig
+    if (showGameDialog && gameConfig != null) {
+        GameSettingsDialog(
+            config = gameConfig,
+            selectedCount = state.gamePackages.size,
+            exitId = state.gameExitId,
+            status = state.gameStatus.takeIf {
+                state.vpn.state == VpnConnectionState.CONNECTED && state.vpn.engine == TunnelEngineKind.LEVIK_GAME
+            },
+            onSelectApps = { showGameAppSelectorDialog = true },
+            onExitSelected = viewModel::setGameExit,
+            onDismiss = { showGameDialog = false },
+        )
+    }
+
+    if (showGameAppSelectorDialog) {
+        AppSelectorDialog(
+            apps = state.installedApps.sortedByDescending(InstalledAppItem::game),
+            selectedPackages = state.gamePackages,
+            onTogglePackage = viewModel::toggleGamePackage,
+            onImportPackages = viewModel::importGamePackages,
+            onDismiss = { showGameAppSelectorDialog = false },
+            title = stringResource(R.string.game_select_apps, state.gamePackages.size),
         )
     }
 
@@ -1449,6 +1488,7 @@ private fun MainContent(
     onScanActivation: () -> Unit,
     onOpenLogs: () -> Unit,
     onOpenSplitTunneling: () -> Unit,
+    onOpenGame: () -> Unit,
     onOpenDns: () -> Unit,
     onOpenTheme: () -> Unit,
     onOpenAppIcon: () -> Unit,
@@ -1601,6 +1641,9 @@ private fun MainContent(
                 splitTunnelMode = state.splitTunnelMode,
                 splitTunnelSelectedCount = state.splitTunnelPackages.size,
                 onOpenSplitTunneling = onOpenSplitTunneling,
+                gameAvailable = state.profile?.servers?.any { it.engine == TunnelEngineKind.LEVIK_GAME } == true,
+                gameSelectedCount = state.gamePackages.size,
+                onOpenGame = onOpenGame,
                 dnsProvider = state.dnsProvider,
                 useDoh = state.useDoh,
                 onOpenDns = onOpenDns,
@@ -1974,6 +2017,18 @@ private fun HomeScreen(
                         color = MaterialTheme.colorScheme.onPrimaryContainer,
                     )
                 }
+            }
+        }
+        val gameStatus = state.gameStatus
+        if (isConnected && state.vpn.engine == TunnelEngineKind.LEVIK_GAME && gameStatus != null) {
+            Spacer(Modifier.height(12.dp))
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.primaryContainer,
+                border = androidx.compose.foundation.BorderStroke(1.dp, LevikBlue.copy(alpha = 0.35f)),
+            ) {
+                GameStatusText(gameStatus, Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
             }
         }
 
@@ -4092,6 +4147,9 @@ private fun ProfileScreen(
     splitTunnelMode: SplitTunnelMode,
     splitTunnelSelectedCount: Int,
     onOpenSplitTunneling: () -> Unit,
+    gameAvailable: Boolean,
+    gameSelectedCount: Int,
+    onOpenGame: () -> Unit,
     dnsProvider: DnsProvider,
     useDoh: Boolean,
     onOpenDns: () -> Unit,
@@ -4744,6 +4802,10 @@ private fun ProfileScreen(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+            }
+
+            if (gameAvailable) {
+                GameSettingsRow(selectedCount = gameSelectedCount, onClick = onOpenGame)
             }
 
             // Split Tunneling Item
@@ -5887,6 +5949,7 @@ private fun AppSelectorDialog(
     onTogglePackage: (String) -> Unit,
     onImportPackages: (String) -> Int,
     onDismiss: () -> Unit,
+    title: String = stringResource(R.string.split_tunnel_select_apps, selectedPackages.size),
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
@@ -5909,7 +5972,7 @@ private fun AppSelectorDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(24.dp),
-        title = { Text(stringResource(R.string.split_tunnel_select_apps, selectedPackages.size), fontWeight = FontWeight.Bold) },
+        title = { Text(title, fontWeight = FontWeight.Bold) },
         text = {
             Column(modifier = Modifier.heightIn(max = 420.dp)) {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

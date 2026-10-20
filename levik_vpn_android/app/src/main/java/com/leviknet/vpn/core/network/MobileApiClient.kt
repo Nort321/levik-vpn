@@ -155,8 +155,9 @@ class MobileApiClient(
             request = TunnelProfileRequest(subscriptionId, engine),
             accessToken = accessToken,
             requiresIntegrity = true,
-            // «🏠» servers of the account's home exits (docs/app-platform.md "Home road"): Direct build only.
-            extraHeaders = if (!BuildConfig.IS_PLAY_DISTRIBUTION && engine == null) ROAD_HEADERS else emptyMap(),
+            // «🏠» servers of the account's home exits (docs/app-platform.md "Home road") and Levik Game
+            // (its node links and relay token): Direct build only, Play has no Game sidecar.
+            extraHeaders = if (!BuildConfig.IS_PLAY_DISTRIBUTION && engine == null) DIRECT_PROFILE_HEADERS else emptyMap(),
         )
         checkSuccess(response.ok)
         return response.profile
@@ -735,7 +736,7 @@ class MobileApiClient(
         private const val ORDER_CREATE_PATH = "/api/mobile/v1/orders/create"
         private const val ORDER_PAYMENT_PATH = "/api/mobile/v1/orders/payment"
         private const val TUNNEL_PROFILE_PATH = "/api/mobile/v1/tunnel-profile"
-        private val ROAD_HEADERS = mapOf("X-Levik-Road" to "1")
+        private val DIRECT_PROFILE_HEADERS = mapOf("X-Levik-Road" to "1", "X-Levik-Game" to "android-1")
         private val SUPPORTED_TUNNEL_ENGINES = setOf("xray", "levik-relay")
         private const val CHECK_IP_PATH = "/api/check"
         private const val STATUS_PATH = "/api/status"

@@ -474,6 +474,8 @@ class LevikVpnService : VpnService() {
             } else {
                 profile.servers.firstOrNull { it.id == selectedId }
                     ?: profile.servers.firstOrNull(TunnelServer::isEligibleForAutomaticSelection)
+                    // Levik Game alone has no ordinary servers: Game is the subscription's only server.
+                    ?: profile.servers.singleOrNull { it.engine == TunnelEngineKind.LEVIK_GAME }
                     ?: error("Tunnel profile has no server eligible for automatic selection")
             }
             telemetry.record { it.attempt(selected.name, selected.telemetryProtocol(), attemptCause) }
@@ -600,6 +602,25 @@ class LevikVpnService : VpnService() {
                         secondaryDns = secondaryDns,
                     ),
                 )
+                TunnelEngineKind.LEVIK_GAME -> TunnelEngineRequest.Game(
+                    config = requireNotNull(selected.gameConfig) {
+                        "Levik Game server has no configuration"
+                    },
+                    preferredExitId = container.settings.gameExitId.value,
+                    configFactory = GameXrayConfigFactory { tunFileDescriptor, endpoint ->
+                        XrayConfigBuilder(container.json).buildGame(
+                            config = requireNotNull(selected.gameConfig),
+                            tunFileDescriptor = tunFileDescriptor,
+                            endpoint = endpoint,
+                            primaryDnsIp = primaryDns,
+                            secondaryDnsIp = secondaryDns,
+                        )
+                    },
+                    tunPlan = xrayTunPlan(
+                        primaryDns = primaryDns,
+                        secondaryDns = secondaryDns,
+                    ),
+                )
                 TunnelEngineKind.LEVIK_RELAY -> TunnelEngineRequest.Relay(
                     config = requireNotNull(selected.relayConfig) {
                         "Relay server has no bootstrap configuration"
@@ -691,7 +712,7 @@ class LevikVpnService : VpnService() {
             }
             progress.reach(AttemptStage.TUN, "tun_failed")
             val tun = try {
-                establishTun(selected.name, prepared.tunPlan)
+                establishTun(selected.name, prepared.tunPlan, gamePackagesFor(selected))
             } catch (error: SecurityException) {
                 throw error
             } catch (error: RuntimeException) {
@@ -851,7 +872,7 @@ class LevikVpnService : VpnService() {
                 is UnsatisfiedLinkError -> VpnFailure.CORE_UNAVAILABLE
                 is TunnelEngineUnavailableException -> VpnFailure.CORE_UNAVAILABLE
                 is TunnelEngineFailureException -> when (error.code) {
-                    "relay_native_missing", "relay_process_start_failed" ->
+                    "relay_native_missing", "relay_process_start_failed", "game_native_missing" ->
                         VpnFailure.CORE_UNAVAILABLE
                     "relay_credential_expired" -> VpnFailure.INVALID_PROFILE
                     else -> VpnFailure.NETWORK
@@ -959,13 +980,22 @@ class LevikVpnService : VpnService() {
         underlyingNetwork.set(null)
     }
 
+    /** Levik Game carries only the selected games; null for every other server. */
+    private fun gamePackagesFor(server: TunnelServer): Set<String>? {
+        if (server.engine != TunnelEngineKind.LEVIK_GAME) return null
+        val packages = container.settings.gamePackages.value - packageName
+        if (packages.isEmpty()) throw TunnelEngineFailureException("game_no_apps")
+        return packages
+    }
+
     private fun establishTun(
         serverName: String,
         tunPlan: TunPlan,
+        gamePackages: Set<String>? = null,
     ): ParcelFileDescriptor {
         val useNativeExclusions = VpnRoutes.supportsNativeExclusions()
         return try {
-            establishTun(serverName, tunPlan, useNativeExclusions)
+            establishTun(serverName, tunPlan, useNativeExclusions, gamePackages)
         } catch (error: RuntimeException) {
             if (!VpnRoutes.shouldRetryWithCompatibleRoutes(useNativeExclusions, error)) {
                 throw error
@@ -975,7 +1005,7 @@ class LevikVpnService : VpnService() {
                 "Android rejected native VPN route exclusions; retrying with compatible routes",
                 error,
             )
-            establishTun(serverName, tunPlan, useNativeExclusions = false)
+            establishTun(serverName, tunPlan, useNativeExclusions = false, gamePackages = gamePackages)
         }
     }
 
@@ -983,6 +1013,7 @@ class LevikVpnService : VpnService() {
         serverName: String,
         tunPlan: TunPlan,
         useNativeExclusions: Boolean,
+        gamePackages: Set<String>?,
     ): ParcelFileDescriptor {
         val configureIntent = PendingIntent.getActivity(
             this,
@@ -1022,9 +1053,10 @@ class LevikVpnService : VpnService() {
                     setMetered(false)
                 }
                 // Android excludes the app UID before IP/domain routing, on every server.
+                // Levik Game: only the selected games enter the VPN, whatever the split settings.
                 applySplitTunnelApplications(
-                    mode = splitMode,
-                    configuredPackages = splitPackages,
+                    mode = if (gamePackages != null) SplitTunnelMode.ALLOWED else splitMode,
+                    configuredPackages = gamePackages ?: splitPackages,
                     vpnPackageName = packageName,
                     addAllowed = { pkg ->
                         try {
@@ -1142,7 +1174,7 @@ class LevikVpnService : VpnService() {
         mobileEvaluationMutex.withLock {
             val network = candidateNetwork ?: return@withLock
             val server = connectionMutex.withLock {
-                currentServer?.takeIf { coreRunning && !lockdownActive }
+                currentServer?.takeIf { coreRunning && !lockdownActive && it.engine != TunnelEngineKind.LEVIK_GAME }
             } ?: return@withLock
 
             val mode = try {
@@ -1545,6 +1577,7 @@ class LevikVpnService : VpnService() {
                         is TunnelEngineRequest.Relay -> request.tunPlan
                         is TunnelEngineRequest.Yandex -> request.tunPlan
                         is TunnelEngineRequest.Tuic -> request.tunPlan
+                        is TunnelEngineRequest.Game -> request.tunPlan
                     }
                     val activeTun = if (prepared.tunPlan == previousTunPlan) {
                         previousTun
@@ -1552,6 +1585,7 @@ class LevikVpnService : VpnService() {
                         val replacement = establishTun(
                             serverName = server.name,
                             tunPlan = prepared.tunPlan,
+                            gamePackages = gamePackagesFor(server),
                         )
                         val acceptedReplacement = lifecycleGate.withLock {
                             if (destroyed.get()) {
@@ -1645,7 +1679,7 @@ class LevikVpnService : VpnService() {
                                     VpnFailure.NETWORK_REQUIREMENT
                                 is TunnelEngineUnavailableException -> VpnFailure.CORE_UNAVAILABLE
                                 is TunnelEngineFailureException -> when (error.code) {
-                                    "relay_native_missing", "relay_process_start_failed" ->
+                                    "relay_native_missing", "relay_process_start_failed", "game_native_missing" ->
                                         VpnFailure.CORE_UNAVAILABLE
                                     "relay_credential_expired" -> VpnFailure.INVALID_PROFILE
                                     else -> VpnFailure.NETWORK
@@ -1971,7 +2005,9 @@ class LevikVpnService : VpnService() {
         "relay_vk_auth_failed", "relay_vk_auth_network_unavailable" -> getString(R.string.relay_auth_failed)
         "relay_native_missing", "relay_process_start_failed" ->
             getString(R.string.relay_native_unavailable)
-        else -> getString(R.string.relay_runtime_stopped)
+        "game_no_apps" -> getString(R.string.game_no_apps)
+        "game_native_missing" -> getString(R.string.game_native_unavailable)
+        else -> if (code.startsWith("game_")) getString(R.string.game_runtime_stopped) else getString(R.string.relay_runtime_stopped)
     }
 
     private fun relayAccessFailureDetail(error: ApiException): String = getString(when (error) {
@@ -2080,6 +2116,8 @@ class LevikVpnService : VpnService() {
     private fun startAutoHealing() {
         autoHealingJob?.cancel()
         if (!container.settings.autoHealingEnabled.value) return
+        // The probes run outside a Levik Game VPN (it holds only the games); the sidecar watches its paths.
+        if (currentServer?.engine == TunnelEngineKind.LEVIK_GAME) return
         autoHealingJob = serviceScope.launch {
             var failedRounds = 0
             while (coreRunning) {
@@ -2284,6 +2322,8 @@ class LevikVpnService : VpnService() {
     private suspend fun tryAutoFallback(nowMs: Long): Boolean {
         if (!container.settings.autoFallbackServer.value) return false
         if (currentServer?.isMobileServer() == true) return false
+        // Levik Game is a choice, never replaced by an ordinary server.
+        if (currentServer?.engine == TunnelEngineKind.LEVIK_GAME) return false
         val profile = runCatching { readPreparedProfile() }.getOrNull() ?: return false
         if (profile.servers.size <= 1) return false
 

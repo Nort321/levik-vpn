@@ -44,6 +44,10 @@ jobs:
         shell: bash
         run: printf 'TUIC_GO_BIN=%s/bin/go\n' "$(go env GOROOT)" >>"${GITHUB_ENV}"
 
+      - name: Pin Game toolchain independently
+        shell: bash
+        run: printf 'GAME_GO_BIN=%s/bin/go\n' "$(go env GOROOT)" >>"${GITHUB_ENV}"
+
       - name: Set up Go 1.26.9
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -73,6 +77,10 @@ jobs:
       - name: Verify dependency locks
         working-directory: levik_vpn_android
         run: ./gradlew --no-daemon --stacktrace verifyAllDependencyLocks
+
+      - name: Test Game helper
+        working-directory: levik_vpn_android/native/game/source
+        run: GOTOOLCHAIN=local "${GAME_GO_BIN}" vet ./... && GOTOOLCHAIN=local "${GAME_GO_BIN}" test -race ./...
 
       - name: Lint debug variants
         working-directory: levik_vpn_android
