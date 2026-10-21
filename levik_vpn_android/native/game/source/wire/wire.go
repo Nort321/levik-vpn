@@ -196,7 +196,8 @@ func grow(dst []byte, n int) []byte {
 // Decode parses one frame. A v3 frame with an unknown nonzero exit tag is rejected.
 func Decode(data []byte, resolve TagResolver) (Packet, bool) {
 	var p Packet
-	if len(data) < 4 {
+	// Every version's header is at least HeaderV3 bytes; shorter input never reaches data[4].
+	if len(data) < HeaderV3 {
 		return p, false
 	}
 	switch string(data[:4]) {
