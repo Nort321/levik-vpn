@@ -149,12 +149,16 @@ the connection to a mobile server, whether the server was chosen in Auto mode
 or by hand. A regular server the user picks by hand while allowlists are on
 stays until the network changes or allowlists end.
 
-The mobile server is the one that last carried traffic under this network's
-allowlists, else the best by Smart Auto's score. Under allowlists the history
+Ordinary mobile servers (such as LTE over XHTTP) always come before the
+relays (WDTT through VK, Yandex), then the mobile servers that failed under
+this network's allowlists within the last hour. The ordinary mobile server
+that last carried traffic under this network's allowlists goes first; a relay
+that did never skips the ordinary ones. Otherwise each group is ordered by
+Smart Auto's score, and a mobile server that did not answer the ping is tried
+after those that did instead of being left out. Under allowlists the history
 is per server, not per protocol, and apart from the same network without
-allowlists: the operator lets some addresses through and not others. Relays
-count 1.5 times slower than mobile servers, and Yandex is left out without the
-user's sign-in. Each mobile server must download 32 KB within 12 seconds. If
+allowlists: the operator lets some addresses through and not others. Yandex is
+left out without the user's sign-in. Each mobile server must download 32 KB within 12 seconds. If
 it fails to start or to carry traffic while allowlists are still on, the next
 one is tried, four moves at most. When every move fails, the app returns to
 the server used before and tries again after 90 seconds.

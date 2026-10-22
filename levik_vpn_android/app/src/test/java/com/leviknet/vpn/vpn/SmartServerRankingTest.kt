@@ -114,12 +114,48 @@ class SmartServerRankingTest {
     }
 
     @Test
-    fun `under allowlists a relay waits behind a mobile server unless that one failed here`() {
-        val mobile = candidate("lte", latencyMs = 60, load = null)
-        val relay = candidate("relay", protocol = "relay", latencyMs = null, silenceMeansDown = false, load = null)
-            .copy(preference = 1.5)
-        assertEquals(listOf("lte", "relay"), SmartServerRanking.rank(listOf(relay, mobile), null).map { it.id })
-        val failed = mobile.copy(verdict = ProtocolVerdict.SUSPECT, latencyMs = 400)
-        assertEquals(listOf("relay", "lte"), SmartServerRanking.rank(listOf(relay, failed), null).map { it.id })
+    fun `under allowlists a relay waits behind every ordinary mobile server, however it scores`() {
+        // A busy, once-failed mobile server scores far worse than a relay that worked here.
+        val busy = AllowlistCandidate(
+            candidate("lte-busy", protocol = "vless-xhttp", latencyMs = 300, load = 0.95, verdict = ProtocolVerdict.SUSPECT),
+            relay = false,
+            failedRecently = false,
+        )
+        val wdtt = AllowlistCandidate(
+            candidate("wdtt", protocol = "relay", latencyMs = null, silenceMeansDown = false, load = null, verdict = ProtocolVerdict.WORKS),
+            relay = true,
+            failedRecently = false,
+        )
+        assertEquals(listOf("lte-busy", "wdtt"), SmartServerRanking.rankAllowlist(listOf(wdtt, busy)).map { it.id })
+    }
+
+    @Test
+    fun `under allowlists a silent mobile server is tried after the answering ones, before relays`() {
+        val silent = AllowlistCandidate(candidate("lte-silent", latencyMs = null), relay = false, failedRecently = false)
+        val slow = AllowlistCandidate(candidate("lte-slow", latencyMs = 900, load = 0.9), relay = false, failedRecently = false)
+        val relay = AllowlistCandidate(
+            candidate("wdtt", protocol = "relay", latencyMs = null, silenceMeansDown = false, load = null),
+            relay = true,
+            failedRecently = false,
+        )
+        assertEquals(
+            listOf("lte-slow", "lte-silent", "wdtt"),
+            SmartServerRanking.rankAllowlist(listOf(relay, silent, slow)).map { it.id },
+        )
+    }
+
+    @Test
+    fun `under allowlists a mobile server that just failed here goes after the relays`() {
+        val failed = AllowlistCandidate(candidate("lte", latencyMs = 40), relay = false, failedRecently = true)
+        val other = AllowlistCandidate(candidate("lte-2", latencyMs = 120), relay = false, failedRecently = false)
+        val relay = AllowlistCandidate(
+            candidate("wdtt", protocol = "relay", latencyMs = null, silenceMeansDown = false, load = null),
+            relay = true,
+            failedRecently = false,
+        )
+        assertEquals(
+            listOf("lte-2", "wdtt", "lte"),
+            SmartServerRanking.rankAllowlist(listOf(failed, relay, other)).map { it.id },
+        )
     }
 }

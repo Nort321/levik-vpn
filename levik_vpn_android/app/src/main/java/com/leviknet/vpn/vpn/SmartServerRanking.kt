@@ -14,11 +14,18 @@ data class SmartCandidate(
     /** 0 (idle) to 1 (full); null when the website did not say. */
     val load: Double?,
     val verdict: ProtocolVerdict,
-    /** Below 1 favours the server, above 1 holds it back; relays are slower than mobile servers. */
-    val preference: Double = 1.0,
 )
 
 data class RankedServer(val id: String, val protocol: String, val score: Double)
+
+/** A mobile server under allowlists, docs/app-platform.md "Allowlists". */
+data class AllowlistCandidate(
+    val candidate: SmartCandidate,
+    /** WDTT or Yandex: slow by design, so tried only after the ordinary mobile servers. */
+    val relay: Boolean,
+    /** An ordinary mobile server that carried nothing under this network's allowlists a moment ago. */
+    val failedRecently: Boolean,
+)
 
 /**
  * Smart Auto, docs/app-platform.md "Smart Auto": the best server is the one
@@ -68,7 +75,7 @@ object SmartServerRanking {
             candidate.protocol in advice.preferred -> 0.85
             else -> 1.0
         }
-        return latency * loadFactor * history * operator * candidate.preference
+        return latency * loadFactor * history * operator
     }
 
     /**
@@ -78,6 +85,31 @@ object SmartServerRanking {
     fun nextRung(ranked: List<RankedServer>, triedProtocols: Set<String>, triedIds: Set<String>): RankedServer? =
         ranked.firstOrNull { it.protocol !in triedProtocols && it.id !in triedIds }
             ?: ranked.firstOrNull { it.id !in triedIds }
+
+    /**
+     * Under allowlists: ordinary mobile servers first, then relays, then the
+     * mobile servers that just failed here. Within each, the servers that
+     * answered a ping go first, by score; a silent one may still pass the
+     * allowlist, so it is tried rather than left out.
+     */
+    fun rankAllowlist(candidates: List<AllowlistCandidate>): List<RankedServer> =
+        candidates
+            .map { item -> item to score(item.candidate, advice = null) }
+            .sortedWith(
+                compareBy<Pair<AllowlistCandidate, Double>>(
+                    { (item, _) -> allowlistTier(item) },
+                    { (item, _) -> item.candidate.latencyMs == null },
+                    { (_, score) -> score },
+                    { (item, _) -> item.candidate.id },
+                ),
+            )
+            .map { (item, score) -> RankedServer(item.candidate.id, item.candidate.protocol, score) }
+
+    private fun allowlistTier(item: AllowlistCandidate): Int = when {
+        item.relay -> 1
+        item.failedRecently -> 2
+        else -> 0
+    }
 
     /** Moving a running connection costs a reconnect; only a clearly better server is worth it. */
     fun worthSwitching(currentScore: Double?, bestScore: Double): Boolean =

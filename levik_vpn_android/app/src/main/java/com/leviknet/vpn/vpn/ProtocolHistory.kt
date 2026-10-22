@@ -51,6 +51,12 @@ data class ProtocolHistory(
         }
     }
 
+    /** Failed here within [windowMs] and has not worked since. */
+    fun failedWithin(networkKey: String, protocol: String, nowMs: Long, windowMs: Long): Boolean {
+        val record = networks[networkKey]?.get(protocol) ?: return false
+        return record.failedNodes.isNotEmpty() && nowMs - record.lastFailureAtMs < windowMs
+    }
+
     fun recordSuccess(networkKey: String, protocol: String, nowMs: Long, serverId: String? = null): ProtocolHistory {
         val next = update(networkKey, protocol) { ProtocolRecord(lastSuccessAtMs = nowMs, lastFailureAtMs = it.lastFailureAtMs) }
         if (serverId == null) return next

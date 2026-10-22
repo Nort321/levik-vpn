@@ -55,8 +55,9 @@ class SmartAuto(
         networkKey(network, allowlist = true)?.let(history.current()::winner)
 
     /**
-     * Mobile servers under allowlists, best first. An operator lets through
-     * some addresses and not others, so the record is about servers, not
+     * Mobile servers under allowlists, best first: ordinary ones before relays,
+     * see [SmartServerRanking.rankAllowlist]. An operator lets through some
+     * addresses and not others, so the record is about servers, not
      * protocols, and kept apart from the same network without allowlists.
      */
     fun rankAllowlist(
@@ -69,17 +70,21 @@ class SmartAuto(
         val snapshot = history.current()
         val now = clock()
         val candidates = servers.map { server ->
-            SmartCandidate(
-                id = server.id,
-                protocol = server.smartProtocol(),
-                latencyMs = latencies[server.id],
-                silenceMeansDown = ServerPinger.silenceMeansDown(server),
-                load = FavoriteNodes.nodeId(server)?.let(load::get),
-                verdict = snapshot.verdict(key, allowlistRecord(server), now),
-                preference = if (server.isAllowlistMobileServer()) RELAY_PREFERENCE else 1.0,
+            val record = allowlistRecord(server)
+            AllowlistCandidate(
+                candidate = SmartCandidate(
+                    id = server.id,
+                    protocol = server.smartProtocol(),
+                    latencyMs = latencies[server.id],
+                    silenceMeansDown = ServerPinger.silenceMeansDown(server),
+                    load = FavoriteNodes.nodeId(server)?.let(load::get),
+                    verdict = snapshot.verdict(key, record, now),
+                ),
+                relay = server.isAllowlistMobileServer(),
+                failedRecently = key != null && snapshot.failedWithin(key, record, now, ALLOWLIST_RECENT_FAILURE_MS),
             )
         }
-        return SmartServerRanking.rank(candidates, advice = null)
+        return SmartServerRanking.rankAllowlist(candidates)
     }
 
     fun recordAllowlistSuccess(server: TunnelServer, network: Network?) {
@@ -233,7 +238,8 @@ class SmartAuto(
     private companion object {
         const val TRAFFIC_CHECK_ROUNDS = 2
         const val TRAFFIC_CHECK_RETRY_MS = 1_500L
-        const val RELAY_PREFERENCE = 1.5
+        /** An ordinary mobile server that failed under allowlists this recently waits behind the relays. */
+        const val ALLOWLIST_RECENT_FAILURE_MS = 60 * 60_000L
         const val CHECK_TIMEOUT_MS = 5_000
         const val NETWORK_KEY_BYTES = 8
         val TRAFFIC_CHECK_URLS = listOf(

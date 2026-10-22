@@ -18,6 +18,16 @@ class ProtocolHistoryTest {
     }
 
     @Test
+    fun `a recent failure counts until it gets old or the server works again`() {
+        val failed = ProtocolHistory().recordFailure("net", "server:lte", "server:lte", nowMs = 0)
+        assertEquals(true, failed.failedWithin("net", "server:lte", hour - 1, hour))
+        assertEquals(false, failed.failedWithin("net", "server:lte", hour, hour))
+        assertEquals(false, failed.failedWithin("other", "server:lte", 0, hour))
+        val works = failed.recordSuccess("net", "server:lte", nowMs = 1)
+        assertEquals(false, works.failedWithin("net", "server:lte", 2, hour))
+    }
+
+    @Test
     fun `a block lasts a day and is about one network only`() {
         val blocked = ProtocolHistory()
             .recordFailure("lte", "vless-reality", "n1de", nowMs = 0)
