@@ -161,6 +161,23 @@ class TelemetryQueueTest {
     }
 
     @Test
+    fun `a sent checkpoint of an unfinished session stays until its final report is sent`() {
+        val queue = TelemetryQueue(directory) { now }
+        queue.put(entry("a", 1))
+        queue.acknowledge(mapOf("a" to 1))
+        assertTrue(queue.pending().isEmpty())
+
+        // The process was killed here; the next start still finds the session to finish.
+        val restarted = TelemetryQueue(directory) { now }
+        val unfinished = restarted.unfinished().single()
+        restarted.put(finalized(unfinished, InterruptedSessionEnd(SessionEnd(EndBy.UNKNOWN, null), null)))
+        assertEquals(listOf(true), restarted.pending().map { it.final })
+        restarted.acknowledge(mapOf("a" to 2))
+        assertTrue(restarted.unfinished().isEmpty())
+        assertTrue(restarted.pending().isEmpty())
+    }
+
+    @Test
     fun `newer checkpoint survives acknowledgement of an older one`() {
         val queue = TelemetryQueue(directory) { now }
         queue.put(entry("a", 3))

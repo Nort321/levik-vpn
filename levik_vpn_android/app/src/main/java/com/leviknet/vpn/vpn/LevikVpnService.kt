@@ -2358,7 +2358,8 @@ class LevikVpnService : VpnService() {
         }
     }
 
-    private suspend fun tryAutoFallback(nowMs: Long): Boolean {
+    /** [rollbackTo]: the server to return to should this fallback fail too, by default the current one. */
+    private suspend fun tryAutoFallback(nowMs: Long, rollbackTo: String? = null): Boolean {
         if (!container.settings.autoFallbackServer.value) return false
         if (currentServer?.isMobileServer() == true) return false
         // Levik Game is a choice, never replaced by an ordinary server.
@@ -2392,7 +2393,7 @@ class LevikVpnService : VpnService() {
         }
 
         pendingAutoFallback = PendingAutoFallback(
-            sourceServerId = currentId,
+            sourceServerId = rollbackTo ?: currentId,
             targetServerId = targetServer.id,
         )
         tunnelHealthPolicy.markCandidateFailed(currentId, nowMs)
@@ -2425,13 +2426,16 @@ class LevikVpnService : VpnService() {
         }
     }
 
-    private fun rollbackPendingAutoFallback(nowMs: Long): Boolean {
+    private suspend fun rollbackPendingAutoFallback(nowMs: Long): Boolean {
         val pending = pendingAutoFallback ?: return false
         if (currentServer?.id != pending.targetServerId) {
             pendingAutoFallback = null
             return false
         }
         pendingAutoFallback = null
+        // The source failed a moment ago: going straight back to it kept phones on a dead
+        // server for minutes. Another candidate first; the source only when none is left.
+        if (tryAutoFallback(nowMs, rollbackTo = pending.sourceServerId)) return true
         tunnelHealthPolicy.markCandidateFailed(pending.targetServerId, nowMs)
         tunnelHealthPolicy.recordRecovery(nowMs)
         runCatching {

@@ -20,6 +20,8 @@ data class QueuedSession(
     val startedAt: Long,
     val savedAt: Long,
     val body: JsonObject,
+    /** The checkpoint the server already has; kept until a final report replaces it. */
+    val sentSeq: Int? = null,
 ) {
     val sid: String get() = body["sid"]?.jsonPrimitive?.content.orEmpty()
     val seq: Int get() = body["seq"]?.jsonPrimitive?.int ?: 0
@@ -75,23 +77,40 @@ class TelemetryQueue(
         save(current.copy(sessions = prune(sessions)))
     }
 
+    /** Checkpoints the server does not have yet. */
     @Synchronized
-    fun pending(): List<QueuedSession> {
+    fun pending(): List<QueuedSession> = all().filter { entry -> entry.sentSeq.let { it == null || entry.seq > it } }
+
+    /** Sessions never ended, sent or not: a process killed after a send must still finalize them. */
+    @Synchronized
+    fun unfinished(): List<QueuedSession> = all().filterNot(QueuedSession::final)
+
+    /**
+     * Final reports leave the queue once sent. A sent non-final checkpoint
+     * stays, marked as sent, so a later start can finish its session.
+     */
+    @Synchronized
+    fun acknowledge(sent: Map<String, Int>) {
+        val current = load()
+        var changed = false
+        val remaining = current.sessions.mapNotNull { entry ->
+            val seq = sent[entry.sid]
+            when {
+                seq == null || entry.seq > seq -> entry
+                else -> {
+                    changed = true
+                    if (entry.final) null else entry.copy(sentSeq = entry.seq)
+                }
+            }
+        }
+        if (changed) save(current.copy(sessions = remaining))
+    }
+
+    private fun all(): List<QueuedSession> {
         val current = load()
         val pruned = prune(current.sessions)
         if (pruned.size != current.sessions.size) save(current.copy(sessions = pruned))
         return pruned
-    }
-
-    /** Removes sent checkpoints unless a newer one was queued meanwhile. */
-    @Synchronized
-    fun acknowledge(sent: Map<String, Int>) {
-        val current = load()
-        val remaining = current.sessions.filter { entry ->
-            val seq = sent[entry.sid]
-            seq == null || entry.seq > seq
-        }
-        if (remaining.size != current.sessions.size) save(current.copy(sessions = remaining))
     }
 
     @Synchronized

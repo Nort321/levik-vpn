@@ -22,6 +22,7 @@ import com.leviknet.vpn.core.security.HybridProfileDecryptor
 import com.leviknet.vpn.core.security.SecureFileStore
 import com.leviknet.vpn.core.security.TrialDeviceBinding
 import com.leviknet.vpn.core.security.validateYandexProfileBinding
+import com.leviknet.vpn.vpn.isSubscriptionPlaceholder
 import com.leviknet.vpn.vpn.YandexContract
 import com.leviknet.vpn.vpn.YandexProviderAuth
 import com.leviknet.vpn.vpn.YANDEX_AUTH_REFRESH_LEAD_SECONDS
@@ -570,7 +571,9 @@ class AppRepository(
             val decoded = json.decodeFromString<PreparedTunnelProfile>(bytes.decodeToString())
             val sanitized = decoded.copy(servers = decoded.servers.filter {
                 it.engine in supportedTunnelEngines &&
-                    (it.engine != TunnelEngineKind.LEVIK_YANDEX || supportsYandex())
+                    (it.engine != TunnelEngineKind.LEVIK_YANDEX || supportsYandex()) &&
+                    // Caches from before 2.8.3 may hold Remnawave's stub link as a server.
+                    !it.isSubscriptionPlaceholder()
             })
             if (sanitized != decoded) persistPreparedTunnelBlocking(sanitized)
             sanitized

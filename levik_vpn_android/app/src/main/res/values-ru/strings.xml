@@ -551,6 +551,8 @@
     <string name="problem_vpn_network_body">Туннель не смог установить или сохранить соединение с сервером. Проверьте сеть, повторите подключение или выберите другой сервер.</string>
     <string name="problem_vpn_network_requirement_title">Сеть не подходит для этого сервера</string>
     <string name="problem_vpn_network_requirement_body">Для выбранного сервера требуется мобильная сеть с активными ограничениями оператора. Переключитесь на подходящую сеть или выберите другой сервер.</string>
+    <string name="problem_no_servers_title">Нет серверов для обычного VPN</string>
+    <string name="problem_no_servers_body">Сейчас в вашей подписке нет серверов обычного VPN. Если у вас тариф «Только Game», включите Levik Game в настройках: через Levik пойдут матчи выбранных игр. Иначе обновите подписки или напишите в поддержку.</string>
     <string name="problem_action_retry">Повторить проверку</string>
     <string name="problem_action_devices">Освободить место</string>
     <string name="problem_action_subscriptions">Мои подписки</string>

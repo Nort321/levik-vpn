@@ -39,10 +39,15 @@ class TunnelProfilePreparer(
             ?.takeIf { includeTuic }
             ?.let { source -> TuicLinkParser.parse(source.content) }
             .orEmpty()
+        // Remnawave's stub links (expired, no ordinary servers on «Только Game»…) are never servers.
+        val (placeholders, xrayServers) = converted.servers.partition { it.isSubscriptionPlaceholder() }
         // Game node links never become ordinary servers; Direct makes them one Levik Game server.
-        val game = GameProfile.split(converted.servers + tuicServers, profile.game, includeGame)
+        val game = GameProfile.split(xrayServers + tuicServers, profile.game, includeGame)
         val servers = game.ordinary + listOfNotNull(game.game) + relayServers + yandexServers + telemostServers
 
+        if (servers.isEmpty() && placeholders.isNotEmpty()) {
+            throw SubscriptionNoticeException(subscriptionNotice(placeholders.first().name))
+        }
         require(servers.isNotEmpty()) { "Tunnel profile has no servers" }
         require(servers.size <= MAX_SERVERS) { "Tunnel profile has too many servers" }
         require(servers.map(TunnelServer::id).distinct().size == servers.size) {

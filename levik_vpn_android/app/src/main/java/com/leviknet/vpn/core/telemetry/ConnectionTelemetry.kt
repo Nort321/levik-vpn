@@ -247,9 +247,9 @@ class ConnectionTelemetry(
         val currentSid = synchronized(lock) { session?.sid }
         synchronized(ioLock) {
             if (started != generation) return
-            val pending = runCatching { queue.pending() }.getOrNull() ?: return
-            for (entry in pending) {
-                if (entry.final || entry.sid == currentSid) continue
+            val unfinished = runCatching { queue.unfinished() }.getOrNull() ?: return
+            for (entry in unfinished) {
+                if (entry.sid == currentSid) continue
                 runCatching { queue.put(finalized(entry, interruptedEnd(entry))) }
             }
         }

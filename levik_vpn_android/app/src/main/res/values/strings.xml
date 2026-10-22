@@ -551,6 +551,8 @@
     <string name="problem_vpn_network_body">The tunnel could not establish or maintain a server connection. Check your network, reconnect or choose another server.</string>
     <string name="problem_vpn_network_requirement_title">This server requires another network</string>
     <string name="problem_vpn_network_requirement_body">This server requires a cellular network with active provider restrictions. Switch to a suitable network or select another server.</string>
+    <string name="problem_no_servers_title">No servers for ordinary VPN</string>
+    <string name="problem_no_servers_body">Your subscription has no ordinary VPN servers right now. If your plan is «Game only», turn on Levik Game in Settings: matches of the chosen games go through Levik. Otherwise refresh your subscriptions or contact support.</string>
     <string name="problem_action_retry">Try again</string>
     <string name="problem_action_devices">Free a device slot</string>
     <string name="problem_action_subscriptions">My subscriptions</string>

@@ -21,7 +21,7 @@ enum class ProblemAction { SCAN_QR, RETRY, DEVICES, SUBSCRIPTIONS, PLANS, LOGIN,
 internal fun problemActions(problem: AppProblem, subscription: SubscriptionSummary?): List<ProblemAction> {
     val primary = when (problem.reason) {
         ProblemReason.DEVICE_LIMIT -> if (subscription?.actions?.revokeDevice == true) ProblemAction.DEVICES else ProblemAction.SUBSCRIPTIONS
-        ProblemReason.SUBSCRIPTION, ProblemReason.TRAFFIC, ProblemReason.TRIAL -> ProblemAction.SUBSCRIPTIONS
+        ProblemReason.SUBSCRIPTION, ProblemReason.TRAFFIC, ProblemReason.TRIAL, ProblemReason.NO_SERVERS -> ProblemAction.SUBSCRIPTIONS
         ProblemReason.PAIRING -> ProblemAction.SCAN_QR
         ProblemReason.SESSION, ProblemReason.LOGIN -> ProblemAction.LOGIN
         ProblemReason.CLOCK -> ProblemAction.CLOCK
@@ -184,6 +184,7 @@ private fun ProblemReason.titleResource(): Int = when (this) {
     ProblemReason.VPN_CORE -> R.string.problem_vpn_core_title
     ProblemReason.VPN_NETWORK -> R.string.problem_vpn_network_title
     ProblemReason.VPN_NETWORK_REQUIREMENT -> R.string.problem_vpn_network_requirement_title
+    ProblemReason.NO_SERVERS -> R.string.problem_no_servers_title
 }
 
 private fun ProblemReason.bodyResource(): Int = when (this) {
@@ -213,4 +214,5 @@ private fun ProblemReason.bodyResource(): Int = when (this) {
     ProblemReason.VPN_CORE -> R.string.problem_vpn_core_body
     ProblemReason.VPN_NETWORK -> R.string.problem_vpn_network_body
     ProblemReason.VPN_NETWORK_REQUIREMENT -> R.string.problem_vpn_network_requirement_body
+    ProblemReason.NO_SERVERS -> R.string.problem_no_servers_body
 }

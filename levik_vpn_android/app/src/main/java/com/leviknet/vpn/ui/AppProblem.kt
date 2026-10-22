@@ -3,6 +3,8 @@ package com.leviknet.vpn.ui
 import com.leviknet.vpn.core.network.ApiException
 import com.leviknet.vpn.core.network.ApiProblemDetails
 import com.leviknet.vpn.core.network.SubscriptionSummary
+import com.leviknet.vpn.vpn.SubscriptionNotice
+import com.leviknet.vpn.vpn.SubscriptionNoticeException
 import com.leviknet.vpn.vpn.VpnFailure
 import kotlinx.coroutines.CancellationException
 import java.io.IOException
@@ -12,7 +14,7 @@ enum class ProblemReason {
     NETWORK, TIMEOUT, SERVICE, PROFILE, DEVICE_LIMIT, SUBSCRIPTION, TRAFFIC,
     SESSION, LOGIN, PAIRING, ATTESTATION, CLOCK, RATE_LIMIT, TRIAL, PAYMENT, ORDER,
     PERMISSION, NOTIFICATIONS, LOCATION, DEVICE_REVOKE, UNSUPPORTED, REQUEST, UNKNOWN,
-    VPN_CORE, VPN_NETWORK, VPN_NETWORK_REQUIREMENT,
+    VPN_CORE, VPN_NETWORK, VPN_NETWORK_REQUIREMENT, NO_SERVERS,
 }
 
 enum class ProblemOperation { ACCOUNT, CONNECT, SERVERS, SELECT_SUBSCRIPTION, LOGIN, DEVICES, PURCHASE }
@@ -35,6 +37,12 @@ internal fun Throwable.toAppProblem(
         is ApiException.Network -> if (cause is SocketTimeoutException) ProblemReason.TIMEOUT else ProblemReason.NETWORK
         is SocketTimeoutException -> ProblemReason.TIMEOUT
         is IOException -> ProblemReason.NETWORK
+        is SubscriptionNoticeException -> when (notice) {
+            SubscriptionNotice.EXPIRED, SubscriptionNotice.SUSPENDED -> ProblemReason.SUBSCRIPTION
+            SubscriptionNotice.TRAFFIC -> ProblemReason.TRAFFIC
+            SubscriptionNotice.DEVICE_LIMIT -> ProblemReason.DEVICE_LIMIT
+            SubscriptionNotice.NO_SERVERS -> ProblemReason.NO_SERVERS
+        }
         is ApiException.InvalidResponse, is IllegalArgumentException -> ProblemReason.PROFILE
         is ApiException.Rejected -> when (code) {
             "device_limit_reached", "hwid_limit_reached", "device_limit_exceeded" -> ProblemReason.DEVICE_LIMIT
