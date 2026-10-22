@@ -292,11 +292,19 @@ enum class TrafficCheckSize(val bytes: Int, val deadlineMs: Long) {
 /** Under allowlists the record is per server: the operator lets some addresses through. */
 private fun allowlistRecord(server: TunnelServer): String = "server:${server.id}"
 
-/** Servers and protocols tried since the user connected; a few rungs at most, so a bad network cannot loop. */
-internal class SmartLadder(private val maxClimbs: Int = MAX_CLIMBS) {
+/**
+ * Servers and protocols tried since the user connected; a few rungs at most, so a bad network cannot loop.
+ * A spent ladder is climbed again after [retryAfterMs]: what failed then may carry traffic now.
+ */
+internal class SmartLadder(
+    private val maxClimbs: Int = MAX_CLIMBS,
+    private val retryAfterMs: Long = RETRY_AFTER_MS,
+    private val clock: () -> Long = SystemClock::elapsedRealtime,
+) {
     private val triedIds = mutableSetOf<String>()
     private val triedProtocols = mutableSetOf<String>()
     private var climbs = 0
+    private var lastClimbAtMs = 0L
 
     @Synchronized
     fun tried(id: String, protocol: String) {
@@ -307,10 +315,17 @@ internal class SmartLadder(private val maxClimbs: Int = MAX_CLIMBS) {
     @Synchronized
     fun climbed() {
         climbs += 1
+        lastClimbAtMs = clock()
     }
 
     @Synchronized
-    fun exhausted(): Boolean = climbs >= maxClimbs
+    fun exhausted(): Boolean {
+        if (climbs < maxClimbs) return false
+        if (clock() - lastClimbAtMs < retryAfterMs) return true
+        // The network's history still puts what failed last time at the back.
+        reset()
+        return false
+    }
 
     @Synchronized
     fun ids(): Set<String> = triedIds.toSet()
@@ -327,6 +342,7 @@ internal class SmartLadder(private val maxClimbs: Int = MAX_CLIMBS) {
 
     private companion object {
         const val MAX_CLIMBS = 3
+        const val RETRY_AFTER_MS = 30 * 60_000L
     }
 }
 

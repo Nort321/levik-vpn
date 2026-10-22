@@ -65,4 +65,23 @@ class TunnelFreezeDetectorTest {
         now += 120_000
         assertTrue(upload())
     }
+
+    @Test
+    fun `a quiet spell brings the wait back to the shortest`() {
+        val detector = TunnelFreezeDetector(cooldownMs = 60_000, maxCooldownMs = 4 * 60_000, quietResetMs = 30 * 60_000)
+        var now = 0L
+        fun upload(): Boolean {
+            val first = detector.record(now / 1_000, now * 4, now)
+            now += 12_000
+            return detector.record(now / 1_000, now * 4, now) || first
+        }
+        assertTrue(upload())
+        detector.checkPassed()
+        detector.checkPassed() // 4 minutes, the limit
+        now += 30 * 60_000
+        assertTrue(upload())
+        // The wait is one minute again, not four.
+        now += 60_000
+        assertTrue(upload())
+    }
 }

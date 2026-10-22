@@ -1627,6 +1627,7 @@ class LevikVpnService : VpnService() {
                     )
                     if (request is TunnelEngineRequest.Relay) checkConnectionDeadline(relayDeadline)
                     coreRunning = true
+                    tunnelHealthPolicy.onTunnelStarted(SystemClock.elapsedRealtime())
                     relayDeadline?.let(::scheduleProfileExpiry)
                     if (request is TunnelEngineRequest.Yandex) {
                         val config = request.config
@@ -1641,6 +1642,9 @@ class LevikVpnService : VpnService() {
                         VpnStateStore.update(coreOwner) {
                             it.copy(state = VpnConnectionState.CONNECTED, failure = null)
                         }
+                        // The reconnect cancelled the health probes; without them a tunnel
+                        // that dies later stays up until the user reconnects by hand.
+                        startAutoHealing()
                         startRelayEntitlementWatchdog(server, prepared)
                         startYandexRefresh(prepared)
                         showForeground(VpnConnectionState.CONNECTED, currentServerName)
@@ -1653,8 +1657,9 @@ class LevikVpnService : VpnService() {
                     telemetry.record { it.connected() }
                     telemetry.flushSoon()
                     AppLogger.i(LOG_TAG, "VPN successfully reconnected")
-                    // A new network may block what worked on the old one.
-                    if (cause == AttemptCause.NETWORK_CHANGE) startTrafficCheck(server, network)
+                    // A new network may block what worked on the old one, and a reconnect
+                    // after failed probes must prove the server carries traffic again.
+                    startTrafficCheck(server, network)
                 } catch (error: CancellationException) {
                     engine.stop(coreOwner, currentPreparedSession, coreLease)
                     coreRunning = false

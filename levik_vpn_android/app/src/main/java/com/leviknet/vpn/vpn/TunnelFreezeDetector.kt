@@ -7,13 +7,15 @@ package com.leviknet.vpn.vpn
  * Ordinary use downloads more than it uploads; uploads get acknowledgements.
  * A hit only asks for a traffic check, so a false alarm costs 64 KB; each
  * false alarm doubles the wait before the next one, as uploads such as a
- * video call or a backup look the same.
+ * video call or a backup look the same. A quiet spell ends the upload, so the
+ * wait starts short again and a later real freeze is not missed for long.
  */
 internal class TunnelFreezeDetector(
     private val windowMs: Long = WINDOW_MS,
     private val minUploadBytes: Long = MIN_UPLOAD_BYTES,
     private val cooldownMs: Long = COOLDOWN_MS,
     private val maxCooldownMs: Long = MAX_COOLDOWN_MS,
+    private val quietResetMs: Long = QUIET_RESET_MS,
 ) {
     private data class Sample(val atMs: Long, val rx: Long, val tx: Long)
 
@@ -33,6 +35,7 @@ internal class TunnelFreezeDetector(
         val received = rxBytes - first.rx
         val sent = txBytes - first.tx
         if (sent < minUploadBytes || received * RECEIVE_RATIO >= sent) return false
+        if (lastAlarmAtMs != Long.MIN_VALUE && nowMs - lastAlarmAtMs >= quietResetMs) currentCooldownMs = cooldownMs
         if (lastAlarmAtMs != Long.MIN_VALUE && nowMs - lastAlarmAtMs < currentCooldownMs) return false
         lastAlarmAtMs = nowMs
         samples.clear()
@@ -57,6 +60,7 @@ internal class TunnelFreezeDetector(
         const val MIN_UPLOAD_BYTES = 24 * 1024L
         const val COOLDOWN_MS = 2 * 60_000L
         const val MAX_COOLDOWN_MS = 16 * 60_000L
+        const val QUIET_RESET_MS = 60 * 60_000L
 
         /** Frozen when less than half as much comes back as goes out. */
         const val RECEIVE_RATIO = 2L
