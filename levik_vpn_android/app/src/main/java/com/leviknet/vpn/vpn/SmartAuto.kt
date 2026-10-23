@@ -77,7 +77,7 @@ class SmartAuto(
                     protocol = server.smartProtocol(),
                     latencyMs = latencies[server.id],
                     silenceMeansDown = ServerPinger.silenceMeansDown(server),
-                    load = FavoriteNodes.nodeId(server)?.let(load::get),
+                    load = FavoriteNodes.load(load, server),
                     verdict = snapshot.verdict(key, record, now),
                 ),
                 relay = server.isAllowlistMobileServer(),
@@ -114,7 +114,7 @@ class SmartAuto(
                 protocol = protocol,
                 latencyMs = latencies[server.id],
                 silenceMeansDown = ServerPinger.silenceMeansDown(server),
-                load = FavoriteNodes.nodeId(server)?.let(load::get),
+                load = FavoriteNodes.load(load, server),
                 verdict = snapshot.verdict(key, protocol, now),
             )
         }

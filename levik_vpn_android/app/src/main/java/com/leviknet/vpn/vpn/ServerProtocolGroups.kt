@@ -69,6 +69,23 @@ fun TunnelServer.syncHost(): String? {
     return endpointHost()?.takeUnless { it == "localhost" || it == "::1" || it.startsWith("127.") }
 }
 
+/** The port that goes with [syncHost]; null for local engines and outbounds that name none. */
+fun TunnelServer.syncPort(): Int? {
+    if (relayConfig != null || syncHost() == null) return null
+    tuicConfig?.let { return it.port.takeIf(::isPort) }
+    val settings = outbound["settings"] as? JsonObject ?: return null
+    if ((settings["address"] as? JsonPrimitive)?.content?.isNotBlank() == true) return portOf(settings["port"])
+    for (key in listOf("vnext", "servers")) {
+        val first = (settings[key] as? JsonArray)?.firstOrNull() as? JsonObject ?: continue
+        if ((first["address"] as? JsonPrimitive)?.content?.isNotBlank() == true) return portOf(first["port"])
+    }
+    return null
+}
+
+private fun portOf(value: Any?): Int? = (value as? JsonPrimitive)?.content?.toIntOrNull()?.takeIf(::isPort)
+
+private fun isPort(value: Int): Boolean = value in 1..65_535
+
 private fun TunnelServer.endpointHost(): String? {
     tuicConfig?.let { return it.address }
     val settings = outbound["settings"] as? JsonObject ?: return null

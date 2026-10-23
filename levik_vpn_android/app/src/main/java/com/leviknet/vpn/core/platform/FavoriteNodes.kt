@@ -2,6 +2,7 @@ package com.leviknet.vpn.core.platform
 
 import com.leviknet.vpn.vpn.TunnelServer
 import com.leviknet.vpn.vpn.syncHost
+import com.leviknet.vpn.vpn.syncPort
 import java.security.MessageDigest
 
 /**
@@ -24,6 +25,27 @@ object FavoriteNodes {
     }
 
     fun nodeId(server: TunnelServer): String? = server.syncHost()?.let(::nodeId)
+
+    /**
+     * One port of a host, docs/app-platform.md "Node ids". A relay forwards several
+     * servers from one address on distinct ports, so only the port tells them apart.
+     */
+    fun endpointId(host: String, port: Int): String? {
+        val normalized = host.trim().lowercase().removeSurrounding("[", "]").removeSuffix(".")
+        if (normalized.isEmpty() || normalized.length > 253 || port !in 1..65_535) return null
+        val digest = MessageDigest.getInstance("SHA-256").digest("levik-endpoint-v1|$normalized|$port".toByteArray())
+        return "n1" + digest.joinToString("") { "%02x".format(it) }.take(20)
+    }
+
+    /**
+     * A server's load, docs/app-platform.md "Node load": by its host and port
+     * first, which names one server behind a shared relay, then by its host.
+     */
+    fun load(load: Map<String, Double>, server: TunnelServer): Double? {
+        val host = server.syncHost() ?: return null
+        val exact = server.syncPort()?.let { endpointId(host, it) }?.let(load::get)
+        return exact ?: nodeId(host)?.let(load::get)
+    }
 
     fun isCanonical(value: String): Boolean {
         if (value.isEmpty()) return true

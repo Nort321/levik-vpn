@@ -1,5 +1,8 @@
 package com.leviknet.vpn.core.platform
 
+import com.leviknet.vpn.vpn.TunnelServer
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -57,5 +60,31 @@ class FavoriteNodesTest {
         val result = FavoriteNodes.reconcile(FavoriteNodes.State(setOf(de), emptySet()), setOf("fi-vless"), byNode)
         assertEquals(setOf(fi, de), result.state.nodes)
         assertEquals(setOf("fi-vless", "de-vless"), result.local)
+    }
+
+    @Test
+    fun `one server behind a shared relay is found by its port`() {
+        val relayFr = FavoriteNodes.endpointId("2.27.42.184", 21443)
+        assertEquals("n15f491927d4394acd315d", relayFr)
+        val relay = "n126c4033f0b74bc1be26a"
+        assertEquals(relay, FavoriteNodes.nodeId("2.27.42.184"))
+        val vless = TunnelServer(
+            id = "fr", tag = "fr", name = "fr", countryCode = "FR",
+            outbound = Json.parseToJsonElement(
+                """{"protocol":"vless","settings":{"vnext":[{"address":"2.27.42.184","port":21443}]}}""",
+            ).jsonObject,
+        )
+        val flat = vless.copy(
+            outbound = Json.parseToJsonElement(
+                """{"protocol":"hysteria","settings":{"address":"2.27.42.184","port":21443}}""",
+            ).jsonObject,
+        )
+        val load = mapOf(relayFr!! to 0.1, relay to 0.28)
+        assertEquals(0.1, FavoriteNodes.load(load, vless)!!, 0.0)
+        assertEquals(0.1, FavoriteNodes.load(load, flat)!!, 0.0)
+        // Without a port entry the shared host's load still applies.
+        assertEquals(0.28, FavoriteNodes.load(mapOf(relay to 0.28), vless)!!, 0.0)
+        assertNull(FavoriteNodes.load(emptyMap(), vless))
+        assertNull(FavoriteNodes.endpointId("2.27.42.184", 0))
     }
 }

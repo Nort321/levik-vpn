@@ -2232,7 +2232,7 @@ class AppViewModel(
         val load = appPlatform?.nodeLoad().orEmpty()
         if (load.isEmpty()) return emptyMap()
         return profile.servers.mapNotNull { server ->
-            FavoriteNodes.nodeId(server)?.let(load::get)?.let { server.id to it }
+            FavoriteNodes.load(load, server)?.let { server.id to it }
         }.toMap()
     }
 

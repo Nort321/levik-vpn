@@ -61,8 +61,13 @@ identifier. Only the client header is sent.
 - **Node load** tells how busy each server is, from 0 (idle) to 1 (full), by
   [node id](#node-ids): the busier of the server's CPU and its online users,
   rounded to hundredths. A server is listed under its own address and every
-  host bound to it. The website reads the panel at most every 30 seconds; an
-  unreachable panel gives an empty object. The apps use it for 10 minutes.
+  host bound to it. A server behind a shared relay (`APP_RELAYED_NODES` on the
+  website) is also listed under the relay address, where the busiest server
+  behind it decides, and under its own relay ports as
+  [endpoint ids](#node-ids). The apps look up a server's endpoint id first and
+  its node id after that. The website reads the panel at most every 30
+  seconds; an unreachable panel gives an empty object. The apps use it for 10
+  minutes.
 
 The apps ask again after `refreshAfterSeconds` (clamped to 5 minutes–24
 hours), when they come to the screen, and keep the last answer for offline
@@ -212,7 +217,16 @@ host   = lowercase(endpoint host), without [] around IPv6 and without a trailing
 nodeId = "n1" + first 20 hex characters of SHA-256("levik-node-v1|" + host)
 ```
 
-`fi1.example.net` is `n1142bf5571df2373ffb23`. Engines that point at a local
+`fi1.example.net` is `n1142bf5571df2373ffb23`. A relay forwards several
+servers from one address on distinct ports, so for [node load](#remote-configuration)
+one port of a host also has an id of the same shape; favourites and
+maintenance stay by node id:
+
+```text
+endpointId = "n1" + first 20 hex characters of SHA-256("levik-endpoint-v1|" + host + "|" + port)
+```
+
+`2.27.42.184` port `21443` is `n15f491927d4394acd315d`. Engines that point at a local
 port (relay, Yandex) have no node id; their favourites stay on the device.
 Each app keeps its own favourites for the screen and reconciles them with the
 account list: a star set or removed on this device changes the list, every
