@@ -2489,8 +2489,10 @@ private fun PowerButton(
                         },
                         shape = CircleShape,
                     )
+                    // A connection that is still being set up can always be cancelled.
                     .clickable(
-                        enabled = !isTransitioning,
+                        enabled = vpn.state != VpnConnectionState.STOPPING,
+                        onClickLabel = if (isTransitioning && !isConnected) stringResource(R.string.status_connecting_cancel) else null,
                         role = Role.Button,
                         onClick = onClick,
                     )
@@ -2585,7 +2587,9 @@ private fun PowerButton(
         }
         val statusSubtitle = when {
             isConnected -> stringResource(R.string.status_connected_desc)
-            isTransitioning -> stringResource(R.string.status_connecting_desc)
+            isTransitioning -> stringResource(
+                if (vpn.state == VpnConnectionState.STOPPING) R.string.status_connecting_desc else R.string.status_connecting_cancel_desc,
+            )
             isPaused -> stringResource(R.string.pause_vpn_desc)
             isError -> stringResource(R.string.status_error_desc)
             else -> stringResource(R.string.status_disconnected_desc)

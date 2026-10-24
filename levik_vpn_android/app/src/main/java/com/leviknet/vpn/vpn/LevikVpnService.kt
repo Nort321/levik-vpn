@@ -255,6 +255,14 @@ class LevikVpnService : VpnService() {
                 pauseJob = null
                 connectionJob?.cancel()
                 connectionJob = null
+                // OFF wins over a reconnect in flight: it holds the connection lock the stop waits
+                // for, and the probes and checks below would otherwise start another attempt.
+                reconnectJob?.cancel()
+                mobileNetworkEvaluationJob?.cancel()
+                mobileAutomationJob?.cancel()
+                autoHealingJob?.cancel()
+                trafficCheckJob?.cancel()
+                VpnStateStore.update(coreOwner) { it.copy(state = VpnConnectionState.STOPPING, failure = null) }
                 container.settings.setPausedUntilMs(0L)
                 serviceCommands.enqueueStop {
                     stopConnection(stopService = true, stopStartId = startId)
@@ -1436,6 +1444,12 @@ class LevikVpnService : VpnService() {
                     scheduleReconnectLocked(AttemptCause.NETWORK_CHANGE)
                     return@withLock
                 }
+                val otherNetwork = networkMonitor.activeNetwork()
+                    ?.takeIf { server.networkRequirement != TunnelNetworkRequirement.ANY }
+                if (otherNetwork != null) {
+                    leaveCellularOnlyServer(server, otherNetwork)
+                    return@withLock
+                }
                 VpnStateStore.update(coreOwner) { state ->
                     state.copy(
                         state = VpnConnectionState.RECONNECTING,
@@ -1445,6 +1459,49 @@ class LevikVpnService : VpnService() {
                 }
                 showForeground(VpnConnectionState.RECONNECTING, currentServerName)
             }
+        }
+    }
+
+    /**
+     * The phone dropped mobile data on Wi-Fi (at home, say) under a server that
+     * runs only over mobile data. Waiting for mobile data would leave the app
+     * reconnecting forever: the regular server used before allowlists takes
+     * over, else Smart Auto's best; without one the connection ends.
+     */
+    private fun leaveCellularOnlyServer(current: TunnelServer, network: Network) {
+        reconnectJob?.cancel()
+        connectionJob?.cancel()
+        connectionJob = serviceScope.launch {
+            val profile = runCatching { readPreparedProfile() }.getOrNull()
+            val target = profile?.let {
+                returnTarget(it, readSecureString(SecureFileStore.ALLOWLIST_RETURN_SERVER), network)
+            }
+            if (target == null) {
+                AppLogger.w(LOG_TAG, "Mobile data is gone and no regular server can take over")
+                VpnStateStore.set(
+                    coreOwner,
+                    VpnSnapshot(
+                        state = VpnConnectionState.ERROR,
+                        failure = VpnFailure.NETWORK_REQUIREMENT,
+                    ),
+                )
+                stopConnection(stopService = false, preserveError = true)
+                val enteredLockdown = enterKillSwitchLockdown(null)
+                endTelemetryAfterFailure(enteredLockdown, "cellular_required")
+                if (!enteredLockdown) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                }
+                return@launch
+            }
+            container.secureStore.put(SecureFileStore.SELECTED_SERVER, target.id.encodeToByteArray())
+            container.appPlatform.smartAuto.reportSwitch(
+                SmartSwitch(current.id, current.smartProtocol(), target.id, target.smartProtocol(), SmartSwitchReason.ALLOWLIST_OFF),
+            )
+            AppLogger.i(LOG_TAG, "Mobile data is gone under a mobile-only server; moving to a regular server")
+            nextAttemptCause = AttemptCause.NETWORK_CHANGE
+            stopConnection(stopService = false)
+            connect()
         }
     }
 
@@ -2241,11 +2298,26 @@ class LevikVpnService : VpnService() {
                 AppLogger.w(LOG_TAG, "Smart Auto: traffic check failed while the network itself is offline; ignored")
                 return@launch
             }
+            if (networkMonitor.isCellular(network) && allowlistsActive(network)) {
+                // Allowlists, not the protocol: every regular server fails here, a mobile one is next.
+                AppLogger.w(LOG_TAG, "Smart Auto: no traffic under allowlists; probing to move to a mobile server")
+                wakeAllowlistProbe()
+                return@launch
+            }
             smartAuto.recordFailure(server, network)
             tunnelHealthPolicy.markCandidateFailed(server.id, SystemClock.elapsedRealtime())
             climbProtocolLadder(server, network)
         }
     }
+
+    private suspend fun allowlistsActive(network: Network): Boolean =
+        try {
+            container.whitelistDetector.detect(network, forceRefresh = true) == WhitelistMode.ACTIVE
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Throwable) {
+            false
+        }
 
     private suspend fun onAllowlistTrafficChecked(server: TunnelServer, network: Network, passed: Boolean) {
         val smartAuto = container.appPlatform.smartAuto

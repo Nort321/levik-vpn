@@ -7,16 +7,15 @@ import android.net.NetworkCapabilities
 import android.os.SystemClock
 import java.net.HttpURLConnection
 import java.net.URL
-import kotlin.coroutines.resume
-import kotlinx.coroutines.CancellationException
+import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.supervisorScope
-import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 enum class WhitelistMode {
@@ -31,16 +30,22 @@ internal data class WhitelistProbeResult(
     val reachable: Boolean,
 )
 
+/**
+ * Allowlists: domestic sites answer, foreign ones do not. One foreign site may
+ * still answer under allowlists: CDNs (Akamai, Google) keep caches inside the
+ * operator's own network, and the operator lets its own addresses through.
+ * Two foreign answers mean the internet is open.
+ */
 internal fun classifyWhitelistMode(results: List<WhitelistProbeResult>): WhitelistMode {
     val domestic = results.filter(WhitelistProbeResult::domestic)
     val external = results.filterNot(WhitelistProbeResult::domestic)
-    if (domestic.size < 3 || external.size < 3) return WhitelistMode.UNKNOWN
+    if (domestic.size < 3 || external.size < 4) return WhitelistMode.UNKNOWN
 
     val domesticReachable = domestic.count(WhitelistProbeResult::reachable)
     val externalReachable = external.count(WhitelistProbeResult::reachable)
     return when {
-        domesticReachable >= 2 && externalReachable == 0 -> WhitelistMode.ACTIVE
-        externalReachable >= 1 -> WhitelistMode.INACTIVE
+        externalReachable >= 2 -> WhitelistMode.INACTIVE
+        domesticReachable >= 2 -> WhitelistMode.ACTIVE
         else -> WhitelistMode.UNKNOWN
     }
 }
@@ -50,6 +55,7 @@ class WhitelistDetector(context: Context) {
     private val connectivityManager =
         context.applicationContext.getSystemService(ConnectivityManager::class.java)
     private val detectionMutex = Mutex()
+    private val probeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var cachedNetwork: Network? = null
     private var cachedAtElapsedMs = 0L
     private var cachedMode = WhitelistMode.UNKNOWN
@@ -68,24 +74,18 @@ class WhitelistDetector(context: Context) {
             return@withLock cachedMode
         }
 
-        val mode = withTimeoutOrNull(DETECTION_TIMEOUT_MS) {
-            withContext(Dispatchers.IO) {
-                supervisorScope {
-                    PROBES.map { probe ->
-                        async {
-                            val reachable = withTimeoutOrNull(PROBE_TIMEOUT_MS) {
-                                probe(network, probe.url)
-                            } ?: false
-                            WhitelistProbeResult(
-                                id = probe.id,
-                                domestic = probe.domestic,
-                                reachable = reachable,
-                            )
-                        }
-                    }.awaitAll()
+        // Every probe has its own deadline, so a slow one never discards the others' answers.
+        val mode = coroutineScope {
+            PROBES.map { probe ->
+                async {
+                    WhitelistProbeResult(
+                        id = probe.id,
+                        domestic = probe.domestic,
+                        reachable = reachable(network, probe.url),
+                    )
                 }
-            }
-        }?.let(::classifyWhitelistMode) ?: WhitelistMode.UNKNOWN
+            }.awaitAll()
+        }.let(::classifyWhitelistMode)
 
         cachedNetwork = network
         if (mode != WhitelistMode.UNKNOWN) {
@@ -129,43 +129,56 @@ class WhitelistDetector(context: Context) {
             ?.first
     }
 
-    private suspend fun probe(network: Network, target: String): Boolean =
-        withContext(Dispatchers.IO) {
-            var connection: HttpURLConnection? = null
-            try {
-                suspendCancellableCoroutine { continuation ->
-                    try {
-                        val conn = (network.openConnection(URL(target)) as HttpURLConnection).apply {
-                            connectTimeout = PROBE_TIMEOUT_MS.toInt()
-                            readTimeout = PROBE_TIMEOUT_MS.toInt()
-                            instanceFollowRedirects = false
-                            requestMethod = "GET"
-                            setRequestProperty(
-                                "User-Agent",
-                                "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
-                            )
-                            setRequestProperty("Cache-Control", "no-cache")
-                            setRequestProperty("Connection", "close")
-                        }
-                        connection = conn
-                        continuation.invokeOnCancellation {
-                            runCatching { conn.disconnect() }
-                        }
-                        val responseCode = conn.responseCode
-                        continuation.resume(responseCode in 200..599)
-                    } catch (error: Throwable) {
-                        if (continuation.isActive) {
-                            continuation.resume(false)
-                        }
-                    }
-                }
-            } catch (error: Throwable) {
-                if (error is CancellationException) throw error
-                false
-            } finally {
-                runCatching { connection?.disconnect() }
+    internal fun isCellular(network: Network): Boolean =
+        connectivityManager.getNetworkCapabilities(network)
+            ?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true
+
+    /**
+     * Under allowlists a foreign address can hang in DNS or in connect past the socket
+     * timeouts, and a blocking call ignores coroutine cancellation. The probe runs on its
+     * own and is abandoned at the deadline instead of holding up the answer.
+     */
+    private suspend fun reachable(network: Network, target: String): Boolean {
+        val connection = AtomicReference<HttpURLConnection?>()
+        val attempt = probeScope.async { probe(network, target, connection) }
+        return try {
+            withTimeoutOrNull(PROBE_TIMEOUT_MS) { attempt.await() } ?: false
+        } finally {
+            if (!attempt.isCompleted) {
+                attempt.cancel()
+                connection.get()?.let { runCatching { it.disconnect() } }
             }
         }
+    }
+
+    private fun probe(
+        network: Network,
+        target: String,
+        connection: AtomicReference<HttpURLConnection?>,
+    ): Boolean {
+        var conn: HttpURLConnection? = null
+        return try {
+            conn = (network.openConnection(URL(target)) as HttpURLConnection).apply {
+                connectTimeout = PROBE_TIMEOUT_MS.toInt()
+                readTimeout = PROBE_TIMEOUT_MS.toInt()
+                instanceFollowRedirects = false
+                useCaches = false
+                requestMethod = "GET"
+                setRequestProperty(
+                    "User-Agent",
+                    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+                )
+                setRequestProperty("Cache-Control", "no-cache")
+                setRequestProperty("Connection", "close")
+            }
+            connection.set(conn)
+            conn.responseCode in 200..599
+        } catch (_: Exception) {
+            false
+        } finally {
+            runCatching { conn?.disconnect() }
+        }
+    }
 
     private fun transportPriority(capabilities: NetworkCapabilities): Int = when {
         capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> 3
@@ -181,8 +194,8 @@ class WhitelistDetector(context: Context) {
     )
 
     companion object {
-        private const val PROBE_TIMEOUT_MS = 2_500L
-        private const val DETECTION_TIMEOUT_MS = 5_000L
+        // A congested mobile network can take a few seconds for one TLS handshake.
+        private const val PROBE_TIMEOUT_MS = 4_000L
         private const val CACHE_TTL_MS = 60_000L
         private val PROBES = listOf(
             Probe("ozon", "https://www.ozon.ru/", domestic = true),
@@ -192,6 +205,7 @@ class WhitelistDetector(context: Context) {
             Probe("google", "https://www.google.com/generate_204", domestic = false),
             Probe("cloudflare", "https://cp.cloudflare.com/", domestic = false),
             Probe("wikipedia", "https://www.wikipedia.org/", domestic = false),
+            Probe("github", "https://github.com/", domestic = false),
             Probe("apple", "https://www.apple.com/library/test/success.html", domestic = false),
         )
     }

@@ -45,6 +45,8 @@
     <string name="status_disconnected_desc">Нажмите для подключения</string>
     <string name="status_connecting">Подключение…</string>
     <string name="status_connecting_desc">Устанавливаем защищенное соединение…</string>
+    <string name="status_connecting_cancel_desc">Устанавливаем защищённое соединение… Нажмите на кнопку, чтобы отменить</string>
+    <string name="status_connecting_cancel">Отменить подключение</string>
     <string name="status_connected">Подключено</string>
     <string name="status_connected_desc">Соединение защищено</string>
     <string name="status_reconnecting">Переподключение…</string>

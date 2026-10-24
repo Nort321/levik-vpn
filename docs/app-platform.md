@@ -142,8 +142,12 @@ busy below 0.75, crowded above.
 #### Allowlists
 
 While connected on mobile data or to a mobile server, the Android app probes
-the physical network for allowlists (domestic sites answer, foreign ones do
-not): on every network change, then every 30 seconds, every 2 minutes after
+the physical network for allowlists: four domestic and five foreign sites,
+each with its own 4-second deadline, so one that hangs never spoils the
+answer. Allowlists are on when at least two domestic sites answer and at most
+one foreign site does (CDNs keep caches inside the operator's network, which
+the operator lets through); two foreign answers mean the internet is open;
+anything else is unknown and changes nothing. It probes on every network change, then every 30 seconds, every 2 minutes after
 two equal answers, and every 5 minutes after two more (2 minutes at most on a
 mobile server, whose traffic is limited). A changed answer, a new network, a
 failing health check or a tunnel that looks frozen starts over at 30 seconds.
@@ -152,7 +156,14 @@ allowlists change nothing there. Two probes in a row, the second 6 seconds
 after the first, move
 the connection to a mobile server, whether the server was chosen in Auto mode
 or by hand. A regular server the user picks by hand while allowlists are on
-stays until the network changes or allowlists end.
+stays until the network changes or allowlists end. A regular server that
+carries no traffic on mobile data under allowlists is not held against its
+protocol: the probe runs at once and moves the connection instead. In Auto
+mode a connection started on mobile data under allowlists goes straight to an
+ordinary mobile server. If the phone drops mobile data on Wi-Fi under a
+server that needs it, the app moves to the regular server used before (or
+Smart Auto's best) instead of waiting for mobile data to return. The power
+button cancels a connection that is still being set up or reconnecting.
 
 Ordinary mobile servers (such as LTE over XHTTP) always come before the
 relays (WDTT through VK, Yandex), then the mobile servers that failed under

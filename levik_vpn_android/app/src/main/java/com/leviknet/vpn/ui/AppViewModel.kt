@@ -5,6 +5,7 @@ import android.app.usage.NetworkStatsManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.TrafficStats
 import android.os.Build
 import android.os.Process
@@ -84,6 +85,7 @@ import com.leviknet.vpn.vpn.RankedServer
 import com.leviknet.vpn.vpn.SmartServerRanking
 import com.leviknet.vpn.vpn.SmartSwitch
 import com.leviknet.vpn.vpn.isEligibleForAutomaticSelection
+import com.leviknet.vpn.vpn.isHomeRoadServer
 import com.leviknet.vpn.vpn.isSmartAutoCandidate
 import com.leviknet.vpn.vpn.smartProtocol
 import com.leviknet.vpn.vpn.telemetryProtocol
@@ -173,6 +175,7 @@ class AppViewModel(
     private var profileRefreshPending = false
     private var lteTrafficSyncJob: Job? = null
     private var whitelistDetectionJob: Job? = null
+    private var connectionPreparationJob: Job? = null
     private var pendingLteAction: PendingLteAction? = null
     private var pendingAllowlistAction: PendingAllowlistAction? = null
     private var pendingRelayIntroduction: PendingRelayIntroduction? = null
@@ -1229,6 +1232,12 @@ class AppViewModel(
     }
 
     fun connectOrDisconnect() {
+        // A connection still being prepared (profile, servers, allowlists) is cancelled by the same button.
+        if (connectionPreparationJob?.isActive == true) {
+            connectionPreparationJob?.cancel()
+            connectionPending = false
+            return
+        }
         when (mutableState.value.vpn.state) {
             VpnConnectionState.PAUSED -> resumeVpn()
             VpnConnectionState.CONNECTED,
@@ -1379,7 +1388,7 @@ class AppViewModel(
         subscriptionId: String? = null,
     ) {
         if (mutableState.value.refreshing) return
-        viewModelScope.launch {
+        connectionPreparationJob = viewModelScope.launch {
             val account = mutableState.value.account
             val storedProfile = repository.cachedTunnel()
             val requestedServerId = repository.selectedServerId()
@@ -1495,7 +1504,8 @@ class AppViewModel(
                         currentMode = runCatching { whitelistDetector.detect(forceRefresh = false) }.getOrNull() ?: currentMode
                         mutableState.update { it.copy(whitelistMode = currentMode) }
                     }
-                    if (currentMode != WhitelistMode.ACTIVE) {
+                    // Only a network known to be open warns: an unanswered probe is no reason to stop.
+                    if (currentMode == WhitelistMode.INACTIVE) {
                         pendingAllowlistAction = PendingAllowlistAction.Connect
                         mutableState.update { it.copy(showAllowlistRequiredWarning = true) }
                         return@launch
@@ -1516,6 +1526,7 @@ class AppViewModel(
                     mutableState.update { it.copy(showVpnDisclosure = true) }
                 }
             } catch (error: Throwable) {
+                if (error is CancellationException) throw error
                 val failedSubscriptionId = if (requestedRelay != null) storedProfile.subscriptionId else subscription?.uuid
                 mutableState.update { it.copy(problem = error.toAppProblem(ProblemOperation.CONNECT, failedSubscriptionId)) }
             } finally {
@@ -1585,7 +1596,7 @@ class AppViewModel(
             return
         }
         if (server.isAllowlistMobileServer() &&
-            mutableState.value.whitelistMode != WhitelistMode.ACTIVE &&
+            mutableState.value.whitelistMode == WhitelistMode.INACTIVE &&
             mutableState.value.vpn.state in ACTIVE_TUNNEL_STATES
         ) {
             pendingAllowlistAction = PendingAllowlistAction.SelectServer(serverId)
@@ -2167,16 +2178,27 @@ class AppViewModel(
     private suspend fun selectBestServer(profile: PreparedTunnelProfile): String {
         // Fresh server load arrives while the servers are measured.
         val loadRefresh = viewModelScope.async { appPlatform?.refreshNodeLoad() }
+        val allowlistNetwork = viewModelScope.async { allowlistMobileNetwork() }
         val measured = measureServers(profile.servers)
         loadRefresh.await()
-        val preferredServerIds = automaticServerIds(profile)
-        require(preferredServerIds.isNotEmpty()) {
-            "No server is eligible for automatic selection"
+        val allowlistServers = allowlistNetwork.await()?.let { network ->
+            automaticAllowlistServers(profile).takeIf { it.isNotEmpty() }?.let { network to it }
         }
-        val selected = rankAutomatic(profile, preferredServerIds, measured).firstOrNull()?.id
-            ?: repository.selectedServerId()
-                ?.takeIf(preferredServerIds::contains)
-            ?: profile.servers.first { it.id in preferredServerIds }.id
+        val selected = if (allowlistServers != null) {
+            // Mobile data under allowlists: a regular server would connect and carry nothing.
+            val (network, pool) = allowlistServers
+            appPlatform?.smartAuto?.rankAllowlist(pool, measured, network)?.firstOrNull()?.id
+                ?: pool.first().id
+        } else {
+            val preferredServerIds = automaticServerIds(profile)
+            require(preferredServerIds.isNotEmpty()) {
+                "No server is eligible for automatic selection"
+            }
+            rankAutomatic(profile, preferredServerIds, measured).firstOrNull()?.id
+                ?: repository.selectedServerId()
+                    ?.takeIf(preferredServerIds::contains)
+                ?: profile.servers.first { it.id in preferredServerIds }.id
+        }
         repository.selectServer(selected)
         mutableState.update { state ->
             state.copy(
@@ -2192,6 +2214,33 @@ class AppViewModel(
             )
         }
         return selected
+    }
+
+    /** The physical mobile network when it has allowlists on; null on Wi-Fi or when unknown. */
+    private suspend fun allowlistMobileNetwork(): Network? {
+        val detector = whitelistDetector ?: return null
+        val network = detector.directNetwork()?.takeIf(detector::isCellular) ?: return null
+        val mode = try {
+            detector.detect(network, forceRefresh = false)
+        } catch (error: Throwable) {
+            if (error is CancellationException) throw error
+            WhitelistMode.UNKNOWN
+        }
+        if (mode != WhitelistMode.UNKNOWN) mutableState.update { it.copy(whitelistMode = mode) }
+        return network.takeIf { mode == WhitelistMode.ACTIVE }
+    }
+
+    /**
+     * Ordinary mobile servers Auto may take under allowlists. Relays need the
+     * user's own sign-in and introduction, so the service reaches them later.
+     */
+    private fun automaticAllowlistServers(profile: PreparedTunnelProfile): List<TunnelServer> {
+        val candidates = profile.servers.filter {
+            it.isMobileServer() && !it.isHomeRoadServer() &&
+                it.engine in setOf(TunnelEngineKind.XRAY, TunnelEngineKind.LEVIK_TUIC)
+        }
+        val available = withoutMaintenance(profile, candidates.mapTo(mutableSetOf(), TunnelServer::id))
+        return candidates.filter { it.id in available }
     }
 
     /** Regular servers outside maintenance; mobile servers only when the profile has nothing else. */

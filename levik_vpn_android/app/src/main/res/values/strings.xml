@@ -45,6 +45,8 @@
     <string name="status_disconnected_desc">Tap to connect</string>
     <string name="status_connecting">Connecting…</string>
     <string name="status_connecting_desc">Establishing secure connection…</string>
+    <string name="status_connecting_cancel_desc">Establishing secure connection… Tap the button to cancel</string>
+    <string name="status_connecting_cancel">Cancel connection</string>
     <string name="status_connected">Connected</string>
     <string name="status_connected_desc">Connection is secure</string>
     <string name="status_reconnecting">Reconnecting…</string>
