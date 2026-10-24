@@ -149,8 +149,8 @@ uncompressed: Beeline lets a handshake and a tiny answer through under
 allowlists and stalls the transfer after a few kilobytes. The foreign sites
 (Cloudflare, Fastly, OVH, GitHub, Wikipedia) have no caches inside Russian
 operators. Allowlists are on when at least two domestic sites answer and at
-most one foreign site delivers; two foreign downloads mean the internet is
-open; anything else is unknown and changes nothing. It probes on every network change, then every 30 seconds, every 2 minutes after
+most one foreign site delivers; the internet is open only when most foreign
+sites (three of five) deliver; anything else is unknown and changes nothing. It probes on every network change, then every 30 seconds, every 2 minutes after
 two equal answers, and every 5 minutes after two more (2 minutes at most on a
 mobile server, whose traffic is limited). A changed answer, a new network, a
 failing health check or a tunnel that looks frozen starts over at 30 seconds.
@@ -184,7 +184,10 @@ the server used before and tries again after 90 seconds.
 
 When allowlists end (two probes, at least 90 seconds after the last move), the
 app returns to the server used before them unless it is gone or under
-maintenance; then it takes Smart Auto's best regular server. In Auto mode this
+maintenance; then it takes Smart Auto's best regular server. If that regular
+server then carries no traffic on the same mobile network, the probe was
+wrong: the app goes back to the mobile server it left, and for 30 minutes that
+network's "allowlists ended" is not believed. In Auto mode this
 applies to any mobile server. With a server chosen by hand it applies only
 after the app made the move itself. The user is told each time.
 

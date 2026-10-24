@@ -33,8 +33,9 @@ internal data class WhitelistProbeResult(
 /**
  * Allowlists: domestic sites answer, foreign ones do not deliver a real download.
  * One foreign site may still deliver under allowlists (a CDN cache inside the
- * operator's network, which the operator lets through). Two mean the internet
- * is open.
+ * operator's network, which the operator lets through). The internet is open
+ * only when most foreign sites deliver: leaving a mobile server on a wrong
+ * "open" costs the connection, so two out of five stay unknown.
  */
 internal fun classifyWhitelistMode(results: List<WhitelistProbeResult>): WhitelistMode {
     val domestic = results.filter(WhitelistProbeResult::domestic)
@@ -44,8 +45,8 @@ internal fun classifyWhitelistMode(results: List<WhitelistProbeResult>): Whiteli
     val domesticReachable = domestic.count(WhitelistProbeResult::reachable)
     val externalReachable = external.count(WhitelistProbeResult::reachable)
     return when {
-        externalReachable >= 2 -> WhitelistMode.INACTIVE
-        domesticReachable >= 2 -> WhitelistMode.ACTIVE
+        externalReachable * 2 > external.size -> WhitelistMode.INACTIVE
+        domesticReachable >= 2 && externalReachable <= 1 -> WhitelistMode.ACTIVE
         else -> WhitelistMode.UNKNOWN
     }
 }

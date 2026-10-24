@@ -55,10 +55,20 @@ class WhitelistDetectorTest {
     }
 
     @Test
-    fun `two reachable foreign sites mark mode as inactive`() {
+    fun `two reachable foreign sites out of five stay unknown`() {
         val results = probes(
             domestic = listOf(true, true, true, true),
             external = listOf(false, true, false, true, false),
+        )
+
+        assertEquals(WhitelistMode.UNKNOWN, classifyWhitelistMode(results))
+    }
+
+    @Test
+    fun `most foreign sites delivering mark mode as inactive`() {
+        val results = probes(
+            domestic = listOf(true, true, true, true),
+            external = listOf(true, true, false, true, false),
         )
 
         assertEquals(WhitelistMode.INACTIVE, classifyWhitelistMode(results))

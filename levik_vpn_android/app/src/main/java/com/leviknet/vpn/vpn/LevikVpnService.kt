@@ -149,6 +149,12 @@ class LevikVpnService : VpnService() {
     /** The last probe's answer, unknown included; it paces the next probe. */
     @Volatile
     private var lastProbeMode = WhitelistMode.UNKNOWN
+
+    /** The mobile server left when allowlists seemed to end, and on which network: the way back. */
+    private var allowlistOffSource: Pair<String, Network>? = null
+
+    /** A mobile network where that move carried nothing: its "allowlists ended" is not believed until then. */
+    private var allowlistHold: Pair<Network, Long>? = null
     private val allowlistProbeSchedule = AllowlistProbeSchedule()
     /** Wakes the probe loop early: the tunnel struggles, which allowlists coming on look like. */
     private val allowlistProbeWake = Channel<Unit>(Channel.CONFLATED)
@@ -1197,13 +1203,15 @@ class LevikVpnService : VpnService() {
                 currentServer?.takeIf { coreRunning && !lockdownActive && it.engine != TunnelEngineKind.LEVIK_GAME }
             } ?: return@withLock
 
-            val mode = try {
+            val probed = try {
                 container.whitelistDetector.detect(network, forceRefresh = true)
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Throwable) {
                 WhitelistMode.UNKNOWN
             }
+            // Leaving the mobile server already failed on this network: one "open" answer is not enough.
+            val mode = if (probed == WhitelistMode.INACTIVE && allowlistHeld(network)) WhitelistMode.UNKNOWN else probed
             lastProbeMode = mode
             VpnStateStore.update(coreOwner) { snapshot ->
                 snapshot.copy(whitelistMode = mode)
@@ -1254,6 +1262,7 @@ class LevikVpnService : VpnService() {
             )
             automaticRollbackServerId = server.id
             automaticTargetServerId = target.id
+            allowlistOffSource = if (decision == MobileServerSwitchDecision.TO_REGULAR) server.id to network else null
             val reason = if (decision == MobileServerSwitchDecision.TO_MOBILE) {
                 SmartSwitchReason.ALLOWLIST_ON
             } else {
@@ -1273,6 +1282,43 @@ class LevikVpnService : VpnService() {
                 connect()
             }
         }
+
+    private fun allowlistHeld(network: Network): Boolean =
+        allowlistHold?.let { (held, untilMs) -> held == network && SystemClock.elapsedRealtime() < untilMs } == true
+
+    /**
+     * Allowlists seemed to end and the app left a mobile server, but the regular
+     * server carries nothing on the same mobile network: the probe was wrong.
+     * Back to the mobile server, which this network then keeps for a while.
+     */
+    private suspend fun returnAfterFalseAllowlistEnd(current: TunnelServer, network: Network): Boolean {
+        val (sourceId, sourceNetwork) = allowlistOffSource ?: return false
+        allowlistOffSource = null
+        if (sourceNetwork != network || !networkMonitor.isCellular(network)) return false
+        val source = runCatching { readPreparedProfile() }.getOrNull()?.servers
+            ?.firstOrNull { it.id == sourceId && it.isMobileServer() } ?: return false
+        val accepted = connectionMutex.withLock {
+            coreRunning && currentServer?.id == current.id
+        }
+        if (!accepted) return false
+        allowlistHold = network to SystemClock.elapsedRealtime() + ALLOWLIST_HOLD_MS
+        lastWhitelistMode = WhitelistMode.ACTIVE
+        pendingAutoFallback = null
+        container.secureStore.put(SecureFileStore.ALLOWLIST_RETURN_SERVER, current.id.encodeToByteArray())
+        container.secureStore.put(SecureFileStore.SELECTED_SERVER, source.id.encodeToByteArray())
+        container.appPlatform.smartAuto.reportSwitch(
+            SmartSwitch(current.id, current.smartProtocol(), source.id, source.smartProtocol(), SmartSwitchReason.ALLOWLIST_ON),
+        )
+        AppLogger.w(LOG_TAG, "Allowlists: the regular server carries nothing on this mobile network; back to the mobile server")
+        VpnStateStore.update(coreOwner) { it.copy(whitelistMode = WhitelistMode.ACTIVE) }
+        nextAttemptCause = AttemptCause.NETWORK_CHANGE
+        connectionJob?.cancel()
+        connectionJob = serviceScope.launch {
+            stopConnection(stopService = false)
+            connect()
+        }
+        return true
+    }
 
     /** Whether the app itself moved this connection for allowlists, or Auto may. */
     private fun allowlistSessionActive(): Boolean =
@@ -1436,6 +1482,7 @@ class LevikVpnService : VpnService() {
                 smartLadder.reset()
                 allowlistLadder.reset()
                 allowlistOverride = false
+                allowlistOffSource = null
                 lastWhitelistMode = WhitelistMode.UNKNOWN
                 if (replacement != null) {
                     AppLogger.i(LOG_TAG, "Underlying network changed, triggering reconnect")
@@ -2287,6 +2334,7 @@ class LevikVpnService : VpnService() {
                 return@launch
             }
             if (passed) {
+                allowlistOffSource = null
                 freezeDetector.checkPassed()
                 smartAuto.recordSuccess(server, network)
                 smartLadder.reset()
@@ -2298,6 +2346,7 @@ class LevikVpnService : VpnService() {
                 AppLogger.w(LOG_TAG, "Smart Auto: traffic check failed while the network itself is offline; ignored")
                 return@launch
             }
+            if (returnAfterFalseAllowlistEnd(server, network)) return@launch
             if (networkMonitor.isCellular(network) && allowlistsActive(network)) {
                 // Allowlists, not the protocol: every regular server fails here, a mobile one is next.
                 AppLogger.w(LOG_TAG, "Smart Auto: no traffic under allowlists; probing to move to a mobile server")
@@ -2311,7 +2360,7 @@ class LevikVpnService : VpnService() {
     }
 
     private suspend fun allowlistsActive(network: Network): Boolean =
-        try {
+        allowlistHeld(network) || try {
             container.whitelistDetector.detect(network, forceRefresh = true) == WhitelistMode.ACTIVE
         } catch (error: CancellationException) {
             throw error
@@ -2995,6 +3044,7 @@ class LevikVpnService : VpnService() {
         private const val MOBILE_AUTOMATION_INITIAL_DELAY_MS = 8_000L
         private const val MOBILE_IDLE_INTERVAL_MS = 5 * 60_000L
         private const val MOBILE_CONFIRM_INTERVAL_MS = 6_000L
+        private const val ALLOWLIST_HOLD_MS = 30 * 60_000L
         private const val ALLOWLIST_MAX_CLIMBS = 4
         private const val AUTOMATIC_SWITCH_ROLLBACK_DELAY_MS = 1_000L
         private const val TRAFFIC_CHECK_DELAY_MS = 1_500L
