@@ -21,16 +21,18 @@ data class RankedServer(val id: String, val protocol: String, val score: Double)
 /** A mobile server under allowlists, docs/app-platform.md "Allowlists". */
 data class AllowlistCandidate(
     val candidate: SmartCandidate,
-    /** WDTT or Yandex: slow by design, so tried only after the ordinary mobile servers. */
+    /** WDTT or Yandex: tried after the ordinary mobile servers unless the user is signed in to it. */
     val relay: Boolean,
     /** A mobile server that carried nothing under this network's allowlists a moment ago. */
     val failedRecently: Boolean,
     /**
      * A relay the user is already signed in to (a stored VK login, a usable
-     * Yandex sign-in): no sign-in to fear, so it competes with the ordinary
-     * mobile servers on the score.
+     * Yandex sign-in): no sign-in to fear, so it goes before the ordinary
+     * mobile servers.
      */
     val signedIn: Boolean = false,
+    /** The mobile server that last carried traffic under this network's allowlists. */
+    val lastWinner: Boolean = false,
 )
 
 /**
@@ -93,12 +95,17 @@ object SmartServerRanking {
             ?: ranked.firstOrNull { it.id !in triedIds }
 
     /**
-     * Under allowlists: ordinary mobile servers and signed-in relays first,
-     * then the other relays, then the mobile servers that just failed here.
-     * Within each, the servers that answered a ping go first, by score; a
-     * silent one may still pass the allowlist, so it is tried rather than left
-     * out. A relay is never pinged: it is ranked by the score alone, with
-     * [UNKNOWN_LATENCY_MS] for its latency.
+     * Under allowlists: signed-in relays first, then the ordinary mobile
+     * servers, then the other relays, then the mobile servers that just failed
+     * here. An ordinary mobile server is reached through a CDN, so its ping
+     * measures the CDN's edge, not the tunnel behind it: on Beeline a fast
+     * ping hid a second of delay in the tunnel. The ping cannot tell it
+     * from a relay, so a relay the user signed in to goes first. Within each
+     * group the server that last carried traffic here goes first, then those
+     * that answered a ping, by score; a silent one may still pass the
+     * allowlist, so it is tried rather than left out. A relay is never pinged:
+     * it is ranked by the score alone, with [UNKNOWN_LATENCY_MS] for its
+     * latency.
      */
     fun rankAllowlist(candidates: List<AllowlistCandidate>): List<RankedServer> =
         candidates
@@ -106,6 +113,7 @@ object SmartServerRanking {
             .sortedWith(
                 compareBy<Pair<AllowlistCandidate, Double>>(
                     { (item, _) -> allowlistTier(item) },
+                    { (item, _) -> !item.lastWinner },
                     { (item, _) -> item.candidate.latencyMs == null && !item.relay },
                     { (_, score) -> score },
                     { (item, _) -> item.candidate.id },
@@ -114,9 +122,10 @@ object SmartServerRanking {
             .map { (item, score) -> RankedServer(item.candidate.id, item.candidate.protocol, score) }
 
     private fun allowlistTier(item: AllowlistCandidate): Int = when {
-        item.relay && !item.signedIn -> 1
-        item.failedRecently -> 2
-        else -> 0
+        item.failedRecently -> 3
+        item.relay && item.signedIn -> 0
+        item.relay -> 2
+        else -> 1
     }
 
     /** Moving a running connection costs a reconnect; only a clearly better server is worth it. */

@@ -52,13 +52,9 @@ class SmartAuto(
     /** The server that last carried traffic on this network; reconnecting there skips the search. */
     fun lastWinner(network: Network?): String? = networkKey(network)?.let(history.current()::winner)
 
-    /** The mobile server that last carried traffic under this network's allowlists. */
-    fun lastAllowlistWinner(network: Network?): String? =
-        networkKey(network, allowlist = true)?.let(history.current()::winner)
-
     /**
-     * Mobile servers under allowlists, best first: ordinary ones and the
-     * relays the user is signed in to before the other relays, see
+     * Mobile servers under allowlists, best first: the relays the user is
+     * signed in to, the ordinary ones, then the other relays, see
      * [SmartServerRanking.rankAllowlist]. An operator lets through some
      * addresses and not others, so the record is about servers, not
      * protocols, and kept apart from the same network without allowlists.
@@ -73,6 +69,7 @@ class SmartAuto(
         val snapshot = history.current()
         val now = clock()
         val vkSession = storedVkSession()
+        val winner = key?.let(snapshot::winner)
         val candidates = servers.map { server ->
             val record = allowlistRecord(server)
             AllowlistCandidate(
@@ -87,6 +84,7 @@ class SmartAuto(
                 relay = server.isAllowlistMobileServer(),
                 failedRecently = key != null && snapshot.failedWithin(key, record, now, ALLOWLIST_RECENT_FAILURE_MS),
                 signedIn = server.isSignedInRelay(vkSession, Instant.ofEpochMilli(now)),
+                lastWinner = server.id == winner,
             )
         }
         return SmartServerRanking.rankAllowlist(candidates)
@@ -305,9 +303,9 @@ private fun allowlistRecord(server: TunnelServer): String = "server:${server.id}
 
 /**
  * A relay the user is already signed in to: WDTT with a stored VK login,
- * Yandex with a usable sign-in. Under allowlists it competes with the
- * ordinary mobile servers; without a sign-in it waits behind them, since the
- * sign-in page scares many users.
+ * Yandex with a usable sign-in. Under allowlists it goes before the ordinary
+ * mobile servers; without a sign-in it waits behind them, since the sign-in
+ * page scares many users.
  */
 internal fun TunnelServer.isSignedInRelay(vkSession: Boolean, now: Instant = Instant.now()): Boolean =
     isAllowlistMobileServer() && when (engine) {

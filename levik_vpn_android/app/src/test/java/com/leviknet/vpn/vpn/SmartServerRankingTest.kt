@@ -182,8 +182,14 @@ class SmartServerRankingTest {
     }
 
     @Test
-    fun `under allowlists a fast ordinary mobile server still beats a signed-in relay`() {
-        val fast = AllowlistCandidate(candidate("lte", protocol = "vless-xhttp", latencyMs = 60), relay = false, failedRecently = false)
+    fun `under allowlists a signed-in relay goes before an ordinary mobile server however fast its CDN answers`() {
+        // Beeline in Kostroma: the Polish LTE's CDN edge answers fast, the tunnel behind it takes a second.
+        val poland = AllowlistCandidate(
+            candidate("lte-pl", protocol = "vless-xhttp", latencyMs = 40, verdict = ProtocolVerdict.WORKS),
+            relay = false,
+            failedRecently = false,
+            lastWinner = true,
+        )
         val yandex = AllowlistCandidate(
             candidate("yandex", protocol = "yandex", latencyMs = null, silenceMeansDown = false, load = null, verdict = ProtocolVerdict.WORKS),
             relay = true,
@@ -196,9 +202,40 @@ class SmartServerRankingTest {
             failedRecently = false,
         )
         assertEquals(
-            listOf("lte", "yandex", "wdtt"),
-            SmartServerRanking.rankAllowlist(listOf(wdtt, yandex, fast)).map { it.id },
+            listOf("yandex", "lte-pl", "wdtt"),
+            SmartServerRanking.rankAllowlist(listOf(wdtt, poland, yandex)).map { it.id },
         )
+    }
+
+    @Test
+    fun `under allowlists the best of the signed-in relays goes first, the last winner here before the rest`() {
+        fun relay(id: String, verdict: ProtocolVerdict, lastWinner: Boolean = false) = AllowlistCandidate(
+            candidate(id, protocol = id, latencyMs = null, silenceMeansDown = false, load = null, verdict = verdict),
+            relay = true,
+            failedRecently = false,
+            signedIn = true,
+            lastWinner = lastWinner,
+        )
+        val lte = AllowlistCandidate(candidate("lte", latencyMs = 40), relay = false, failedRecently = false)
+        assertEquals(
+            listOf("wdtt", "yandex", "lte"),
+            SmartServerRanking.rankAllowlist(
+                listOf(lte, relay("yandex", ProtocolVerdict.UNKNOWN), relay("wdtt", ProtocolVerdict.WORKS)),
+            ).map { it.id },
+        )
+        assertEquals(
+            listOf("yandex", "wdtt", "lte"),
+            SmartServerRanking.rankAllowlist(
+                listOf(lte, relay("yandex", ProtocolVerdict.UNKNOWN, lastWinner = true), relay("wdtt", ProtocolVerdict.WORKS)),
+            ).map { it.id },
+        )
+    }
+
+    @Test
+    fun `under allowlists the ordinary mobile server that last won here goes before a faster one`() {
+        val winner = AllowlistCandidate(candidate("lte-ru", latencyMs = 120), relay = false, failedRecently = false, lastWinner = true)
+        val faster = AllowlistCandidate(candidate("lte-pl", latencyMs = 40), relay = false, failedRecently = false)
+        assertEquals(listOf("lte-ru", "lte-pl"), SmartServerRanking.rankAllowlist(listOf(faster, winner)).map { it.id })
     }
 
     @Test

@@ -1326,10 +1326,9 @@ class LevikVpnService : VpnService() {
             readSecureString(SecureFileStore.ALLOWLIST_RETURN_SERVER) != null
 
     /**
-     * The mobile server to try under allowlists: the one that last carried
-     * traffic on this network, else Smart Auto's best among those not tried
-     * yet. A relay that won here goes first only when the user is signed in
-     * to it; otherwise it still waits behind the ordinary ones.
+     * The mobile server to try under allowlists: Smart Auto's best among those
+     * not tried yet, where the one that last carried traffic on this network
+     * leads its group (signed-in relays, ordinary servers, other relays).
      */
     private suspend fun allowlistTarget(
         profile: PreparedTunnelProfile,
@@ -1342,13 +1341,7 @@ class LevikVpnService : VpnService() {
             server.id != current.id && server.id !in tried && isAllowlistCandidate(server, nowMs)
         }
         if (pool.isEmpty()) return null
-        val smartAuto = container.appPlatform.smartAuto
-        smartAuto.lastAllowlistWinner(network)?.let { winnerId ->
-            pool.firstOrNull { it.id == winnerId }
-                ?.takeIf { !it.isAllowlistMobileServer() || it.isSignedInRelay(storedVkSession()) }
-                ?.let { return it }
-        }
-        val ranked = smartAuto.rankAllowlist(pool, measureLatencies(pool), network)
+        val ranked = container.appPlatform.smartAuto.rankAllowlist(pool, measureLatencies(pool), network)
         return ranked.firstNotNullOfOrNull { item -> pool.firstOrNull { it.id == item.id } }
     }
 
