@@ -2231,13 +2231,14 @@ class AppViewModel(
     }
 
     /**
-     * Ordinary mobile servers Auto may take under allowlists. Relays need the
-     * user's own sign-in and introduction, so the service reaches them later.
+     * Mobile servers Auto may take under allowlists; the ranking puts ordinary
+     * ones before relays. Yandex is left out without the user's sign-in.
      */
     private fun automaticAllowlistServers(profile: PreparedTunnelProfile): List<TunnelServer> {
         val candidates = profile.servers.filter {
             it.isMobileServer() && !it.isHomeRoadServer() &&
-                it.engine in setOf(TunnelEngineKind.XRAY, TunnelEngineKind.LEVIK_TUIC)
+                it.engine != TunnelEngineKind.LEVIK_GAME &&
+                (it.engine != TunnelEngineKind.LEVIK_YANDEX || it.hasUsableYandexAuth())
         }
         val available = withoutMaintenance(profile, candidates.mapTo(mutableSetOf(), TunnelServer::id))
         return candidates.filter { it.id in available }

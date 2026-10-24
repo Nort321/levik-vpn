@@ -244,7 +244,7 @@ class SmartAuto(
         const val NETWORK_KEY_BYTES = 8
         val TRAFFIC_CHECK_URLS = listOf(
             "https://speed.cloudflare.com/__down?bytes=131072",
-            "https://cachefly.cachefly.net/100kb.test",
+            "https://proof.ovh.net/files/1Mb.dat",
         )
         // Foreign addresses only: under a mobile whitelist every protocol fails, which says
         // nothing about the protocols; mobile servers handle that case.

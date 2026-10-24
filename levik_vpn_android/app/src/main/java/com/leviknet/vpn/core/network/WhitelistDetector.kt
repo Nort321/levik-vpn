@@ -31,10 +31,10 @@ internal data class WhitelistProbeResult(
 )
 
 /**
- * Allowlists: domestic sites answer, foreign ones do not. One foreign site may
- * still answer under allowlists: CDNs (Akamai, Google) keep caches inside the
- * operator's own network, and the operator lets its own addresses through.
- * Two foreign answers mean the internet is open.
+ * Allowlists: domestic sites answer, foreign ones do not deliver a real download.
+ * One foreign site may still deliver under allowlists (a CDN cache inside the
+ * operator's network, which the operator lets through). Two mean the internet
+ * is open.
  */
 internal fun classifyWhitelistMode(results: List<WhitelistProbeResult>): WhitelistMode {
     val domestic = results.filter(WhitelistProbeResult::domestic)
@@ -81,7 +81,7 @@ class WhitelistDetector(context: Context) {
                     WhitelistProbeResult(
                         id = probe.id,
                         domestic = probe.domestic,
-                        reachable = reachable(network, probe.url),
+                        reachable = reachable(network, probe),
                     )
                 }
             }.awaitAll()
@@ -138,11 +138,11 @@ class WhitelistDetector(context: Context) {
      * timeouts, and a blocking call ignores coroutine cancellation. The probe runs on its
      * own and is abandoned at the deadline instead of holding up the answer.
      */
-    private suspend fun reachable(network: Network, target: String): Boolean {
+    private suspend fun reachable(network: Network, probe: Probe): Boolean {
         val connection = AtomicReference<HttpURLConnection?>()
-        val attempt = probeScope.async { probe(network, target, connection) }
+        val attempt = probeScope.async { probe(network, probe, connection) }
         return try {
-            withTimeoutOrNull(PROBE_TIMEOUT_MS) { attempt.await() } ?: false
+            withTimeoutOrNull(PROBE_DEADLINE_MS) { attempt.await() } ?: false
         } finally {
             if (!attempt.isCompleted) {
                 attempt.cancel()
@@ -153,14 +153,14 @@ class WhitelistDetector(context: Context) {
 
     private fun probe(
         network: Network,
-        target: String,
+        probe: Probe,
         connection: AtomicReference<HttpURLConnection?>,
     ): Boolean {
         var conn: HttpURLConnection? = null
         return try {
-            conn = (network.openConnection(URL(target)) as HttpURLConnection).apply {
-                connectTimeout = PROBE_TIMEOUT_MS.toInt()
-                readTimeout = PROBE_TIMEOUT_MS.toInt()
+            conn = (network.openConnection(URL(probe.url)) as HttpURLConnection).apply {
+                connectTimeout = SOCKET_TIMEOUT_MS
+                readTimeout = SOCKET_TIMEOUT_MS
                 instanceFollowRedirects = false
                 useCaches = false
                 requestMethod = "GET"
@@ -170,9 +170,22 @@ class WhitelistDetector(context: Context) {
                 )
                 setRequestProperty("Cache-Control", "no-cache")
                 setRequestProperty("Connection", "close")
+                // Compression would let a large page cross a byte cutoff as a few kilobytes.
+                if (probe.minBytes > 0) setRequestProperty("Accept-Encoding", "identity")
             }
             connection.set(conn)
-            conn.responseCode in 200..599
+            val code = conn.responseCode
+            if (probe.minBytes == 0) return code in 200..599
+            code == HttpURLConnection.HTTP_OK && conn.inputStream.use { input ->
+                val buffer = ByteArray(8 * 1024)
+                var total = 0
+                while (total < probe.minBytes) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    total += count
+                }
+                total >= probe.minBytes
+            }
         } catch (_: Exception) {
             false
         } finally {
@@ -187,26 +200,36 @@ class WhitelistDetector(context: Context) {
         else -> 0
     } + if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) 10 else 0
 
+    /**
+     * A foreign site counts only after [minBytes] of its body arrive. Some operators
+     * (Beeline) let a TLS handshake and a tiny answer through under allowlists and
+     * stall the transfer after a few kilobytes, so a status code alone means nothing.
+     */
     private data class Probe(
         val id: String,
         val url: String,
         val domestic: Boolean,
+        val minBytes: Int = 0,
     )
 
     companion object {
-        // A congested mobile network can take a few seconds for one TLS handshake.
-        private const val PROBE_TIMEOUT_MS = 4_000L
+        // A congested mobile network can take a few seconds for one TLS handshake and 32 KB.
+        private const val SOCKET_TIMEOUT_MS = 4_000
+        private const val PROBE_DEADLINE_MS = 6_000L
         private const val CACHE_TTL_MS = 60_000L
+        private const val FOREIGN_MIN_BYTES = 32 * 1024
+
+        // Foreign hosts with their own networks: no caches inside Russian operators.
         private val PROBES = listOf(
             Probe("ozon", "https://www.ozon.ru/", domestic = true),
             Probe("yandex", "https://ya.ru/", domestic = true),
             Probe("avito", "https://www.avito.ru/", domestic = true),
             Probe("vk", "https://vk.com/", domestic = true),
-            Probe("google", "https://www.google.com/generate_204", domestic = false),
-            Probe("cloudflare", "https://cp.cloudflare.com/", domestic = false),
-            Probe("wikipedia", "https://www.wikipedia.org/", domestic = false),
-            Probe("github", "https://github.com/", domestic = false),
-            Probe("apple", "https://www.apple.com/library/test/success.html", domestic = false),
+            Probe("cloudflare", "https://speed.cloudflare.com/__down?bytes=$FOREIGN_MIN_BYTES", domestic = false, FOREIGN_MIN_BYTES),
+            Probe("mozilla", "https://www.mozilla.org/en-US/", domestic = false, FOREIGN_MIN_BYTES),
+            Probe("ovh", "https://proof.ovh.net/files/1Mb.dat", domestic = false, FOREIGN_MIN_BYTES),
+            Probe("github", "https://github.com/", domestic = false, FOREIGN_MIN_BYTES),
+            Probe("wikipedia", "https://www.wikipedia.org/", domestic = false, FOREIGN_MIN_BYTES),
         )
     }
 }
