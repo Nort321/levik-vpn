@@ -8,9 +8,11 @@ import android.os.SystemClock
 import android.telephony.TelephonyManager
 import com.leviknet.vpn.core.platform.FavoriteNodes
 import com.leviknet.vpn.core.platform.ProtocolAdvice
+import com.leviknet.vpn.data.hasUsableYandexAuth
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
+import java.time.Instant
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -55,8 +57,9 @@ class SmartAuto(
         networkKey(network, allowlist = true)?.let(history.current()::winner)
 
     /**
-     * Mobile servers under allowlists, best first: ordinary ones before relays,
-     * see [SmartServerRanking.rankAllowlist]. An operator lets through some
+     * Mobile servers under allowlists, best first: ordinary ones and the
+     * relays the user is signed in to before the other relays, see
+     * [SmartServerRanking.rankAllowlist]. An operator lets through some
      * addresses and not others, so the record is about servers, not
      * protocols, and kept apart from the same network without allowlists.
      */
@@ -69,6 +72,7 @@ class SmartAuto(
         val load = nodeLoad()
         val snapshot = history.current()
         val now = clock()
+        val vkSession = storedVkSession()
         val candidates = servers.map { server ->
             val record = allowlistRecord(server)
             AllowlistCandidate(
@@ -82,6 +86,7 @@ class SmartAuto(
                 ),
                 relay = server.isAllowlistMobileServer(),
                 failedRecently = key != null && snapshot.failedWithin(key, record, now, ALLOWLIST_RECENT_FAILURE_MS),
+                signedIn = server.isSignedInRelay(vkSession, Instant.ofEpochMilli(now)),
             )
         }
         return SmartServerRanking.rankAllowlist(candidates)
@@ -297,6 +302,22 @@ enum class TrafficCheckSize(val bytes: Int, val deadlineMs: Long) {
 
 /** Under allowlists the record is per server: the operator lets some addresses through. */
 private fun allowlistRecord(server: TunnelServer): String = "server:${server.id}"
+
+/**
+ * A relay the user is already signed in to: WDTT with a stored VK login,
+ * Yandex with a usable sign-in. Under allowlists it competes with the
+ * ordinary mobile servers; without a sign-in it waits behind them, since the
+ * sign-in page scares many users.
+ */
+internal fun TunnelServer.isSignedInRelay(vkSession: Boolean, now: Instant = Instant.now()): Boolean =
+    isAllowlistMobileServer() && when (engine) {
+        TunnelEngineKind.LEVIK_RELAY -> vkSession
+        TunnelEngineKind.LEVIK_YANDEX -> hasUsableYandexAuth(now)
+        else -> false
+    }
+
+/** The VK login stored in WebView; without WebView there is none to use. */
+internal fun storedVkSession(): Boolean = runCatching(::hasStoredVkSession).getOrDefault(false)
 
 /**
  * Servers and protocols tried since the user connected; a few rungs at most, so a bad network cannot loop.

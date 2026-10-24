@@ -163,18 +163,24 @@ stays until the network changes or allowlists end. A regular server that
 carries no traffic on mobile data under allowlists is not held against its
 protocol: the probe runs at once and moves the connection instead. In Auto
 mode a connection started on mobile data under allowlists goes straight to a
-mobile server, an ordinary one before a relay. If the phone drops mobile data on Wi-Fi under a
+mobile server, an ordinary one before a relay the user is not signed in to. If the phone drops mobile data on Wi-Fi under a
 server that needs it, the app moves to the regular server used before (or
 Smart Auto's best) instead of waiting for mobile data to return. The power
 button cancels a connection that is still being set up or reconnecting.
 
-Ordinary mobile servers (such as LTE over XHTTP) always come before the
-relays (WDTT through VK, Yandex), then the mobile servers that failed under
-this network's allowlists within the last hour. The ordinary mobile server
-that last carried traffic under this network's allowlists goes first; a relay
-that did never skips the ordinary ones. Otherwise each group is ordered by
-Smart Auto's score, and a mobile server that did not answer the ping is tried
-after those that did instead of being left out. Under allowlists the history
+Ordinary mobile servers (such as LTE over XHTTP) come before the relays
+(WDTT through VK, Yandex), then the mobile servers that failed under this
+network's allowlists within the last hour. The VK and Yandex sign-in scares
+many users, so a relay waits behind the ordinary servers only while the user
+is not signed in to it. With a VK login stored in the app (WDTT) or a usable
+Yandex sign-in, that relay joins the ordinary mobile servers and competes on
+Smart Auto's score: a far ordinary server (a second of ping) loses to a relay
+that worked on this network, a near one still wins. The mobile server that
+last carried traffic under this network's allowlists goes first; a relay that
+did skips the ordinary ones only when the user is signed in to it. Otherwise
+each group is ordered by Smart Auto's score, and a mobile server that did not
+answer the ping is tried after those that did instead of being left out. A
+relay is never pinged; its score takes 400 ms for the latency. Under allowlists the history
 is per server, not per protocol, and apart from the same network without
 allowlists: the operator lets some addresses through and not others. Yandex is
 left out without the user's sign-in. Each mobile server must download 32 KB within 12 seconds. If

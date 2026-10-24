@@ -1,6 +1,8 @@
 package com.leviknet.vpn.vpn
 
 import com.leviknet.vpn.core.platform.ProtocolAdvice
+import java.time.Instant
+import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -157,5 +159,85 @@ class SmartServerRankingTest {
             listOf("lte-2", "wdtt", "lte"),
             SmartServerRanking.rankAllowlist(listOf(failed, relay, other)).map { it.id },
         )
+    }
+
+    @Test
+    fun `under allowlists a signed-in relay beats a far ordinary mobile server`() {
+        // Beeline in Kostroma: the Polish LTE answers in a second, the VK relay worked here before.
+        val poland = AllowlistCandidate(candidate("lte-pl", protocol = "vless-xhttp", latencyMs = 1000), relay = false, failedRecently = false)
+        val wdtt = candidate("wdtt", protocol = "relay", latencyMs = null, silenceMeansDown = false, load = null, verdict = ProtocolVerdict.WORKS)
+        assertEquals(
+            listOf("wdtt", "lte-pl"),
+            SmartServerRanking.rankAllowlist(
+                listOf(poland, AllowlistCandidate(wdtt, relay = true, failedRecently = false, signedIn = true)),
+            ).map { it.id },
+        )
+        // Without a login the sign-in page would scare the user: ordinary first.
+        assertEquals(
+            listOf("lte-pl", "wdtt"),
+            SmartServerRanking.rankAllowlist(
+                listOf(poland, AllowlistCandidate(wdtt, relay = true, failedRecently = false, signedIn = false)),
+            ).map { it.id },
+        )
+    }
+
+    @Test
+    fun `under allowlists a fast ordinary mobile server still beats a signed-in relay`() {
+        val fast = AllowlistCandidate(candidate("lte", protocol = "vless-xhttp", latencyMs = 60), relay = false, failedRecently = false)
+        val yandex = AllowlistCandidate(
+            candidate("yandex", protocol = "yandex", latencyMs = null, silenceMeansDown = false, load = null, verdict = ProtocolVerdict.WORKS),
+            relay = true,
+            failedRecently = false,
+            signedIn = true,
+        )
+        val wdtt = AllowlistCandidate(
+            candidate("wdtt", protocol = "relay", latencyMs = null, silenceMeansDown = false, load = null),
+            relay = true,
+            failedRecently = false,
+        )
+        assertEquals(
+            listOf("lte", "yandex", "wdtt"),
+            SmartServerRanking.rankAllowlist(listOf(wdtt, yandex, fast)).map { it.id },
+        )
+    }
+
+    @Test
+    fun `under allowlists a signed-in relay that just failed here goes after the other relays`() {
+        val failed = AllowlistCandidate(
+            candidate("wdtt", protocol = "relay", latencyMs = null, silenceMeansDown = false, load = null),
+            relay = true,
+            failedRecently = true,
+            signedIn = true,
+        )
+        val yandex = AllowlistCandidate(
+            candidate("yandex", protocol = "yandex", latencyMs = null, silenceMeansDown = false, load = null),
+            relay = true,
+            failedRecently = false,
+        )
+        val lte = AllowlistCandidate(candidate("lte", latencyMs = 900), relay = false, failedRecently = false)
+        assertEquals(
+            listOf("lte", "yandex", "wdtt"),
+            SmartServerRanking.rankAllowlist(listOf(failed, yandex, lte)).map { it.id },
+        )
+    }
+
+    @Test
+    fun `a relay counts as signed in only with the user's own VK login or Yandex sign-in`() {
+        val now = Instant.parse("2026-10-24T06:00:00Z")
+        fun server(id: String, engine: TunnelEngineKind, category: TunnelServerCategory, yandex: YandexServerConfig? = null) =
+            TunnelServer(id, id, id, "RU", JsonObject(emptyMap()), engine = engine, category = category, yandexConfig = yandex)
+        val wdtt = server("wdtt", TunnelEngineKind.LEVIK_RELAY, TunnelServerCategory.MOBILE_ALLOWLIST)
+        assertTrue(wdtt.isSignedInRelay(vkSession = true, now = now))
+        assertFalse(wdtt.isSignedInRelay(vkSession = false, now = now))
+
+        fun telemost(expiresAt: Long) = YandexServerConfig(
+            telemost = TelemostBootstrap(1, "a".repeat(64), "https://telemost.yandex.ru/j/12345678901234", "A".repeat(43), "b".repeat(64), expiresAt),
+        )
+        val signedIn = server("yandex", TunnelEngineKind.LEVIK_YANDEX, TunnelServerCategory.MOBILE_ALLOWLIST, telemost(now.epochSecond + 900))
+        val expired = signedIn.copy(yandexConfig = telemost(now.epochSecond + 60))
+        assertTrue(signedIn.isSignedInRelay(vkSession = false, now = now))
+        assertFalse(expired.isSignedInRelay(vkSession = true, now = now))
+
+        assertFalse(server("lte", TunnelEngineKind.XRAY, TunnelServerCategory.MOBILE).isSignedInRelay(vkSession = true, now = now))
     }
 }

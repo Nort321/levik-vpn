@@ -2232,7 +2232,8 @@ class AppViewModel(
 
     /**
      * Mobile servers Auto may take under allowlists; the ranking puts ordinary
-     * ones before relays. Yandex is left out without the user's sign-in.
+     * ones and the relays the user is signed in to before the other relays.
+     * Yandex is left out without the user's sign-in.
      */
     private fun automaticAllowlistServers(profile: PreparedTunnelProfile): List<TunnelServer> {
         val candidates = profile.servers.filter {

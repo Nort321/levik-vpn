@@ -23,8 +23,14 @@ data class AllowlistCandidate(
     val candidate: SmartCandidate,
     /** WDTT or Yandex: slow by design, so tried only after the ordinary mobile servers. */
     val relay: Boolean,
-    /** An ordinary mobile server that carried nothing under this network's allowlists a moment ago. */
+    /** A mobile server that carried nothing under this network's allowlists a moment ago. */
     val failedRecently: Boolean,
+    /**
+     * A relay the user is already signed in to (a stored VK login, a usable
+     * Yandex sign-in): no sign-in to fear, so it competes with the ordinary
+     * mobile servers on the score.
+     */
+    val signedIn: Boolean = false,
 )
 
 /**
@@ -87,10 +93,12 @@ object SmartServerRanking {
             ?: ranked.firstOrNull { it.id !in triedIds }
 
     /**
-     * Under allowlists: ordinary mobile servers first, then relays, then the
-     * mobile servers that just failed here. Within each, the servers that
-     * answered a ping go first, by score; a silent one may still pass the
-     * allowlist, so it is tried rather than left out.
+     * Under allowlists: ordinary mobile servers and signed-in relays first,
+     * then the other relays, then the mobile servers that just failed here.
+     * Within each, the servers that answered a ping go first, by score; a
+     * silent one may still pass the allowlist, so it is tried rather than left
+     * out. A relay is never pinged: it is ranked by the score alone, with
+     * [UNKNOWN_LATENCY_MS] for its latency.
      */
     fun rankAllowlist(candidates: List<AllowlistCandidate>): List<RankedServer> =
         candidates
@@ -98,7 +106,7 @@ object SmartServerRanking {
             .sortedWith(
                 compareBy<Pair<AllowlistCandidate, Double>>(
                     { (item, _) -> allowlistTier(item) },
-                    { (item, _) -> item.candidate.latencyMs == null },
+                    { (item, _) -> item.candidate.latencyMs == null && !item.relay },
                     { (_, score) -> score },
                     { (item, _) -> item.candidate.id },
                 ),
@@ -106,7 +114,7 @@ object SmartServerRanking {
             .map { (item, score) -> RankedServer(item.candidate.id, item.candidate.protocol, score) }
 
     private fun allowlistTier(item: AllowlistCandidate): Int = when {
-        item.relay -> 1
+        item.relay && !item.signedIn -> 1
         item.failedRecently -> 2
         else -> 0
     }
