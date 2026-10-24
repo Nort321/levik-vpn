@@ -7,6 +7,24 @@ import org.junit.Test
 
 class MobileServerSwitchPolicyTest {
     @Test
+    fun `validated wifi returns auto mobile session even while cellular is retained`() {
+        assertTrue(shouldReturnFromMobileServer(true, false, true, true, false))
+        assertTrue(shouldReturnFromMobileServer(true, false, true, false, true))
+    }
+
+    @Test
+    fun `captive wifi and cellular do not cause premature mobile handover`() {
+        assertEquals(false, shouldReturnFromMobileServer(true, false, false, true, true))
+        assertEquals(false, shouldReturnFromMobileServer(true, true, true, true, true))
+    }
+
+    @Test
+    fun `wifi handover preserves manual relay and ordinary server choices`() {
+        assertEquals(false, shouldReturnFromMobileServer(true, false, true, false, false))
+        assertEquals(false, shouldReturnFromMobileServer(false, false, true, true, true))
+    }
+
+    @Test
     fun `switches regular server only after two active cellular confirmations`() {
         val policy = MobileServerSwitchPolicy(requiredConfirmations = 2, cooldownMs = 0)
 

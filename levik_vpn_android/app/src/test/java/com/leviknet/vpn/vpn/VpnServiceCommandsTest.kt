@@ -13,6 +13,76 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class VpnServiceCommandsTest {
     @Test
+    fun `a delayed old network callback cannot cancel a newer reconnect`() = runTest {
+        val commands = VpnServiceCommands(this)
+        val oldGeneration = requireNotNull(commands.connectionGeneration)
+        val oldReconnect = launch { CompletableDeferred<Unit>().await() }
+        commands.trackReconnect(oldGeneration, oldReconnect)
+        commands.requestConnection(false)
+        oldReconnect.cancel()
+        commands.requestConnection(true)
+        val newGeneration = requireNotNull(commands.connectionGeneration)
+        val newReconnect = launch { CompletableDeferred<Unit>().await() }
+        commands.trackReconnect(newGeneration, newReconnect)
+
+        commands.interruptReconnect(oldGeneration)
+        assertFalse(newReconnect.isCancelled)
+        commands.interruptReconnect(newGeneration)
+        assertTrue(newReconnect.isCancelled)
+    }
+
+    @Test
+    fun `off invalidates queued network callbacks before and after teardown`() = runTest {
+        val commands = VpnServiceCommands(this)
+        val generation = requireNotNull(commands.connectionGeneration)
+        val releaseStop = CompletableDeferred<Unit>()
+        commands.requestConnection(false)
+        commands.enqueueStop { releaseStop.await() }
+        assertFalse(commands.permitsConnection(generation))
+        assertEquals(null, commands.connectionGeneration)
+        runCurrent()
+        releaseStop.complete(Unit)
+        runCurrent()
+        assertFalse(commands.isStopping)
+        assertFalse(commands.permitsConnection(generation))
+    }
+
+    @Test
+    fun `a new on waits for stop and never revives callbacks from before off`() = runTest {
+        val commands = VpnServiceCommands(this)
+        val staleGeneration = requireNotNull(commands.connectionGeneration)
+        val releaseStop = CompletableDeferred<Unit>()
+        commands.requestConnection(false)
+        commands.enqueueStop { releaseStop.await() }
+        commands.requestConnection(true)
+        val generation = requireNotNull(commands.connectionGeneration)
+        var started = false
+        launch {
+            commands.awaitPendingStop()
+            started = commands.permitsConnection(generation)
+        }
+        runCurrent()
+        assertFalse(started)
+        assertTrue(commands.permitsConnection(generation))
+        assertFalse(commands.permitsAutomaticConnection(generation))
+        assertFalse(commands.permitsConnection(staleGeneration))
+        releaseStop.complete(Unit)
+        runCurrent()
+        assertTrue(started)
+        assertTrue(commands.permitsConnection(generation))
+        assertTrue(commands.permitsAutomaticConnection(generation))
+        assertFalse(commands.permitsConnection(staleGeneration))
+    }
+
+    @Test
+    fun `duplicate on does not invalidate a connection already starting`() = runTest {
+        val commands = VpnServiceCommands(this)
+        val generation = requireNotNull(commands.connectionGeneration)
+        commands.requestConnection(true)
+        assertTrue(commands.permitsConnection(generation))
+    }
+
+    @Test
     fun `off then on waits for teardown even before the stop coroutine starts`() = runTest {
         val commands = VpnServiceCommands(this)
         val releaseStop = CompletableDeferred<Unit>()

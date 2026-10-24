@@ -194,6 +194,10 @@ class NetworkMonitor(
         connectivityManager.getNetworkCapabilities(network)
             ?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true
 
+    fun isValidated(network: Network): Boolean =
+        connectivityManager.getNetworkCapabilities(network)
+            ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+
     fun preference(network: Network): Int {
         val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return -1
         val validationScore = if (

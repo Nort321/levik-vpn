@@ -197,6 +197,20 @@ network's "allowlists ended" is not believed. In Auto mode this
 applies to any mobile server. With a server chosen by hand it applies only
 after the app made the move itself. The user is told each time.
 
+On Android, validated Wi-Fi or Ethernet returns an automatic mobile session to
+a regular server immediately, including when a VK/Yandex relay still retains
+cellular. Captive Wi-Fi does not trigger that return. A manually selected relay
+stays on cellular unless the app has a pending return to a regular server, or
+cellular disappears. Repeated network callbacks do not postpone the same
+pending allowlist probe. A handover rechecks the preferred physical network
+after server ranking, so disappearing Wi-Fi cannot move the session back to a
+regular server on restricted cellular.
+
+OFF cancels preparation, permission waits, native relay handshakes and queued
+reconnects. Native VK/Yandex control reads check cancellation at every socket
+poll; teardown does not wait for a native control writer. A newer ON waits for
+the previous teardown, and callbacks from before OFF cannot restart it.
+
 The Windows, macOS and Linux apps use the same score, history, ladder, freeze
 check and load labels (`src/main/vpn/smartAuto.ts`), with these differences:
 a network is named by a salted hash of its adapters' subnets and the IPv6

@@ -14,6 +14,7 @@ import java.io.EOFException
 import java.io.File
 import java.io.FileDescriptor
 import java.io.IOException
+import java.io.InputStream
 import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
@@ -256,6 +257,7 @@ private class AndroidRelayNativeSession(
     private val closed = AtomicBoolean(false)
     private val backgroundFailure = AtomicReference<TunnelEngineFailureException?>(null)
     private val controlWriteLock = Any()
+    private val resourceLock = Any()
     private val secureRandom = SecureRandom()
     private val observedNativeDiagnostics = ConcurrentHashMap.newKeySet<String>()
     private val controlSocketName = randomSocketName("control")
@@ -278,7 +280,10 @@ private class AndroidRelayNativeSession(
     private var protectReader: LocalSocketFrameReader? = null
 
     override suspend fun prepare(): LocalProxyEndpoint = withContext(Dispatchers.IO) {
+        val preparationContext = currentCoroutineContext()
+        val checkCancellation = { preparationContext.ensureActive() }
         try {
+            checkCancellation()
             startProcess()
             val prepareTimeout = RelayPreparationTimeout(
                 nowMs = SystemClock.elapsedRealtime(),
@@ -292,9 +297,16 @@ private class AndroidRelayNativeSession(
                 socketName = controlSocketName,
                 deadlineElapsedMs = minOf(prepareTimeout.deadlineMs, deadlineAfter(CHANNEL_CONNECT_TIMEOUT_MS)),
                 timeoutCode = "relay_control_connect_timeout",
+                checkCancellation = checkCancellation,
             )
-            controlSocket = control
-            controlReader = LocalSocketFrameReader(control, RELAY_MAX_CONTROL_MESSAGE_BYTES)
+            synchronized(resourceLock) {
+                if (stopping.get()) {
+                    control.closeQuietly()
+                    engineFailure("relay_session_stopping")
+                }
+                controlSocket = control
+                controlReader = LocalSocketFrameReader(control, RELAY_MAX_CONTROL_MESSAGE_BYTES)
+            }
             val init = RelayNativeInit(
                 peer = peerAddress(config.node.host, config.node.port),
                 turnHashes = config.node.turnHashes,
@@ -313,9 +325,10 @@ private class AndroidRelayNativeSession(
 
             var preparedProxy: LocalProxyEndpoint? = null
             while (preparedProxy == null) {
-                currentCoroutineContext().ensureActive()
-                when (val action = nextControlAction(prepareTimeout.deadlineMs)) {
-                    RelayControlAction.ConnectProtectChannel -> startProtectChannel(prepareTimeout.deadlineMs)
+                checkCancellation()
+                when (val action = nextControlAction(prepareTimeout.deadlineMs, checkCancellation)) {
+                    RelayControlAction.ConnectProtectChannel ->
+                        startProtectChannel(prepareTimeout.deadlineMs, checkCancellation)
                     is RelayControlAction.RequestVkAuth -> {
                         val authStartedAt = SystemClock.elapsedRealtime()
                         try {
@@ -376,16 +389,18 @@ private class AndroidRelayNativeSession(
     override fun stop() {
         if (!stopping.compareAndSet(false, true)) return
         if (authenticating.get()) RelayVkAuthCoordinator.cancel()
-        val sendStop = runCatching { stateMachine.beginStop() }.getOrDefault(false)
-        if (sendStop) {
-            runCatching { writeControl(codec.encodeStop()) }
+        runCatching { stateMachine.beginStop() }
+        synchronized(resourceLock) {
+            // SIGTERM cancels the native helper's context. Teardown must not wait for a
+            // control writer to become available before it can close that helper's sockets.
+            terminateProcess()
+            closeResources()
         }
-        terminateProcess()
-        closeResources()
         stateMachine.markStopped()
     }
 
-    private fun startProcess() {
+    private fun startProcess() = synchronized(resourceLock) {
+        if (stopping.get()) engineFailure("relay_session_stopping")
         val executable = File(executablePath)
         if (!executable.isFile || !executable.canExecute()) {
             engineFailure("relay_native_missing")
@@ -410,19 +425,26 @@ private class AndroidRelayNativeSession(
         }
     }
 
-    private fun startProtectChannel(prepareDeadline: Long) {
+    private fun startProtectChannel(prepareDeadline: Long, checkCancellation: () -> Unit) {
         if (protectSocket != null) engineFailure("relay_protect_duplicate")
         val socket = connectAbstract(
             socketName = protectSocketName,
             deadlineElapsedMs = minOf(prepareDeadline, deadlineAfter(CHANNEL_CONNECT_TIMEOUT_MS)),
             timeoutCode = "relay_protect_connect_timeout",
+            checkCancellation = checkCancellation,
         )
-        protectSocket = socket
-        val reader = LocalSocketFrameReader(socket, MAX_PROTECT_MESSAGE_BYTES)
-        protectReader = reader
-        val pool = executor ?: engineFailure("relay_worker_pool_unavailable")
-        synchronized(workers) {
-            workers += pool.submit { runProtectLoop(socket, reader) }
+        synchronized(resourceLock) {
+            if (stopping.get()) {
+                socket.closeQuietly()
+                engineFailure("relay_session_stopping")
+            }
+            protectSocket = socket
+            val reader = LocalSocketFrameReader(socket, MAX_PROTECT_MESSAGE_BYTES)
+            protectReader = reader
+            val pool = executor ?: engineFailure("relay_worker_pool_unavailable")
+            synchronized(workers) {
+                workers += pool.submit { runProtectLoop(socket, reader) }
+            }
         }
     }
 
@@ -472,11 +494,16 @@ private class AndroidRelayNativeSession(
         }
     }
 
-    private fun nextControlAction(deadlineElapsedMs: Long): RelayControlAction {
+    private fun nextControlAction(
+        deadlineElapsedMs: Long,
+        checkCancellation: () -> Unit,
+    ): RelayControlAction {
         checkBackgroundFailure()
         val reader = controlReader ?: engineFailure("relay_control_unavailable")
         val frame = try {
-            reader.readFrame(deadlineElapsedMs) { process?.isAlive == true }
+            reader.readFrame(deadlineElapsedMs, checkCancellation) { process?.isAlive == true }
+        } catch (error: CancellationException) {
+            throw error
         } catch (_: SocketTimeoutException) {
             if (credentialDeadline.isExpired(SystemClock.elapsedRealtime())) {
                 engineFailure("relay_credential_expired")
@@ -573,8 +600,10 @@ private class AndroidRelayNativeSession(
         socketName: String,
         deadlineElapsedMs: Long,
         timeoutCode: String,
+        checkCancellation: () -> Unit,
     ): LocalSocket {
         while (SystemClock.elapsedRealtime() < deadlineElapsedMs) {
+            checkCancellation()
             if (stopping.get()) engineFailure("relay_session_stopping")
             if (process?.isAlive != true) engineFailure("relay_process_exited")
             val socket = LocalSocket()
@@ -588,6 +617,9 @@ private class AndroidRelayNativeSession(
                 verifyPeerUid(socket)
                 socket.soTimeout = SOCKET_READ_TIMEOUT_MS
                 return socket
+            } catch (error: CancellationException) {
+                socket.closeQuietly()
+                throw error
             } catch (error: TunnelEngineFailureException) {
                 socket.closeQuietly()
                 throw error
@@ -671,12 +703,10 @@ private class AndroidRelayNativeSession(
 
     private fun terminateProcess() {
         val nativeProcess = process ?: return
-        if (nativeProcess.isAlive && !waitFor(nativeProcess, STOP_GRACEFUL_TIMEOUT_MS)) {
-            runCatching { nativeProcess.destroy() }
-            if (nativeProcess.isAlive && !waitFor(nativeProcess, STOP_DESTROY_TIMEOUT_MS)) {
-                runCatching { nativeProcess.destroyForcibly() }
-                waitFor(nativeProcess, STOP_FORCIBLE_TIMEOUT_MS)
-            }
+        runCatching { nativeProcess.destroy() }
+        if (nativeProcess.isAlive && !waitFor(nativeProcess, STOP_DESTROY_TIMEOUT_MS)) {
+            runCatching { nativeProcess.destroyForcibly() }
+            waitFor(nativeProcess, STOP_FORCIBLE_TIMEOUT_MS)
         }
     }
 
@@ -760,7 +790,6 @@ private class AndroidRelayNativeSession(
         const val CONNECT_RETRY_DELAY_MS = 25L
         const val CHANNEL_CONNECT_TIMEOUT_MS = 10_000L
         const val PREPARE_TIMEOUT_MS = 120_000L
-        const val STOP_GRACEFUL_TIMEOUT_MS = 3_000L
         const val STOP_DESTROY_TIMEOUT_MS = 1_000L
         const val STOP_FORCIBLE_TIMEOUT_MS = 1_000L
         const val WORKER_SHUTDOWN_TIMEOUT_MS = 1_000L
@@ -771,7 +800,7 @@ private class AndroidRelayNativeSession(
     }
 }
 
-private data class LocalSocketFrame(
+internal data class LocalSocketFrame(
     val payload: String,
     val fileDescriptors: List<FileDescriptor>,
 )
@@ -780,19 +809,31 @@ private data class LocalSocketFrame(
  * Reads one byte at a time so Android's ancillary-descriptor snapshot cannot be detached from the
  * JSON record it accompanied. Partial frames survive SO_RCVTIMEO wake-ups.
  */
-private class LocalSocketFrameReader(
-    private val socket: LocalSocket,
+internal class LocalSocketFrameReader(
+    private val input: InputStream,
     private val maxPayloadBytes: Int,
+    private val receiveDescriptors: () -> Array<FileDescriptor>?,
+    private val elapsedRealtimeMs: () -> Long,
 ) {
-    private val input = socket.inputStream
+    constructor(socket: LocalSocket, maxPayloadBytes: Int) : this(
+        input = socket.inputStream,
+        maxPayloadBytes = maxPayloadBytes,
+        receiveDescriptors = { socket.ancillaryFileDescriptors },
+        elapsedRealtimeMs = SystemClock::elapsedRealtime,
+    )
+
     private val payload = ByteArrayOutputStream()
     private val pendingDescriptors = mutableListOf<FileDescriptor>()
 
     fun readFrame(
         deadlineElapsedMs: Long,
+        checkCancellation: () -> Unit = {},
         peerAlive: () -> Boolean,
     ): LocalSocketFrame {
-        while (deadlineElapsedMs == Long.MAX_VALUE || SystemClock.elapsedRealtime() < deadlineElapsedMs) {
+        while (deadlineElapsedMs == Long.MAX_VALUE || elapsedRealtimeMs() < deadlineElapsedMs) {
+            // SO_RCVTIMEO wakes a silent native peer once per second. Cancelling the coroutine
+            // must end this polling loop too, before the transport's two-minute deadline.
+            checkCancellation()
             val value = try {
                 input.read()
             } catch (_: SocketTimeoutException) {
@@ -812,7 +853,7 @@ private class LocalSocketFrameReader(
                 }
                 continue
             }
-            socket.ancillaryFileDescriptors?.let { descriptors ->
+            receiveDescriptors()?.let { descriptors ->
                 pendingDescriptors += descriptors
                 if (pendingDescriptors.size > MAX_ANCILLARY_DESCRIPTORS) {
                     closePendingDescriptors()

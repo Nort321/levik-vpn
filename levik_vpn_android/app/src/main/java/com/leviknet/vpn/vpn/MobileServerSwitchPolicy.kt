@@ -8,6 +8,16 @@ internal enum class MobileServerSwitchDecision {
     TO_REGULAR,
 }
 
+/** Android validation is enough to leave a mobile carrier; no allowlist probe is needed on Wi-Fi. */
+internal fun shouldReturnFromMobileServer(
+    currentServerIsMobile: Boolean,
+    preferredNetworkIsCellular: Boolean,
+    preferredNetworkIsValidated: Boolean,
+    automaticServer: Boolean,
+    returnPending: Boolean,
+): Boolean = currentServerIsMobile && !preferredNetworkIsCellular && preferredNetworkIsValidated &&
+    (automaticServer || returnPending)
+
 /**
  * Debounces contradictory carrier probes and prevents reconnect loops.
  *

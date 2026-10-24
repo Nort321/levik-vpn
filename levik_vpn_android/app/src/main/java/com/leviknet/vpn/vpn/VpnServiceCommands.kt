@@ -10,10 +10,39 @@ import kotlinx.coroutines.launch
 internal class VpnServiceCommands(private val scope: CoroutineScope) {
     private val latestStartId = AtomicInteger()
     @Volatile
+    private var connectionIntent = ConnectionIntent(0L, true)
+    @Volatile
     private var pendingStop: Job? = null
+    @Volatile
+    private var reconnectAttempt: ReconnectAttempt? = null
 
     val isStopping: Boolean
         get() = pendingStop?.isCompleted == false
+
+    val connectionGeneration: Long?
+        get() = connectionIntent.takeIf { it.requested }?.generation
+
+    /** Invalidates callbacks queued before OFF, even if a newer ON has already arrived. */
+    @Synchronized
+    fun requestConnection(requested: Boolean) {
+        if (connectionIntent.requested == requested) return
+        connectionIntent = ConnectionIntent(connectionIntent.generation + 1L, requested)
+    }
+
+    fun permitsConnection(generation: Long): Boolean = connectionIntent.let {
+        it.requested && it.generation == generation
+    }
+
+    fun permitsAutomaticConnection(generation: Long): Boolean =
+        !isStopping && permitsConnection(generation)
+
+    fun trackReconnect(generation: Long, job: Job) {
+        reconnectAttempt = ReconnectAttempt(generation, job)
+    }
+
+    fun interruptReconnect(generation: Long) {
+        reconnectAttempt?.takeIf { it.generation == generation }?.job?.cancel()
+    }
 
     fun onStart(startId: Int) {
         latestStartId.set(startId)
@@ -36,4 +65,7 @@ internal class VpnServiceCommands(private val scope: CoroutineScope) {
     suspend fun awaitPendingStop() {
         pendingStop?.join()
     }
+
+    private data class ConnectionIntent(val generation: Long, val requested: Boolean)
+    private data class ReconnectAttempt(val generation: Long, val job: Job)
 }

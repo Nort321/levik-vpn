@@ -100,6 +100,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -176,6 +177,7 @@ class AppViewModel(
     private var lteTrafficSyncJob: Job? = null
     private var whitelistDetectionJob: Job? = null
     private var connectionPreparationJob: Job? = null
+    private var connectionStartJob: Job? = null
     private var pendingLteAction: PendingLteAction? = null
     private var pendingAllowlistAction: PendingAllowlistAction? = null
     private var pendingRelayIntroduction: PendingRelayIntroduction? = null
@@ -1232,23 +1234,55 @@ class AppViewModel(
     }
 
     fun connectOrDisconnect() {
-        // A connection still being prepared (profile, servers, allowlists) is cancelled by the same button.
-        if (connectionPreparationJob?.isActive == true) {
-            connectionPreparationJob?.cancel()
-            connectionPending = false
-            return
-        }
-        when (mutableState.value.vpn.state) {
-            VpnConnectionState.PAUSED -> resumeVpn()
+        when (vpnController.state.value.state) {
+            VpnConnectionState.PAUSED -> {
+                cancelPendingConnection()
+                resumeVpn()
+            }
             VpnConnectionState.CONNECTED,
             VpnConnectionState.CONNECTING,
             VpnConnectionState.RECONNECTING,
-            -> vpnController.disconnect()
-            VpnConnectionState.STOPPING -> Unit
+            -> {
+                cancelPendingConnection()
+                vpnController.disconnect()
+            }
+            VpnConnectionState.STOPPING -> cancelPendingConnection()
             VpnConnectionState.DISCONNECTED,
             VpnConnectionState.ERROR,
             VpnConnectionState.LOCKDOWN,
-            -> prepareConnection()
+            -> {
+                if (connectionPreparationJob?.isActive == true || connectionStartJob?.isActive == true ||
+                    connectionPending || pendingLteAction == PendingLteAction.Connect ||
+                    pendingAllowlistAction == PendingAllowlistAction.Connect ||
+                    pendingRelayIntroduction is PendingRelayIntroduction.Connect
+                ) {
+                    val startingService = connectionStartJob?.isActive == true
+                    cancelPendingConnection()
+                    if (startingService) vpnController.disconnect()
+                } else {
+                    prepareConnection()
+                }
+            }
+        }
+    }
+
+    private fun cancelPendingConnection() {
+        connectionPreparationJob?.cancel()
+        connectionStartJob?.cancel()
+        connectionPending = false
+        val cancelLteWarning = pendingLteAction == PendingLteAction.Connect
+        val cancelAllowlistWarning = pendingAllowlistAction == PendingAllowlistAction.Connect
+        val cancelRelayIntroduction = pendingRelayIntroduction is PendingRelayIntroduction.Connect
+        if (cancelLteWarning) pendingLteAction = null
+        if (cancelAllowlistWarning) pendingAllowlistAction = null
+        if (cancelRelayIntroduction) pendingRelayIntroduction = null
+        mutableState.update {
+            it.copy(
+                showVpnDisclosure = false,
+                showLteWhitelistWarning = it.showLteWhitelistWarning && !cancelLteWarning,
+                showAllowlistRequiredWarning = it.showAllowlistRequiredWarning && !cancelAllowlistWarning,
+                showRelayIntroduction = it.showRelayIntroduction && !cancelRelayIntroduction,
+            )
         }
     }
 
@@ -1485,6 +1519,7 @@ class AppViewModel(
                 }
                 ensureSelectedSubscription(profile.subscriptionId)
                 val selected = selectServerForProfile(profile)
+                ensureActive()
                 mutableState.update {
                     it.copy(profile = profile, selectedServerId = selected)
                 }
@@ -1501,7 +1536,13 @@ class AppViewModel(
                 ) {
                     var currentMode = mutableState.value.whitelistMode
                     if (currentMode != WhitelistMode.ACTIVE && whitelistDetector != null) {
-                        currentMode = runCatching { whitelistDetector.detect(forceRefresh = false) }.getOrNull() ?: currentMode
+                        currentMode = try {
+                            whitelistDetector.detect(forceRefresh = false)
+                        } catch (error: Throwable) {
+                            if (error is CancellationException) throw error
+                            currentMode
+                        }
+                        ensureActive()
                         mutableState.update { it.copy(whitelistMode = currentMode) }
                     }
                     // Only a network known to be open warns: an unanswered probe is no reason to stop.
@@ -1519,8 +1560,10 @@ class AppViewModel(
                     mutableState.update { it.copy(showLteWhitelistWarning = true) }
                     return@launch
                 }
+                val hasDisclosureConsent = vpnController.hasDisclosureConsent()
+                ensureActive()
                 connectionPending = true
-                if (vpnController.hasDisclosureConsent()) {
+                if (hasDisclosureConsent) {
                     effectChannel.send(AppEffect.RequestVpnPermission)
                 } else {
                     mutableState.update { it.copy(showVpnDisclosure = true) }
@@ -1556,8 +1599,7 @@ class AppViewModel(
     }
 
     fun declineVpnDisclosure() {
-        connectionPending = false
-        mutableState.update { it.copy(showVpnDisclosure = false) }
+        cancelPendingConnection()
     }
 
     fun onVpnPermissionResult(granted: Boolean) {
@@ -1567,18 +1609,26 @@ class AppViewModel(
             mutableState.update { it.copy(message = UiMessage.VPN_PERMISSION_DENIED) }
             return
         }
-        viewModelScope.launch { effectChannel.send(AppEffect.RequestNotificationPermission) }
+        viewModelScope.launch {
+            if (connectionPending) effectChannel.send(AppEffect.RequestNotificationPermission)
+        }
     }
 
     @Suppress("UNUSED_PARAMETER") // Notification permission is optional and must not gate VPN startup.
     fun onNotificationPermissionResult(granted: Boolean) {
         if (!connectionPending) return
         connectionPending = false
-        viewModelScope.launch {
-            runCatching { vpnController.connect() }
-                .onFailure { error ->
-                    mutableState.update { it.copy(problem = error.toAppProblem()) }
-                }
+        connectionStartJob = viewModelScope.launch {
+            try {
+                ensureActive()
+                val beforeStart = vpnController.state.value
+                vpnController.connect()
+                // Keep OFF available after dispatch, until the service acknowledges this ON.
+                vpnController.state.first { it != beforeStart }
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                mutableState.update { it.copy(problem = error.toAppProblem()) }
+            }
         }
     }
 

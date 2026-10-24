@@ -14,6 +14,7 @@ import java.io.EOFException
 import java.io.File
 import java.io.FileDescriptor
 import java.io.IOException
+import java.io.InputStream
 import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
@@ -277,7 +278,10 @@ private class AndroidYandexNativeSession(
     private var lastDiagnosticAt = 0L
 
     override suspend fun prepare(): LocalProxyEndpoint = withContext(Dispatchers.IO) {
+        val preparationContext = currentCoroutineContext()
+        val checkCancellation = { preparationContext.ensureActive() }
         try {
+            checkCancellation()
             if (environment.network == null) yandexEngineFailure("yandex_network_required")
             checkDeadline()
             val executable = File(executablePath)
@@ -292,7 +296,7 @@ private class AndroidYandexNativeSession(
                 process?.let { native -> pool.submit { discard(native.inputStream) }; pool.submit { discard(native.errorStream) } }
             }
             val prepareDeadline = minOf(deadline.deadlineElapsedMs, after(if (config.isTelemost) 90_000 else 60_000))
-            val socket = connect(controlName, minOf(prepareDeadline, after(10_000)))
+            val socket = connect(controlName, minOf(prepareDeadline, after(10_000)), checkCancellation)
             synchronized(lifecycleLock) {
                 if (stopping.get()) { socket.close(); yandexEngineFailure("yandex_session_stopping") }
                 control = socket
@@ -303,9 +307,9 @@ private class AndroidYandexNativeSession(
             }
             var proxy: LocalProxyEndpoint? = null
             while (proxy == null) {
-                currentCoroutineContext().ensureActive()
-                when (val action = nextAction(prepareDeadline)) {
-                    YandexControlAction.ConnectNetwork -> startNetwork(prepareDeadline)
+                checkCancellation()
+                when (val action = nextAction(prepareDeadline, checkCancellation)) {
+                    YandexControlAction.ConnectNetwork -> startNetwork(prepareDeadline, checkCancellation)
                     is YandexControlAction.PreparedProxy -> proxy = LocalProxyEndpoint("127.0.0.1", action.port, username, password)
                     is YandexControlAction.NativeFailure -> yandexEngineFailure("yandex_native_${action.code}")
                     YandexControlAction.Running -> yandexEngineFailure("yandex_protocol_early_running")
@@ -326,12 +330,17 @@ private class AndroidYandexNativeSession(
     }
 
     override suspend fun start(): Unit = withContext(Dispatchers.IO) {
+        val startContext = currentCoroutineContext()
         try {
+            startContext.ensureActive()
             checkFailure()
             checkDeadline()
             // Consume the strict native RUNNING acknowledgement before Xray
             // receives the service-owned, borrowed TUN descriptor.
-            if (nextAction(minOf(deadline.deadlineElapsedMs, after(10_000))) != YandexControlAction.Running) {
+            val running = nextAction(minOf(deadline.deadlineElapsedMs, after(10_000))) {
+                startContext.ensureActive()
+            }
+            if (running != YandexControlAction.Running) {
                 yandexEngineFailure("yandex_protocol_running")
             }
             val pool = executor ?: yandexEngineFailure("yandex_workers_missing")
@@ -441,9 +450,9 @@ private class AndroidYandexNativeSession(
         }
     }
 
-    private fun startNetwork(prepareDeadline: Long) {
+    private fun startNetwork(prepareDeadline: Long, checkCancellation: () -> Unit) {
         if (network != null) yandexEngineFailure("yandex_network_duplicate")
-        val socket = connect(networkName, minOf(prepareDeadline, after(10_000)))
+        val socket = connect(networkName, minOf(prepareDeadline, after(10_000)), checkCancellation)
         val reader = YandexLocalSocketFrameReader(socket, YANDEX_MAX_NETWORK_BYTES)
         synchronized(lifecycleLock) {
             if (stopping.get()) { socket.close(); yandexEngineFailure("yandex_session_stopping") }
@@ -494,9 +503,10 @@ private class AndroidYandexNativeSession(
         }
     }
 
-    private fun nextAction(limit: Long): YandexControlAction {
+    private fun nextAction(limit: Long, checkCancellation: () -> Unit = {}): YandexControlAction {
         checkFailure()
-        val frame = (controlReader ?: yandexEngineFailure("yandex_control_missing")).readFrame(limit) { process?.isAlive == true }
+        val frame = (controlReader ?: yandexEngineFailure("yandex_control_missing"))
+            .readFrame(limit, checkCancellation) { process?.isAlive == true }
         if (frame.fileDescriptors.isNotEmpty()) { closeYandexDescriptors(frame.fileDescriptors); yandexEngineFailure("yandex_control_unexpected_fd") }
         val event = codec.decodeEvent(frame.payload)
         if (BuildConfig.DEBUG && event.type in setOf("stats", "status") &&
@@ -516,8 +526,9 @@ private class AndroidYandexNativeSession(
         return machine.accept(event)
     }
 
-    private fun connect(name: String, limit: Long): LocalSocket {
+    private fun connect(name: String, limit: Long, checkCancellation: () -> Unit): LocalSocket {
         while (SystemClock.elapsedRealtime() < limit) {
+            checkCancellation()
             checkFailure()
             checkDeadline()
             if (stopping.get() || process?.isAlive != true) yandexEngineFailure("yandex_process_exited")
@@ -527,6 +538,7 @@ private class AndroidYandexNativeSession(
                 if (socket.peerCredentials.uid != Process.myUid()) yandexEngineFailure("yandex_peer_uid_mismatch")
                 socket.soTimeout = 1000
                 return socket
+            } catch (error: CancellationException) { runCatching { socket.close() }; throw error
             } catch (error: TunnelEngineFailureException) { runCatching { socket.close() }; throw error
             } catch (_: Throwable) { runCatching { socket.close() }; Thread.sleep(25) }
         }
@@ -574,7 +586,7 @@ internal fun sameYandexSessionBinding(current: YandexServerConfig, next: YandexS
 }
 
 
-private data class YandexLocalSocketFrame(
+internal data class YandexLocalSocketFrame(
     val payload: String,
     val fileDescriptors: List<FileDescriptor>,
 )
@@ -583,20 +595,30 @@ private data class YandexLocalSocketFrame(
  * Reads one byte at a time so Android's ancillary-descriptor snapshot cannot be detached from the
  * JSON record it accompanied. Partial frames survive SO_RCVTIMEO wake-ups.
  */
-private class YandexLocalSocketFrameReader(
-    private val socket: LocalSocket,
+internal class YandexLocalSocketFrameReader(
+    private val input: InputStream,
     private val maxPayloadBytes: Int,
+    private val receiveDescriptors: () -> Array<FileDescriptor>?,
+    private val elapsedRealtimeMs: () -> Long,
 ) {
-    private val input = socket.inputStream
+    constructor(socket: LocalSocket, maxPayloadBytes: Int) : this(
+        input = socket.inputStream,
+        maxPayloadBytes = maxPayloadBytes,
+        receiveDescriptors = { socket.ancillaryFileDescriptors },
+        elapsedRealtimeMs = SystemClock::elapsedRealtime,
+    )
+
     private val payload = ByteArrayOutputStream()
     private val pendingDescriptors = mutableListOf<FileDescriptor>()
     private var readerClosed = false // Guarded by pendingDescriptors, including late ancillary delivery.
 
     fun readFrame(
         deadlineElapsedMs: Long,
+        checkCancellation: () -> Unit = {},
         peerAlive: () -> Boolean,
     ): YandexLocalSocketFrame {
-        while (deadlineElapsedMs == Long.MAX_VALUE || SystemClock.elapsedRealtime() < deadlineElapsedMs) {
+        while (deadlineElapsedMs == Long.MAX_VALUE || elapsedRealtimeMs() < deadlineElapsedMs) {
+            checkCancellation()
             if (synchronized(pendingDescriptors) { readerClosed }) throw EOFException("yandex reader closed")
             val value = try {
                 input.read()
@@ -617,7 +639,7 @@ private class YandexLocalSocketFrameReader(
                 }
                 continue
             }
-            socket.ancillaryFileDescriptors?.let { descriptors ->
+            receiveDescriptors()?.let { descriptors ->
                 val rejected = synchronized(pendingDescriptors) {
                     if (readerClosed) true else { pendingDescriptors += descriptors; false }
                 }
