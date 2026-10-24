@@ -686,6 +686,24 @@ class AppRepository(
     /** The live event stream of this session; see core/platform/LiveEvents.kt. */
     suspend fun openEvents(): javax.net.ssl.HttpsURLConnection = apiClient.openEvents(requireToken())
 
+    /** LevikDrop, docs/levik-drop.md "Website API". */
+    suspend fun dropPresence(key: String) = apiClient.dropPresence(requireToken(), key)
+
+    suspend fun clearDropPresence() {
+        val token = readToken() ?: return
+        apiClient.clearDropPresence(token)
+    }
+
+    suspend fun dropDevices(): kotlinx.serialization.json.JsonObject = apiClient.dropDevices(requireToken())
+
+    suspend fun dropTransfers(): kotlinx.serialization.json.JsonObject = apiClient.dropTransfers(requireToken())
+
+    suspend fun createDropTransfer(receiverDeviceId: String, fileCount: Int, totalBytes: Long): kotlinx.serialization.json.JsonObject =
+        apiClient.createDropTransfer(requireToken(), receiverDeviceId, fileCount, totalBytes)
+
+    suspend fun updateDropTransfer(id: String, action: String, reason: String?): kotlinx.serialization.json.JsonObject =
+        apiClient.updateDropTransfer(requireToken(), id, action, reason)
+
         /** A one-time link that opens the website signed in; null when it is not a Levik /handoff link. */
     suspend fun webHandoffUrl(target: String): String? =
         apiClient.webHandoff(requireToken(), target).url

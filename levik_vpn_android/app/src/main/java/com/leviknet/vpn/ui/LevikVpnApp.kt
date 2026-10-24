@@ -409,6 +409,10 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                                 onOpen = viewModel::openRemote,
                             )
                         }
+                        viewModel.drop?.let { drop ->
+                            val dropState by drop.state.collectAsStateWithLifecycle()
+                            com.leviknet.vpn.ui.drop.DropCard(state = dropState, controller = drop)
+                        }
                     },
                 )
             }
@@ -468,6 +472,15 @@ fun LevikVpnApp(viewModel: AppViewModel) {
             helpEnabled = viewModel.growth.helpEnabled,
             onSetHelp = viewModel.growth::setFamilyHelp,
             onSendHelp = viewModel.growth::sendFamilyHelp,
+        )
+    }
+
+    viewModel.drop?.let { drop ->
+        val dropState by drop.state.collectAsStateWithLifecycle()
+        com.leviknet.vpn.ui.drop.DropDialogs(
+            state = dropState,
+            controller = drop,
+            signedIn = state.session == SessionStatus.Authenticated,
         )
     }
 

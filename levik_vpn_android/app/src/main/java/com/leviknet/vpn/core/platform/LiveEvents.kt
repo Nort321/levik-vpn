@@ -21,6 +21,9 @@ enum class LiveEvent(val wireName: String) {
     COMMANDS("commands"),
     RULES("rules"),
     NOTIFICATIONS("notifications"),
+
+    /** LevikDrop transfers changed, docs/levik-drop.md. */
+    DROP("drop"),
     ;
 
     companion object {
