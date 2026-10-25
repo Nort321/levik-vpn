@@ -132,6 +132,9 @@ class LevikVpnService : VpnService() {
     private var activeProfileDeadline: MonotonicCredentialDeadline? = null
     private var admittedYandexAuth: YandexProviderAuth? = null
     private var autoHealingJob: Job? = null
+    private var serviceRouteConfig: ServiceRouteConfig? = null
+    private var serviceRouteRuntime: ServiceRouteRuntime? = null
+    private var serviceRouteReporter: (suspend (ServiceRouteReport) -> Unit)? = null
     private var relayEntitlementWatchdogJob: Job? = null
     private var yandexRefreshJob: Job? = null
     private var connectionJob: Job? = null
@@ -395,6 +398,12 @@ class LevikVpnService : VpnService() {
 
     override fun onDestroy() {
         serviceCommands.requestConnection(false)
+        serviceRouteRuntime?.close()
+        serviceRouteRuntime = null
+        serviceRouteReporter = null
+        serviceRouteConfig?.close()
+        serviceRouteConfig = null
+        container.repository.serviceRoutesStopped()
         AppLogger.i(LOG_TAG, "LevikVpnService onDestroy")
         telemetry.finish(EndBy.SYSTEM, null)
         runCatching { unregisterReceiver(idleReceiver) }
@@ -513,6 +522,10 @@ class LevikVpnService : VpnService() {
                     ?: profile.servers.singleOrNull { it.engine == TunnelEngineKind.LEVIK_GAME }
                     ?: error("Tunnel profile has no server eligible for automatic selection")
             }
+            // This separate request is gated and endpoint-specific; LTE and relay profiles are untouched.
+            profile = container.repository.prepareServiceRoutes(profile, selected, container.appPlatform.flagEnabled("service_routes"))
+            val routes = ServiceRouteConfig.prepare(profile, selected, filesDir, container.settings.autoFallbackServer.value)
+            serviceRouteConfig = routes
             telemetry.record { it.attempt(selected.name, selected.telemetryProtocol(), attemptCause) }
             progress.reach(AttemptStage.PROFILE, "profile_expired")
             val yandexExpiry = selected.yandexConfig?.let {
@@ -608,6 +621,7 @@ class LevikVpnService : VpnService() {
                     emptyList()
                 },
                 xhttpMuxHosts = container.appPlatform.xhttpMuxHosts(),
+                serviceRouteSession = routes,
             )
 
             val request = when (selected.engine) {
@@ -793,6 +807,27 @@ class LevikVpnService : VpnService() {
             coroutineContext.ensureActive()
             checkConnectionDeadline(connectionExpiryDeadline)
             coreRunning = true
+            if (routes != null) {
+                val (splitMode, splitPackages) = withAccountDirectApps(
+                    container.settings.splitTunnelMode.value, container.settings.splitTunnelPackages.value,
+                    if (BuildConfig.IS_PLAY_DISTRIBUTION) emptyList() else profile.directApps,
+                )
+                val exclusions = splitMode == SplitTunnelMode.ALLOWED && splitPackages.isNotEmpty() ||
+                    splitMode == SplitTunnelMode.DISALLOWED && splitPackages.any { pkg ->
+                        pkg != packageName && try { packageManager.getApplicationInfo(pkg, 0); true }
+                        catch (_: PackageManager.NameNotFoundException) { false }
+                    }
+                serviceRouteReporter = { report ->
+                    container.repository.reportServiceRoutes(if (exclusions && report.state == "applied" && report.detail == null)
+                        report.copy(detail = "app_exclusions_active") else report, profile.serviceRouteOwner)
+                }
+                startServiceRouteRuntime()
+            } else if (profile.serviceRoutes?.rules?.isEmpty() == true) {
+                val policy = requireNotNull(profile.serviceRoutes)
+                serviceScope.launch { container.repository.reportServiceRoutes(ServiceRouteReport(policy.revision, policy.fingerprint, "applied", emptyList()), profile.serviceRouteOwner) }
+            } else if (container.repository.serviceRouteState.value == "suspended") {
+                serviceScope.launch { container.repository.reportSuspendedServiceRoutes(profile.subscriptionId) }
+            }
             tunnelHealthPolicy.onTunnelStarted(SystemClock.elapsedRealtime())
             if (automaticTargetServerId == selected.id) {
                 automaticRollbackServerId = null
@@ -1011,6 +1046,12 @@ class LevikVpnService : VpnService() {
     }
 
     private fun stopCoreAndTun() {
+        serviceRouteRuntime?.close()
+        serviceRouteRuntime = null
+        serviceRouteReporter = null
+        serviceRouteConfig?.close()
+        serviceRouteConfig = null
+        container.repository.serviceRoutesStopped()
         releaseWakeLock()
         if (currentEngine != null) {
             runCatching {
@@ -1032,6 +1073,15 @@ class LevikVpnService : VpnService() {
         currentNetwork = null
         currentBootstrapDnsServer = null
         underlyingNetwork.set(null)
+    }
+
+    private fun startServiceRouteRuntime() {
+        val config = serviceRouteConfig ?: return
+        val reporter = serviceRouteReporter ?: return
+        val lease = coreLease
+        serviceRouteRuntime = ServiceRouteRuntime(config, serviceScope) { report ->
+            if (coreRunning && coreLease == lease && serviceRouteConfig === config) reporter(report)
+        }.also { it.start() }
     }
 
     /** Levik Game carries only the selected games; null for every other server. */
@@ -1732,6 +1782,8 @@ class LevikVpnService : VpnService() {
                     relayEntitlementWatchdogJob = null
                     autoHealingJob?.cancel()
                     autoHealingJob = null
+                    serviceRouteRuntime?.close()
+                    serviceRouteRuntime = null
                     engine.stop(coreOwner, previousPrepared, coreLease)
                     coreRunning = false
                     coreLease = null
@@ -1824,6 +1876,7 @@ class LevikVpnService : VpnService() {
                     coroutineContext.ensureActive()
                     if (request is TunnelEngineRequest.Relay) checkConnectionDeadline(relayDeadline)
                     coreRunning = true
+                    startServiceRouteRuntime()
                     tunnelHealthPolicy.onTunnelStarted(SystemClock.elapsedRealtime())
                     relayDeadline?.let(::scheduleProfileExpiry)
                     if (request is TunnelEngineRequest.Yandex) {
@@ -2339,6 +2392,8 @@ class LevikVpnService : VpnService() {
 
     private fun startAutoHealing() {
         autoHealingJob?.cancel()
+        // Ordinary service routes own their exit health without restarting unrelated routes.
+        if (serviceRouteConfig != null) return
         if (!container.settings.autoHealingEnabled.value) return
         // The probes run outside a Levik Game VPN (it holds only the games); the sidecar watches its paths.
         if (currentServer?.engine == TunnelEngineKind.LEVIK_GAME) return
@@ -2406,11 +2461,13 @@ class LevikVpnService : VpnService() {
         trafficCheckJob?.cancel()
         trafficCheckJob = null
         freezeDetector.reset()
+        if (serviceRouteConfig != null) return
         launchTrafficCheck(server, network, TRAFFIC_CHECK_DELAY_MS)
     }
 
     /** The stats saw a tunnel that sends but hardly receives: check it the same way. */
     private fun onFreezeSuspected() {
+        if (serviceRouteConfig != null) return
         if (trafficCheckJob?.isActive == true) return
         val server = currentServer ?: return
         val network = currentNetwork ?: return

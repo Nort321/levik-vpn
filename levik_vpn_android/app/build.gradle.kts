@@ -720,6 +720,8 @@ dependencies {
     implementation("com.google.zxing:core:3.5.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
+    // HTTP/2 gRPC over app-private Unix sockets controls only ordinary service-route balancers.
+    implementation("com.squareup.okhttp3:okhttp:5.4.0")
     implementation("androidx.work:work-runtime-ktx:2.10.0")
     add("playImplementation", "org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.2")
     add("playImplementation", "com.google.android.play:integrity:1.6.0")

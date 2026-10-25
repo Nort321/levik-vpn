@@ -157,6 +157,9 @@ class AppViewModel(
         isAuthenticated = { mutableState.value.session == SessionStatus.Authenticated },
         enabled = !BuildConfig.IS_PLAY_DISTRIBUTION,
     )
+    val serviceRoutesState = repository.serviceRouteState
+    val serviceRouteExclusions = repository.serviceRouteExclusions
+    val serviceRouteDetail = repository.serviceRouteDetail
     private val supportNotes = SupportNoteClient()
     private var loginStartJob: Job? = null
     private var loginPollJob: Job? = null

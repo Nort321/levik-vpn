@@ -101,6 +101,11 @@ internal fun RulesScreen(
     onSetCategory: (String, RuleAction?) -> Unit,
     onSetDomain: (String, RuleAction) -> Boolean,
     onRemoveDomain: (String) -> Unit,
+    onOpenServiceRoutes: () -> Unit,
+    serviceRouteState: String,
+    serviceRouteDetail: String?,
+    hasAppExclusions: Boolean,
+    onOpenAppExclusions: () -> Unit,
 ) {
     val russian = LocalConfiguration.current.locales[0].language == "ru"
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -134,6 +139,55 @@ internal fun RulesScreen(
                     contentPadding = PaddingValues(horizontal = LevikDimensions.ScreenHorizontalPadding, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(LevikDimensions.SectionSpacing),
                 ) {
+                    item {
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                            color = MaterialTheme.colorScheme.surface,
+                        ) {
+                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(if (russian) "Маршруты сервисов" else "Service routes", fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    if (russian) "Страна или сервер для сайта, маски *.ru и настройки для выбранных устройств. Открывается личный кабинет."
+                                    else "Country or exit for a website, *.ru masks, and settings for selected devices. Opens your account.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                                val status = if (serviceRouteDetail == "cache_limit") {
+                                    if (russian) "Достигнут лимит сохранённых подписок (100). Новая настройка не подтверждена; обратитесь в поддержку."
+                                    else "The saved subscription limit (100) has been reached. The new setting is unconfirmed; contact support."
+                                } else if (russian) when (serviceRouteState) {
+                                    "applied" -> "Настройки применены. Состояние отдельных маршрутов — в кабинете."
+                                    "suspended" -> "Не применяется в текущем способе подключения."
+                                    "pending" -> "Ожидает применения."
+                                    "error" -> "Новая настройка не применена; действует предыдущая конфигурация."
+                                    "unsupported" -> "Текущий клиент или способ подключения пока не поддерживает маршруты сервисов."
+                                    else -> "Настройки сохраняются в облаке и применяются обычным VPN."
+                                } else when (serviceRouteState) {
+                                    "applied" -> "Settings applied. Per-route status is available in your account."
+                                    "suspended" -> "Inactive with the current connection method."
+                                    "pending" -> "Waiting to apply."
+                                    "error" -> "New settings were not applied; the previous configuration remains active."
+                                    "unsupported" -> "The current client or connection method does not support service routes yet."
+                                    else -> "Settings are saved in the cloud and applied by the ordinary VPN."
+                                }
+                                Text(status, style = MaterialTheme.typography.bodySmall)
+                                if (hasAppExclusions) {
+                                    Text(
+                                        if (russian) "Правила сайтов не действуют в приложениях, исключённых из VPN."
+                                        else "Website rules do not apply to apps excluded from the VPN.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error,
+                                    )
+                                    TextButton(onClick = onOpenAppExclusions) {
+                                        Text(if (russian) "Проверить исключения приложений" else "Review app exclusions")
+                                    }
+                                }
+                                OutlinedButton(onClick = onOpenServiceRoutes) {
+                                    Text(if (russian) "Настроить маршруты и устройства" else "Configure routes and devices")
+                                }
+                            }
+                        }
+                    }
                     item {
                         Text(
                             stringResource(R.string.rules_intro),

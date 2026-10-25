@@ -205,6 +205,9 @@ data class PreparedTunnelProfile(
     val directApps: List<String> = emptyList(),
     /** Levik Game alone: the subscription has no ordinary servers, only [TunnelEngineKind.LEVIK_GAME]. */
     val gameOnly: Boolean = false,
+    val serviceRoutes: ServiceRouteProfile? = null,
+    /** Local session binding; never sent as part of the server policy. */
+    val serviceRouteOwner: String? = null,
 )
 
 @Serializable

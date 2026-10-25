@@ -31,6 +31,13 @@ import com.leviknet.vpn.vpn.TunnelEngineKind
 import com.leviknet.vpn.vpn.TunnelProfileParser
 import com.leviknet.vpn.vpn.TunnelProfilePreparer
 import com.leviknet.vpn.vpn.TunnelServer
+import com.leviknet.vpn.vpn.ServiceRouteEndpoint
+import com.leviknet.vpn.vpn.ServiceRouteProfile
+import com.leviknet.vpn.vpn.ServiceRouteReport
+import com.leviknet.vpn.vpn.isMobileServer
+import com.leviknet.vpn.vpn.isHomeRoadServer
+import com.leviknet.vpn.vpn.syncHost
+import com.leviknet.vpn.vpn.syncPort
 import com.leviknet.vpn.vpn.isEligibleForAutomaticSelection
 import java.security.MessageDigest
 import java.time.Instant
@@ -44,6 +51,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonPrimitive
 
 class AppRepository(
     private val apiClient: MobileApiClient,
@@ -65,10 +74,21 @@ class AppRepository(
     private val _session = MutableStateFlow<SessionStatus>(SessionStatus.Loading)
     private val _account = MutableStateFlow<MobileAccountResponse?>(null)
     private val _tunnelProfile = MutableStateFlow<PreparedTunnelProfile?>(null)
+    private val _serviceRouteState = MutableStateFlow("disabled")
+    private val _activeServiceRoutes = MutableStateFlow<ServiceRouteProfile?>(null)
+    private val _serviceRouteExclusions = MutableStateFlow(false)
+    private val _serviceRouteDetail = MutableStateFlow<String?>(null)
+    private var pendingServiceRoutes: CachedServiceRoutes? = null
+    private var lastServiceRouteReport: ServiceRouteReport? = null
+    private var serviceRouteSubscriptionId: String? = null
 
     val session: StateFlow<SessionStatus> = _session.asStateFlow()
     val account: StateFlow<MobileAccountResponse?> = _account.asStateFlow()
     val tunnelProfile: StateFlow<PreparedTunnelProfile?> = _tunnelProfile.asStateFlow()
+    val serviceRouteState: StateFlow<String> = _serviceRouteState.asStateFlow()
+    val activeServiceRoutes: StateFlow<ServiceRouteProfile?> = _activeServiceRoutes.asStateFlow()
+    val serviceRouteExclusions: StateFlow<Boolean> = _serviceRouteExclusions.asStateFlow()
+    val serviceRouteDetail: StateFlow<String?> = _serviceRouteDetail.asStateFlow()
 
     fun supportsYandex(): Boolean = TunnelEngineKind.LEVIK_YANDEX in supportedTunnelEngines &&
         Build.VERSION.SDK_INT >= 28
@@ -720,6 +740,188 @@ class AppRepository(
     suspend fun accountRules(): com.leviknet.vpn.core.network.RulesResponse =
         apiClient.accountRules(requireToken())
 
+    /** Called only after the selected endpoint is known. Never fetches or applies on relay/LTE/Game. */
+    suspend fun prepareServiceRoutes(profile: PreparedTunnelProfile, selected: TunnelServer, enabled: Boolean): PreparedTunnelProfile {
+        val token = requireToken()
+        val owner = serviceRouteOwner(token)
+        sessionCacheMutex.withLock {
+            requireCurrentSession(token)
+            _serviceRouteDetail.value = null
+            if (serviceRouteSubscriptionId != profile.subscriptionId) {
+                serviceRouteSubscriptionId = profile.subscriptionId
+                pendingServiceRoutes = null
+                lastServiceRouteReport = null
+                _activeServiceRoutes.value = null
+                _serviceRouteState.value = "disabled"
+                _serviceRouteExclusions.value = false
+            }
+        }
+        if (profile.gameOnly || selected.engine !in setOf(TunnelEngineKind.XRAY, TunnelEngineKind.LEVIK_TUIC) || selected.isMobileServer() || selected.isHomeRoadServer()) {
+            sessionCacheMutex.withLock {
+                requireCurrentServiceRouteScope(token, profile.subscriptionId)
+                _serviceRouteState.value = "suspended"
+            }
+            return profile.copy(serviceRoutes = null)
+        }
+        val host = selected.syncHost() ?: return profile.copy(serviceRoutes = null)
+        val port = selected.syncPort() ?: return profile.copy(serviceRoutes = null)
+        val protocol = if (selected.engine == TunnelEngineKind.LEVIK_TUIC) "tuic" else
+            (selected.outbound["protocol"] as? JsonPrimitive)?.content ?: return profile.copy(serviceRoutes = null)
+        val cached = withContext(Dispatchers.IO) { readServiceRoutes(profile.subscriptionId, owner) }
+        if (!enabled && cached == null) return profile.copy(serviceRoutes = null)
+        sessionCacheMutex.withLock {
+            requireCurrentServiceRouteScope(token, profile.subscriptionId)
+            pendingServiceRoutes = cached?.let { CachedServiceRoutes(profile.subscriptionId, owner, it) }
+            _serviceRouteState.value = "pending"
+        }
+        val response = try {
+            apiClient.serviceRouteProfile(token, com.leviknet.vpn.core.network.ServiceRouteProfileRequest(
+                profile.subscriptionId, ServiceRouteEndpoint(host, port, protocol),
+            ))
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            requireCurrentServiceRouteScope(token, profile.subscriptionId)
+            if (cached != null) {
+                if (selected.engine == TunnelEngineKind.LEVIK_TUIC) {
+                    sessionCacheMutex.withLock { requireCurrentServiceRouteScope(token, profile.subscriptionId); _serviceRouteState.value = "unsupported" }
+                    return profile.copy(serviceRoutes = null)
+                }
+                require(cached.exitFor(selected) != null) { "Service route registry is unavailable for this endpoint" }
+                return profile.copy(serviceRoutes = cached, serviceRouteOwner = owner)
+            }
+            // Older servers cannot store the new policy. Compatibility is explicit and cacheless only.
+            sessionCacheMutex.withLock {
+                requireCurrentServiceRouteScope(token, profile.subscriptionId)
+                _serviceRouteState.value = if (error is ApiException.Rejected && error.status == 404) "unsupported" else "error"
+            }
+            return profile.copy(serviceRoutes = null)
+        }
+        requireCurrentServiceRouteScope(token, profile.subscriptionId)
+        if (!response.applicable) {
+            sessionCacheMutex.withLock { requireCurrentServiceRouteScope(token, profile.subscriptionId); _serviceRouteState.value = "suspended" }
+            return profile.copy(serviceRoutes = null)
+        }
+        val policy = requireNotNull(response.profile)
+        if (selected.engine == TunnelEngineKind.LEVIK_TUIC && policy.rules.isNotEmpty()) {
+            sessionCacheMutex.withLock { requireCurrentServiceRouteScope(token, profile.subscriptionId); _serviceRouteState.value = "unsupported" }
+            try {
+                apiClient.reportServiceRoutes(token, ServiceRouteReport(policy.revision, policy.fingerprint, "unsupported", emptyList(), "tuic_not_supported"))
+            } catch (error: CancellationException) { throw error } catch (_: Exception) { /* Receipt retries when connecting again. */ }
+            return profile.copy(serviceRoutes = null)
+        }
+        sessionCacheMutex.withLock {
+            requireCurrentServiceRouteScope(token, profile.subscriptionId)
+            pendingServiceRoutes = CachedServiceRoutes(profile.subscriptionId, owner, policy)
+        }
+        return profile.copy(serviceRoutes = policy, serviceRouteOwner = owner)
+    }
+
+    /** Launched after connection; this optional receipt must never delay a protected transport. */
+    suspend fun reportSuspendedServiceRoutes(subscriptionId: String) {
+        try {
+            val token = requireToken()
+            val report = sessionCacheMutex.withLock {
+                requireCurrentServiceRouteScope(token, subscriptionId)
+                _activeServiceRoutes.value?.takeIf { _serviceRouteState.value == "suspended" }
+                    ?.let { ServiceRouteReport(it.revision, it.fingerprint, "suspended", emptyList()) }
+            } ?: return
+            requireCurrentServiceRouteScope(token, subscriptionId)
+            apiClient.reportServiceRoutes(token, report)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) { /* An old target or offline control plane does not alter this transport. */ }
+    }
+
+    suspend fun reportServiceRoutes(report: ServiceRouteReport, expectedOwner: String? = null) {
+        val token = requireToken()
+        val owner = serviceRouteOwner(token)
+        if (expectedOwner != null && expectedOwner != owner) throw ApiException.Unauthorized()
+        val effective = sessionCacheMutex.withLock {
+            requireCurrentSession(token)
+            val pending = requireNotNull(pendingServiceRoutes?.takeIf {
+                it.owner == owner && it.subscriptionId == serviceRouteSubscriptionId && it.policy.fingerprint == report.fingerprint
+            }) { "Service route report is no longer current" }
+            var normalized = if (pending.policy.revision > report.revision) report.copy(revision = pending.policy.revision) else report
+            if (normalized.state == "applied") {
+                pending.takeIf { it.policy.revision == normalized.revision }?.let { candidate ->
+                    try {
+                        withContext(Dispatchers.IO) {
+                            val current = readServiceRouteSet()
+                            val updated = current.updated(candidate)
+                            if (updated != current) {
+                                val bytes = json.encodeToString(CachedServiceRouteSet.serializer(), updated).encodeToByteArray()
+                                try { secureStore.put(SecureFileStore.SERVICE_ROUTES, bytes) } finally { bytes.fill(0) }
+                            }
+                        }
+                        _activeServiceRoutes.value = candidate.policy
+                    } catch (_: ServiceRouteCacheLimitException) {
+                        normalized = normalized.copy(state = "error", detail = "cache_limit")
+                    }
+                }
+            }
+            _serviceRouteState.value = normalized.state
+            _serviceRouteExclusions.value = normalized.detail == "app_exclusions_active"
+            _serviceRouteDetail.value = normalized.detail
+            lastServiceRouteReport = normalized
+            normalized
+        }
+        requireCurrentSession(token)
+        apiClient.reportServiceRoutes(token, effective)
+    }
+
+    suspend fun acknowledgeUnchangedServiceRoutes(policy: ServiceRouteProfile) {
+        val previous = lastServiceRouteReport?.takeIf { it.fingerprint == policy.fingerprint }
+        reportServiceRoutes(previous?.copy(revision = policy.revision)
+            ?: ServiceRouteReport(policy.revision, policy.fingerprint, "applied", emptyList()))
+    }
+
+    fun requiresLocalServiceRoutes(): Boolean = _serviceRouteState.value in setOf("pending", "applied", "error") &&
+        (_activeServiceRoutes.value?.rules?.isNotEmpty() == true || pendingServiceRoutes?.policy?.rules?.isNotEmpty() == true)
+
+    fun serviceRoutesStopped() {
+        if (_serviceRouteState.value != "suspended" && requiresLocalServiceRoutes()) _serviceRouteState.value = "pending"
+    }
+
+    private fun readServiceRoutes(subscriptionId: String, owner: String): ServiceRouteProfile? {
+        val cached = readServiceRouteSet().records.singleOrNull { it.belongsTo(subscriptionId, owner) } ?: return null
+        cached.policy.validate()
+        return cached.policy
+    }
+
+    private fun readServiceRouteSet(): CachedServiceRouteSet {
+        val bytes = secureStore.get(SecureFileStore.SERVICE_ROUTES) ?: return CachedServiceRouteSet()
+        return try {
+            json.decodeFromString(CachedServiceRouteSet.serializer(), bytes.decodeToString()).also { cached ->
+                require(cached.records.size <= 100)
+                require(cached.records.map { it.owner to it.subscriptionId }.distinct().size == cached.records.size)
+            }
+        } finally { bytes.fill(0) }
+    }
+
+    @Serializable
+    internal data class CachedServiceRoutes(val subscriptionId: String, val owner: String, val policy: ServiceRouteProfile) {
+        fun belongsTo(subscription: String, sessionOwner: String): Boolean = subscriptionId == subscription && owner == sessionOwner
+    }
+
+    @Serializable
+    internal data class CachedServiceRouteSet(val records: List<CachedServiceRoutes> = emptyList()) {
+        fun updated(candidate: CachedServiceRoutes): CachedServiceRouteSet {
+            val retained = records.filter { it.owner == candidate.owner && it.subscriptionId != candidate.subscriptionId }
+            if (retained.size >= 100) throw ServiceRouteCacheLimitException()
+            return CachedServiceRouteSet(retained + candidate)
+        }
+    }
+
+    internal class ServiceRouteCacheLimitException : IllegalStateException("cache_limit")
+
+    private fun serviceRouteOwner(token: String): String = DeviceIdentity.sha256Hex(token.encodeToByteArray())
+
+    private suspend fun requireCurrentServiceRouteScope(token: String, subscriptionId: String) {
+        requireCurrentSession(token)
+        check(serviceRouteSubscriptionId == subscriptionId) { "Service route subscription is no longer current" }
+    }
+
     suspend fun changeAccountRules(change: com.leviknet.vpn.core.platform.RuleChange): com.leviknet.vpn.core.network.AccountRules =
         apiClient.changeAccountRules(requireToken(), change)
 
@@ -791,6 +993,7 @@ class AppRepository(
 
     private suspend fun writeSessionToken(token: String) = sessionCacheMutex.withLock {
         withContext(Dispatchers.IO) {
+            if (readTokenBlocking() != token) clearServiceRoutesBlocking()
             val encoded = token.encodeToByteArray()
             try { secureStore.put(SecureFileStore.SESSION_TOKEN, encoded) } finally { encoded.fill(0) }
         }
@@ -838,12 +1041,24 @@ class AppRepository(
 
     private fun clearAuthenticationBlocking(keepPendingRevocation: Boolean) {
         secureStore.remove(SecureFileStore.SESSION_TOKEN)
+        clearServiceRoutesBlocking()
         secureStore.remove(SecureFileStore.YANDEX_DOCUMENT)
         if (!keepPendingRevocation) {
             secureStore.remove(SecureFileStore.PENDING_REVOCATION_TOKEN)
         }
         _account.value = null
         _session.value = SessionStatus.SignedOut
+    }
+
+    private fun clearServiceRoutesBlocking() {
+        secureStore.remove(SecureFileStore.SERVICE_ROUTES)
+        pendingServiceRoutes = null
+        lastServiceRouteReport = null
+        serviceRouteSubscriptionId = null
+        _activeServiceRoutes.value = null
+        _serviceRouteState.value = "disabled"
+        _serviceRouteExclusions.value = false
+        _serviceRouteDetail.value = null
     }
 
     private suspend fun reconcileCachedProfile(account: MobileAccountResponse) {

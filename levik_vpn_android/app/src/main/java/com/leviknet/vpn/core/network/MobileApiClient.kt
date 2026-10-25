@@ -368,6 +368,26 @@ class MobileApiClient(
         )
     }
 
+    /** Independent contract: the legacy tunnel-profile and excluded transports remain unchanged. */
+    suspend fun serviceRouteProfile(accessToken: String, request: ServiceRouteProfileRequest): ServiceRouteProfileResponse {
+        val response = post<ServiceRouteProfileRequest, ServiceRouteProfileResponse>(
+            path = "/api/mobile/v1/service-routes/profile",
+            request = request,
+            accessToken = accessToken,
+            requiresIntegrity = false,
+            extraHeaders = mapOf("X-Levik-Service-Routes" to "1"),
+        )
+        checkSuccess(response.ok)
+        require(response.applicable == (response.profile != null)) { "Invalid service route response" }
+        response.profile?.validate()
+        return response
+    }
+
+    suspend fun reportServiceRoutes(accessToken: String, report: com.leviknet.vpn.vpn.ServiceRouteReport) {
+        val body = json.encodeToString(com.leviknet.vpn.vpn.ServiceRouteReport.serializer(), report).encodeToByteArray()
+        jsonRequest(METHOD_POST, "/api/mobile/v1/service-routes/status", body, accessToken)
+    }
+
     /**
      * Opens the live event stream (core/platform/LiveEvents.kt). The caller reads
      * lines and disconnects; the read timeout drops a stream that went silent.

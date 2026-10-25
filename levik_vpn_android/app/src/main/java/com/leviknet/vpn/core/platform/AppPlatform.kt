@@ -186,6 +186,7 @@ class AppPlatform(
             while (true) {
                 delay((stored?.config?.refreshAfterSeconds ?: DEFAULT_REFRESH_S) * 1_000L)
                 refreshConfig()
+                applyServiceRoutes()
             }
         }
         scope.launch {
@@ -744,6 +745,7 @@ class AppPlatform(
         when (event) {
             LiveEvent.READY, LiveEvent.RESYNC -> scope.launch {
                 refreshConfig()
+                applyServiceRoutes()
                 syncSettings()
                 refreshAccountQuietly()
                 refreshApprovals()
@@ -752,9 +754,10 @@ class AppPlatform(
             LiveEvent.NOTIFICATIONS -> scope.launch { refreshNotices() }
             LiveEvent.APPROVALS -> scope.launch { refreshApprovals() }
             LiveEvent.SETTINGS -> scope.launch { syncSettings() }
-            LiveEvent.CONFIG -> scope.launch { refreshConfig() }
+            LiveEvent.CONFIG -> scope.launch { refreshConfig(); applyServiceRoutes() }
             LiveEvent.DEVICES -> scope.launch { refreshAccountQuietly() }
             LiveEvent.RULES -> scope.launch { applyAccountRules() }
+            LiveEvent.SERVICE_ROUTES -> scope.launch { applyServiceRoutes() }
             LiveEvent.PRESENCE, LiveEvent.COMMANDS -> Unit
         }
         remote?.onEvent(event)
@@ -787,6 +790,27 @@ class AppPlatform(
         val after = RuleRoutingKey.of(repository.tunnelProfile.value)
         if (after != before && vpnController.state.value.state == VpnConnectionState.CONNECTED) {
             vpnController.reconfigure()
+        }
+    }
+
+    /** A dedicated event never reloads or reconnects an active whitelist-bypass transport. */
+    private suspend fun applyServiceRoutes() = rulesMutex.withLock {
+        if (repository.session.value != SessionStatus.Authenticated) return@withLock
+        val snapshot = vpnController.state.value
+        if (snapshot.state != VpnConnectionState.CONNECTED) return@withLock
+        val profile = repository.tunnelProfile.value ?: return@withLock
+        val selected = profile.servers.firstOrNull { it.id == snapshot.serverId } ?: return@withLock
+        if (selected.engine != com.leviknet.vpn.vpn.TunnelEngineKind.XRAY || selected.isMobileServer()) return@withLock
+        try {
+            val before = repository.activeServiceRoutes.value?.fingerprint
+            val next = repository.prepareServiceRoutes(profile, selected, flagEnabled("service_routes"))
+            val policy = next.serviceRoutes ?: return@withLock
+            if (policy.fingerprint != before && (policy.rules.isNotEmpty() || before != null)) vpnController.reconfigure()
+            else if (policy.fingerprint == before || policy.rules.isEmpty()) repository.acknowledgeUnchangedServiceRoutes(policy)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            AppLogger.d(TAG, "Service route update remains pending")
         }
     }
 

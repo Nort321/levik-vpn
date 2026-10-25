@@ -472,6 +472,9 @@ fun LevikVpnApp(viewModel: AppViewModel) {
     }
 
     val rulesState by viewModel.rules.state.collectAsStateWithLifecycle()
+    val serviceRoutesState by viewModel.serviceRoutesState.collectAsStateWithLifecycle()
+    val serviceRouteExclusions by viewModel.serviceRouteExclusions.collectAsStateWithLifecycle()
+    val serviceRouteDetail by viewModel.serviceRouteDetail.collectAsStateWithLifecycle()
     if (rulesState.open) {
         com.leviknet.vpn.ui.rules.RulesScreen(
             state = rulesState,
@@ -480,6 +483,11 @@ fun LevikVpnApp(viewModel: AppViewModel) {
             onSetCategory = viewModel.rules::setCategory,
             onSetDomain = viewModel.rules::setDomain,
             onRemoveDomain = viewModel.rules::removeDomain,
+            onOpenServiceRoutes = { viewModel.openCabinet(com.leviknet.vpn.core.platform.CabinetTarget.RULES) },
+            serviceRouteState = serviceRoutesState,
+            serviceRouteDetail = serviceRouteDetail,
+            hasAppExclusions = serviceRouteExclusions,
+            onOpenAppExclusions = { viewModel.rules.close(); showSplitTunnelDialog = true },
         )
     }
     rulesState.shared?.let { site ->
