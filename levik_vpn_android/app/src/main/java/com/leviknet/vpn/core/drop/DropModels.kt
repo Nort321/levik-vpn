@@ -70,6 +70,8 @@ data class DropTransferView(
     val held: Boolean,
     val createdAtMs: Long,
     val finishedAtMs: Long?,
+    /** Available after the handshake, before the sender confirms and releases the manifest. */
+    val verificationCode: String? = null,
 )
 
 data class DropQuota(val limitBytes: Long, val usedBytes: Long, val resetsAtMs: Long)

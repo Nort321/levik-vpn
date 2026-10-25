@@ -707,22 +707,29 @@ class AppRepository(
     suspend fun openEvents(): javax.net.ssl.HttpsURLConnection = apiClient.openEvents(requireToken())
 
     /** LevikDrop, docs/levik-drop.md "Website API". */
-    suspend fun dropPresence(key: String) = apiClient.dropPresence(requireToken(), key)
+    suspend fun dropPresence(key: String) = dropRequest { apiClient.dropPresence(it, key) }
 
     suspend fun clearDropPresence() {
         val token = readToken() ?: return
         apiClient.clearDropPresence(token)
     }
 
-    suspend fun dropDevices(): kotlinx.serialization.json.JsonObject = apiClient.dropDevices(requireToken())
+    suspend fun dropDevices(): kotlinx.serialization.json.JsonObject = dropRequest { apiClient.dropDevices(it) }
 
-    suspend fun dropTransfers(): kotlinx.serialization.json.JsonObject = apiClient.dropTransfers(requireToken())
+    suspend fun dropTransfers(): kotlinx.serialization.json.JsonObject = dropRequest { apiClient.dropTransfers(it) }
 
     suspend fun createDropTransfer(receiverDeviceId: String, fileCount: Int, totalBytes: Long): kotlinx.serialization.json.JsonObject =
-        apiClient.createDropTransfer(requireToken(), receiverDeviceId, fileCount, totalBytes)
+        dropRequest { apiClient.createDropTransfer(it, receiverDeviceId, fileCount, totalBytes) }
 
     suspend fun updateDropTransfer(id: String, action: String, reason: String?): kotlinx.serialization.json.JsonObject =
-        apiClient.updateDropTransfer(requireToken(), id, action, reason)
+        dropRequest { apiClient.updateDropTransfer(it, id, action, reason) }
+
+    private suspend fun <T> dropRequest(request: suspend (String) -> T): T {
+        val token = requireToken()
+        val response = request(token)
+        requireCurrentSession(token)
+        return response
+    }
 
         /** A one-time link that opens the website signed in; null when it is not a Levik /handoff link. */
     suspend fun webHandoffUrl(target: String): String? =

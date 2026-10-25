@@ -7,10 +7,12 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -78,6 +80,7 @@ class DropEngine(
     private var loaded: Job? = null
     private var storeLoaded = false
     private var running = false
+    private var epoch = 0L
     private var online = false
     private var presenceJob: Job? = null
     private var presenceSent = false
@@ -129,6 +132,7 @@ class DropEngine(
         var samples: List<Pair<Long, Long>> = emptyList(),
         var path: SessionPath? = null,
         var link: LinkStatus? = null,
+        var verificationCode: String? = null,
     )
 
     private enum class Answer { YES, NO, SUPERSEDED }
@@ -161,16 +165,17 @@ class DropEngine(
         scope.launch {
             if (running) return@launch
             running = true
+            val generation = epoch
             try {
                 load()
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                running = false
+                if (generation == epoch) running = false
                 log("LevikDrop: ${error.javaClass.simpleName}")
                 return@launch
             }
-            if (!running) return@launch
+            if (!current(generation)) return@launch
             updatePresence()
             refreshNowInternal()
             changed()
@@ -210,6 +215,12 @@ class DropEngine(
         web = linkedMapOf()
         webLoaded = false
         devices = emptyList()
+        available = false
+        loadedAt = null
+        quota = null
+        protocolFailures.clear()
+        resuming.clear()
+        announced.clear()
         live.clear()
         targets.clear()
         error = null
@@ -217,7 +228,13 @@ class DropEngine(
     }
 
     private suspend fun stopInternal() {
+        epoch++
         running = false
+        refreshJob?.cancel()
+        refreshJob = null
+        refreshAgain = false
+        changedJob?.cancel()
+        changedJob = null
         refreshTimer?.cancel()
         refreshTimer = null
         presenceJob?.cancel()
@@ -256,26 +273,31 @@ class DropEngine(
             refreshAgain = true
             return it
         }
-        val job = scope.launch {
+        val generation = epoch
+        val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 load()
-                fetch()
+                requireCurrent(generation)
+                fetch(generation)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
-                error = errorCode(failure) ?: NETWORK
+                if (current(generation)) error = errorCode(failure) ?: NETWORK
             } finally {
-                refreshJob = null
-                changed()
-                if (refreshAgain) {
-                    refreshAgain = false
-                    refreshNowInternal()
-                } else {
-                    scheduleRefresh()
+                if (current(generation)) {
+                    refreshJob = null
+                    changed()
+                    if (refreshAgain) {
+                        refreshAgain = false
+                        refreshNowInternal()
+                    } else {
+                        scheduleRefresh()
+                    }
                 }
             }
         }
         refreshJob = job
+        job.start()
         return job
     }
 
@@ -290,24 +312,28 @@ class DropEngine(
 
     suspend fun send(deviceId: String, refs: List<String>): Unit = withContext(dispatcher) {
         if (!running) throw DropUserError(DropUserError.Kind.SIGNED_OUT)
+        val generation = epoch
         load()
+        requireCurrent(generation)
         if (web.values.any { it.state.open }) throw DropUserError(DropUserError.Kind.BUSY)
         val unique = refs.distinct()
         if (unique.isEmpty()) throw DropUserError(DropUserError.Kind.NOTHING)
         if (unique.size > maxFiles) throw DropUserError(DropUserError.Kind.TOO_MANY_FILES, maxFiles.toString())
         val files = sources.describe(unique)
+        requireCurrent(generation)
         val total = files.sumOf(SourceFile::size)
         if (total > maxBytes) throw DropUserError(DropUserError.Kind.TOO_LARGE)
         creating++
         try {
             val response = api.create(deviceId, files.size, total)
+            requireCurrent(generation)
             val transfer = parseWebTransfer(response["transfer"]) ?: throw DropUserError(DropUserError.Kind.BAD_RESPONSE)
             store.put(StoredSender(transfer.id, transfer.peerDeviceId, files))
             web[transfer.id] = transfer
             ensureLink(transfer.id)
         } finally {
             creating--
-            changed()
+            if (current(generation)) changed()
         }
     }
 
@@ -369,16 +395,16 @@ class DropEngine(
 
     // Website ------------------------------------------------------------------------------
 
-    private suspend fun fetch() {
-        val listCall = scope.async { api.transfers() }
-        val devicesCall = scope.async {
+    private suspend fun fetch(generation: Long): Unit = coroutineScope {
+        val listCall = async { api.transfers() }
+        val devicesCall = async {
             try {
                 api.devices()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
                 val code = errorCode(failure)
-                if (code == "drop_unavailable" || code?.startsWith("http_4") == true) available = false
+                if (current(generation) && (code == "drop_unavailable" || code?.startsWith("http_4") == true)) available = false
                 null
             }
         }
@@ -387,6 +413,7 @@ class DropEngine(
         } finally {
             devicesCall.await()
         }
+        requireCurrent(generation)
         devicesCall.await()?.let { response ->
             available = (response["available"] as? JsonPrimitive)?.booleanOrNull == true
             devices = parseDevices(response["devices"])
@@ -415,22 +442,27 @@ class DropEngine(
     }
 
     private suspend fun step(id: String, action: String, reason: String? = null) {
+        val generation = epoch
+        requireCurrent(generation)
         try {
             val response = api.update(id, action, reason)
+            requireCurrent(generation)
             parseWebTransfer(response["transfer"])?.let { web[id] = it }
         } catch (failure: Exception) {
             if (failure is CancellationException) throw failure
             val code = errorCode(failure)
             // Already over on the website: the list says how.
-            if (code != "transfer_ended" && code != "transfer_not_found" && code != "invalid_action") throw failure
+            if (!current(generation) || code != "transfer_ended" && code != "transfer_not_found" && code != "invalid_action") throw failure
             refreshNowInternal()
         } finally {
-            changed()
+            if (current(generation)) changed()
         }
     }
 
     private fun quietStep(id: String, action: String, reason: String? = null) {
+        val generation = epoch
         scope.launch {
+            if (!current(generation)) return@launch
             try {
                 step(id, action, reason)
             } catch (cancelled: CancellationException) {
@@ -512,11 +544,13 @@ class DropEngine(
     }
 
     private suspend fun presenceLoop() {
+        val generation = epoch
         val key = identity?.spki ?: return
         val encoded = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(key)
-        while (true) {
+        while (current(generation) && online) {
             val wait = try {
                 api.presence(encoded)
+                requireCurrent(generation)
                 presenceSent = true
                 PRESENCE_MS
             } catch (cancelled: CancellationException) {
@@ -554,6 +588,7 @@ class DropEngine(
         live[id]?.let {
             it.path = null
             it.link = null
+            it.verificationCode = null
         }
     }
 
@@ -563,40 +598,51 @@ class DropEngine(
 
     private fun liveFor(id: String): Live = live.getOrPut(id) { Live() }
 
-    private fun hostFor(id: String): LinkHost = object : LinkHost {
-        override suspend fun connect(): RelayConnection {
-            val response = api.update(id, "connect")
-            resuming -= id
-            parseWebTransfer(response["transfer"])?.let { web[id] = it }
-            val connection = response["connection"] as? JsonObject ?: throw IllegalStateException("no relay connection")
-            val token = (connection["token"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.length <= 2_048 }
-            val endpoints = DropRelay.parseEndpoints(connection["endpoints"])
-            if (token == null || endpoints.isEmpty()) throw IllegalStateException("no relay connection")
-            return RelayConnection(token, endpoints)
-        }
-
-        override fun work(allowLan: Boolean): SessionWork = workFor(id, allowLan)
-
-        override fun status(status: LinkStatus) {
-            val state = liveFor(id)
-            state.link = status
-            if (status != LinkStatus.SESSION) {
-                state.path = null
-                supersede(id)
+    private fun hostFor(id: String): LinkHost {
+        val generation = epoch
+        return object : LinkHost {
+            override suspend fun connect(): RelayConnection {
+                requireCurrent(generation)
+                val response = api.update(id, "connect")
+                requireCurrent(generation)
+                resuming -= id
+                parseWebTransfer(response["transfer"])?.let { web[id] = it }
+                val connection = response["connection"] as? JsonObject ?: throw IllegalStateException("no relay connection")
+                val token = (connection["token"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.length <= 2_048 }
+                val endpoints = DropRelay.parseEndpoints(connection["endpoints"])
+                if (token == null || endpoints.isEmpty()) throw IllegalStateException("no relay connection")
+                return RelayConnection(token, endpoints)
             }
-            changed()
-        }
 
-        override fun outcome(outcome: SessionOutcome) {
-            scope.launch { onOutcome(id, outcome) }
-        }
+            override fun work(allowLan: Boolean): SessionWork {
+                requireCurrent(generation)
+                return workFor(id, allowLan)
+            }
 
-        override fun stopped(reason: String, error: Throwable?) {
-            scope.launch { onStopped(id, reason, error) }
+            override fun status(status: LinkStatus) {
+                if (!current(generation)) return
+                val state = liveFor(id)
+                state.link = status
+                if (status != LinkStatus.SESSION) {
+                    state.path = null
+                    state.verificationCode = null
+                    supersede(id)
+                }
+                changed()
+            }
+
+            override fun outcome(outcome: SessionOutcome) {
+                scope.launch { if (current(generation)) onOutcome(id, outcome) }
+            }
+
+            override fun stopped(reason: String, error: Throwable?) {
+                scope.launch { if (current(generation)) onStopped(id, reason, error) }
+            }
         }
     }
 
     private fun workFor(id: String, allowLan: Boolean): SessionWork {
+        val generation = epoch
         val stored = store.find(id)
         val transfer = web[id]
         val own = identity
@@ -614,15 +660,21 @@ class DropEngine(
             }
         }
         val events = SessionEvents(
-            keyed = { _, _, key ->
-                peerKey = key
-                protocolFailures.remove(id)
+            keyed = { code, level, key ->
+                if (current(generation)) {
+                    peerKey = key
+                    liveFor(id).verificationCode = code.takeIf { stored !is StoredSender && level != Trust.TRUSTED }
+                    protocolFailures.remove(id)
+                    changed()
+                }
             },
             path = { path ->
-                liveFor(id).path = path
-                changed()
+                if (current(generation)) {
+                    liveFor(id).path = path
+                    changed()
+                }
             },
-            progress = { done -> progress(id, done) },
+            progress = { done -> if (current(generation)) progress(id, done) },
         )
         if (stored is StoredSender) {
             return SenderWork(id, own, PLATFORM, transfer.peerPlatform, trust, allowLan, events, confirm, stored.files, sources)
@@ -728,9 +780,11 @@ class DropEngine(
     }
 
     private suspend fun onOutcome(id: String, outcome: SessionOutcome) {
+        val generation = epoch
         supersede(id)
         liveFor(id).apply {
             path = null
+            verificationCode = null
             samples = emptyList()
         }
         val stored = store.find(id)
@@ -772,16 +826,20 @@ class DropEngine(
         } catch (failure: Exception) {
             log("LevikDrop: ${errorCode(failure) ?: failure.javaClass.simpleName}")
         } finally {
-            if (stored != null) store.save()
-            refreshNowInternal()
+            if (current(generation)) {
+                if (stored != null) store.save()
+                refreshNowInternal()
+            }
         }
     }
 
     private suspend fun onStopped(id: String, reason: String, failure: Throwable?) {
+        val generation = epoch
         links.remove(id)
         liveFor(id).apply {
             link = null
             path = null
+            verificationCode = null
         }
         val transfer = web[id]
         val code = failure?.let(errorCode)
@@ -799,12 +857,19 @@ class DropEngine(
         } catch (stepFailure: Exception) {
             log("LevikDrop: ${errorCode(stepFailure) ?: stepFailure.javaClass.simpleName}")
         }
+        if (!current(generation)) return
         resuming -= id
         changed()
         scheduleRefresh()
     }
 
     // Snapshot -----------------------------------------------------------------------------
+
+    private fun current(generation: Long): Boolean = running && generation == epoch
+
+    private fun requireCurrent(generation: Long) {
+        if (!current(generation)) throw CancellationException("LevikDrop session changed")
+    }
 
     private fun view(transfer: WebTransfer): DropTransferView {
         val stored = store.find(transfer.id)
@@ -843,6 +908,7 @@ class DropEngine(
             held = links.containsKey(transfer.id) && held(transfer.id),
             createdAtMs = transfer.createdAtMs,
             finishedAtMs = transfer.finishedAtMs,
+            verificationCode = state?.verificationCode,
         )
     }
 

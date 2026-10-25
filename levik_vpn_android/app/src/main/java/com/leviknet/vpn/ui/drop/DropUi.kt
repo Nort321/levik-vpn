@@ -275,6 +275,12 @@ private fun DropTransferRow(transfer: DropTransferView, controller: DropControll
             },
             modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
         )
+        if (!transfer.sender && files == null && transfer.prompt == null) {
+            transfer.verificationCode?.let { code ->
+                Text(stringResource(R.string.drop_code_description, code), style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.drop_code_hint, transfer.peerName), style = MaterialTheme.typography.bodySmall)
+            }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             val prompt = transfer.prompt
             if (prompt != null) {
