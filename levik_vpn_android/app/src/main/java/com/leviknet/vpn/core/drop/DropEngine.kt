@@ -530,7 +530,7 @@ class DropEngine(
     }
 
     private fun updatePresence() {
-        val wanted = running && online
+        val wanted = running && online && identity != null
         if (wanted && presenceJob == null) {
             presenceJob = scope.launch { presenceLoop() }
         } else if (!wanted && presenceJob != null) {

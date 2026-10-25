@@ -51,6 +51,7 @@ class DropEngineTest {
     private fun engine(api: DropApi, file: java.io.File, dispatcher: kotlinx.coroutines.CoroutineDispatcher,
         joiner: RelayJoiner = RelayJoiner { _, _, _ -> error("stale transfer started a relay") },
         knownPeerKey: ByteArray? = null,
+        beforeIdentity: () -> Unit = {},
     ): DropEngine {
         val pair = DropWire.ephemeralKey()
         return DropEngine(
@@ -60,6 +61,7 @@ class DropEngineTest {
                 }
                 override fun put(name: String, value: ByteArray) = Unit
             }, {
+                beforeIdentity()
                 object : DropIdentity {
                     override val spki = pair.public.encoded
                     override fun sign(payload: ByteArray): ByteArray = Signature.getInstance("SHA256withECDSA").run {
@@ -76,6 +78,38 @@ class DropEngineTest {
                 override fun open(folder: String): DropTargets = error("unexpected folder")
             }, { null }, {}, joiner = joiner, dispatcher = dispatcher,
         )
+    }
+
+    @Test
+    fun `first signin advertises presence after identity loads even when online arrived earlier`() = runBlocking {
+        val directory = Files.createTempDirectory("drop-first-online").toFile()
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val loading = CompletableDeferred<Unit>()
+        val identityReady = CompletableDeferred<Unit>()
+        val presenceCalls = AtomicInteger()
+        val api = object : Api() {
+            override suspend fun presence(key: String) { presenceCalls.incrementAndGet() }
+        }
+        val engine = engine(api, directory.resolve("state.json"), dispatcher, beforeIdentity = {
+            loading.complete(Unit)
+            runBlocking { identityReady.await() }
+        })
+        try {
+            engine.start()
+            withTimeout(5_000) { loading.await() }
+            engine.setOnline(true)
+            // Two actor barriers also drain the presence child enqueued by setOnline.
+            withContext(dispatcher) { }
+            withContext(dispatcher) { }
+            identityReady.complete(Unit)
+            withTimeout(5_000) { while (engine.snapshot.value.loadedAtMs == null) delay(10) }
+            assertEquals(1, presenceCalls.get())
+        } finally {
+            identityReady.complete(Unit)
+            engine.signedOut()
+            dispatcher.close()
+            directory.deleteRecursively()
+        }
     }
 
     @Test
