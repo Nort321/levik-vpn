@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.ActivityManager
 import android.content.ActivityNotFoundException
+import android.content.ContentResolver
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -17,18 +18,21 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.content.ContextCompat
+import androidx.core.content.IntentCompat
 import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.leviknet.vpn.core.auth.ExternalUriPolicy
 import com.leviknet.vpn.core.auth.DeepLinkRouter
+import com.leviknet.vpn.core.drop.DropNotifications
 import com.leviknet.vpn.core.platform.AccountNotices
 import com.leviknet.vpn.core.update.consumeUpdateNotificationIntent
 import com.leviknet.vpn.core.logger.AppLogger
 import com.leviknet.vpn.core.notification.AppIconArtwork
 import com.leviknet.vpn.data.AppIcon
 import com.leviknet.vpn.ui.AppEffect
+import com.leviknet.vpn.ui.AppTab
 import com.leviknet.vpn.ui.AppViewModel
 import com.leviknet.vpn.ui.LevikVpnApp
 import com.leviknet.vpn.ui.theme.LevikTheme
@@ -103,12 +107,30 @@ class MainActivity : ComponentActivity() {
             viewModel.openCabinet(noticeTarget)
         } else if (consumeUpdateNotificationIntent(intent)) {
             viewModel.checkForUpdates()
+        } else if (intent.action == DropNotifications.ACTION_OPEN) {
+            intent.action = null
+            viewModel.selectTab(AppTab.PROFILE)
+        } else if (sharedFiles(intent).isNotEmpty() && viewModel.drop != null) {
+            // Files shared from another app: the user picks the device to send them to.
+            viewModel.drop?.openShared(sharedFiles(intent))
+            intent.action = null
+            viewModel.selectTab(AppTab.PROFILE)
         } else if (intent.action == Intent.ACTION_SEND && intent.type == "text/plain") {
             // A link shared from a browser or a messenger; nothing is saved without a tap.
             viewModel.rules.openShared(intent.getStringExtra(Intent.EXTRA_TEXT))
         } else {
             intent.data?.let { uri -> viewModel.handleDeepLink(uri) }
         }
+    }
+
+    /** content:// streams of ACTION_SEND or ACTION_SEND_MULTIPLE, if any. */
+    private fun sharedFiles(intent: Intent): List<Uri> {
+        val streams = when (intent.action) {
+            Intent.ACTION_SEND -> listOfNotNull(IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java))
+            Intent.ACTION_SEND_MULTIPLE -> IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
+            else -> emptyList()
+        }
+        return streams.filter { it.scheme == ContentResolver.SCHEME_CONTENT }
     }
 
     override fun onResume() {

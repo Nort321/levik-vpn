@@ -14,6 +14,9 @@ import com.leviknet.vpn.MainActivity
 import com.leviknet.vpn.R
 import com.leviknet.vpn.core.auth.LoginApproval
 import com.leviknet.vpn.core.auth.PendingApproval
+import com.leviknet.vpn.core.drop.DropEngine
+import com.leviknet.vpn.core.drop.DropNotifications
+import com.leviknet.vpn.core.drop.DropTransferService
 import com.leviknet.vpn.core.logger.AppLogger
 import com.leviknet.vpn.core.network.ApiException
 import com.leviknet.vpn.core.network.ServiceEndpoints
@@ -90,6 +93,8 @@ class AppPlatform(
     private val json: Json,
     updateManager: AppUpdateManager? = null,
     diagnosticsNote: (suspend () -> String)? = null,
+    /** LevikDrop (Direct builds), docs/levik-drop.md. */
+    val drop: DropEngine? = null,
 ) {
     private val preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
     private val configFile = File(context.noBackupFilesDir, CONFIG_FILE)
@@ -192,11 +197,15 @@ class AppPlatform(
         scope.launch {
             repository.session.collect { status ->
                 when (status) {
-                    SessionStatus.Authenticated -> syncSettings()
+                    SessionStatus.Authenticated -> {
+                        drop?.start()
+                        syncSettings()
+                    }
                     SessionStatus.SignedOut -> {
                         forgetSyncState()
                         forgetApprovals()
                         remote?.forget()
+                        drop?.signedOut()
                     }
                     SessionStatus.Loading -> Unit
                 }
@@ -220,6 +229,8 @@ class AppPlatform(
                 ) { session, visible, state ->
                     session == SessionStatus.Authenticated && PresencePolicy.online(visible, state)
                 }.distinctUntilChanged().collectLatest { online ->
+                    // LevikDrop can receive exactly while the event stream is open.
+                    drop?.setOnline(online)
                     if (online) {
                         coroutineScope {
                             launch { runEventStream() }
@@ -229,6 +240,18 @@ class AppPlatform(
                         withdrawPresence()
                     }
                 }
+            }
+        }
+        drop?.let { engine ->
+            scope.launch {
+                // Offers and finished transfers reach the user outside the app; on the screen the app shows them.
+                engine.notices.collect { notice -> if (!foreground.value) DropNotifications.notice(context, notice) }
+            }
+            scope.launch {
+                // A transfer the user started or accepted goes on with the app in the background.
+                engine.snapshot.map { snapshot -> snapshot.transfers.any { it.held } }
+                    .distinctUntilChanged()
+                    .collect { held -> if (held) DropTransferService.start(context) }
             }
         }
         if (HOME_ENABLED) {
@@ -758,8 +781,10 @@ class AppPlatform(
             LiveEvent.DEVICES -> scope.launch { refreshAccountQuietly() }
             LiveEvent.RULES -> scope.launch { applyAccountRules() }
             LiveEvent.SERVICE_ROUTES -> scope.launch { applyServiceRoutes() }
+            LiveEvent.DROP -> drop?.refresh()
             LiveEvent.PRESENCE, LiveEvent.COMMANDS -> Unit
         }
+        if (event == LiveEvent.READY || event == LiveEvent.RESYNC || event == LiveEvent.DEVICES) drop?.refresh()
         remote?.onEvent(event)
     }
 

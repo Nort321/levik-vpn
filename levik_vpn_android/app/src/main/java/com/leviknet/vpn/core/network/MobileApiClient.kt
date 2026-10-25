@@ -345,6 +345,43 @@ class MobileApiClient(
         jsonRequest(METHOD_POST, COMMAND_RESULT_PATH, body, accessToken)
     }
 
+    /** LevikDrop: this phone can receive now, docs/levik-drop.md "Website API". */
+    suspend fun dropPresence(accessToken: String, key: String) {
+        val body = JsonObject(mapOf("key" to JsonPrimitive(key), "protocol" to JsonPrimitive(1))).toString().encodeToByteArray()
+        jsonRequest(METHOD_PUT, DROP_PRESENCE_PATH, body, accessToken)
+    }
+
+    suspend fun clearDropPresence(accessToken: String) {
+        request<JsonElement>(
+            method = METHOD_DELETE,
+            path = DROP_PRESENCE_PATH,
+            body = EMPTY_BODY,
+            accessToken = accessToken,
+            requiresIntegrity = false,
+        )
+    }
+
+    suspend fun dropDevices(accessToken: String): JsonObject = jsonRequest(METHOD_GET, DROP_DEVICES_PATH, EMPTY_BODY, accessToken)
+
+    suspend fun dropTransfers(accessToken: String): JsonObject = jsonRequest(METHOD_GET, DROP_TRANSFERS_PATH, EMPTY_BODY, accessToken)
+
+    suspend fun createDropTransfer(accessToken: String, receiverDeviceId: String, fileCount: Int, totalBytes: Long): JsonObject {
+        val body = JsonObject(
+            mapOf(
+                "receiverDeviceId" to JsonPrimitive(receiverDeviceId),
+                "fileCount" to JsonPrimitive(fileCount),
+                "totalBytes" to JsonPrimitive(totalBytes),
+            ),
+        ).toString().encodeToByteArray()
+        return jsonRequest(METHOD_POST, DROP_TRANSFERS_PATH, body, accessToken)
+    }
+
+    suspend fun updateDropTransfer(accessToken: String, id: String, action: String, reason: String?): JsonObject {
+        val fields = mutableMapOf<String, JsonElement>("id" to JsonPrimitive(id), "action" to JsonPrimitive(action))
+        if (reason != null) fields["reason"] = JsonPrimitive(reason)
+        return jsonRequest(METHOD_POST, DROP_UPDATE_PATH, JsonObject(fields).toString().encodeToByteArray(), accessToken)
+    }
+
     private suspend fun jsonRequest(method: String, path: String, body: ByteArray, accessToken: String): JsonObject {
         val response: JsonElement = request(
             method = method,
@@ -786,6 +823,10 @@ class MobileApiClient(
         private const val FAMILY_HELP_PATH = "/api/mobile/v1/family/help"
         private const val REFERRALS_PATH = "/api/mobile/v1/referrals"
         private const val RULES_PATH = "/api/mobile/v1/rules"
+        private const val DROP_PRESENCE_PATH = "/api/mobile/v1/drop/presence"
+        private const val DROP_DEVICES_PATH = "/api/mobile/v1/drop/devices"
+        private const val DROP_TRANSFERS_PATH = "/api/mobile/v1/drop/transfers"
+        private const val DROP_UPDATE_PATH = "/api/mobile/v1/drop/transfers/update"
         private const val METHOD_GET = "GET"
         private const val METHOD_POST = "POST"
         private const val METHOD_PUT = "PUT"

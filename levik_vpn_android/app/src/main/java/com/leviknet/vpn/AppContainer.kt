@@ -1,6 +1,12 @@
 package com.leviknet.vpn
 
 import android.app.Application
+import com.leviknet.vpn.core.drop.AndroidDropFolders
+import com.leviknet.vpn.core.drop.ContentDropSources
+import com.leviknet.vpn.core.drop.DropEngine
+import com.leviknet.vpn.core.drop.KeystoreDropIdentity
+import com.leviknet.vpn.core.drop.RepositoryDropApi
+import com.leviknet.vpn.core.drop.SecureDropSecrets
 import com.leviknet.vpn.core.network.AppAttestationPolicy
 import com.leviknet.vpn.core.network.CensorshipRadarWorker
 import com.leviknet.vpn.core.network.MobileApiClient
@@ -144,6 +150,22 @@ class AppContainer(application: Application) {
     val trafficHistoryStore = TrafficHistoryStore(application, json, nativeCleanupScope)
     val vpnController = VpnController(application, secureStore)
 
+    /** LevikDrop, files between the user's own devices (Direct builds), docs/levik-drop.md. */
+    private val dropEngine = if (BuildConfig.IS_PLAY_DISTRIBUTION) {
+        null
+    } else {
+        DropEngine(
+            api = RepositoryDropApi(repository),
+            secrets = SecureDropSecrets(secureStore),
+            loadIdentity = KeystoreDropIdentity::load,
+            stateFile = File(application.noBackupFilesDir, "levikdrop/state.json"),
+            sources = ContentDropSources(application),
+            folders = AndroidDropFolders(application),
+            errorCode = RepositoryDropApi::errorCode,
+            log = { line -> AppLogger.i("LevikDrop", line) },
+        )
+    }
+
     val appPlatform = com.leviknet.vpn.core.platform.AppPlatform(
         context = application,
         settings = settings,
@@ -154,6 +176,7 @@ class AppContainer(application: Application) {
         json = json,
         updateManager = updateManager.takeIf { BuildConfig.SELF_UPDATE_ENABLED },
         diagnosticsNote = ::diagnosticsNote,
+        drop = dropEngine,
     )
 
     /** The same report as "Diagnostics → share as a note", for the remote. */

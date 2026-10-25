@@ -22,6 +22,9 @@ enum class LiveEvent(val wireName: String) {
     RULES("rules"),
     SERVICE_ROUTES("service_routes"),
     NOTIFICATIONS("notifications"),
+
+    /** LevikDrop transfers changed, docs/levik-drop.md. */
+    DROP("drop"),
     ;
 
     companion object {

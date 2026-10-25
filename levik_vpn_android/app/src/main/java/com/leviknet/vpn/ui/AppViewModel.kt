@@ -160,6 +160,18 @@ class AppViewModel(
     val serviceRoutesState = repository.serviceRouteState
     val serviceRouteExclusions = repository.serviceRouteExclusions
     val serviceRouteDetail = repository.serviceRouteDetail
+
+    /** LevikDrop in the profile and files shared to the app (Direct builds). */
+    val drop: com.leviknet.vpn.ui.drop.DropController? = appPlatform?.drop?.let { engine ->
+        appContext?.let { context ->
+            com.leviknet.vpn.ui.drop.DropController(
+                engine = engine,
+                scope = viewModelScope,
+                context = context,
+                isAuthenticated = { mutableState.value.session == SessionStatus.Authenticated },
+            )
+        }
+    }
     private val supportNotes = SupportNoteClient()
     private var loginStartJob: Job? = null
     private var loginPollJob: Job? = null
@@ -1925,6 +1937,7 @@ class AppViewModel(
             loginPollJob?.cancel()
             try {
                 appPlatform?.withdrawPresence()
+                appPlatform?.drop?.beforeSignOut()
                 repository.logout()
                 settings.setSelectedSubscriptionId(null)
                 mutableState.update {
