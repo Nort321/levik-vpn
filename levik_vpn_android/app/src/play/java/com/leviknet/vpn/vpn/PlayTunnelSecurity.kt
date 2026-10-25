@@ -26,7 +26,7 @@ internal object PlayTunnelSecurity {
                 ?: throw IllegalArgumentException("Invalid VPN outbound")
             val protocol = outbound.text("protocol")
             // These are app-generated local routing decisions, not VPN tunnel endpoints.
-            if (protocol in setOf("freedom", "blackhole", "dns")) return@forEach
+            if (protocol in setOf("freedom", "blackhole", "dns", "loopback")) return@forEach
             val stream = outbound["streamSettings"] as? JsonObject
             require(!hasInsecureVerification(outbound)) { "VPN certificate verification is required" }
             val encryptedTransport = stream?.text("security") in setOf("tls", "reality")
