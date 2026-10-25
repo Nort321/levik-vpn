@@ -50,11 +50,14 @@ class DropEngineTest {
 
     private fun engine(api: DropApi, file: java.io.File, dispatcher: kotlinx.coroutines.CoroutineDispatcher,
         joiner: RelayJoiner = RelayJoiner { _, _, _ -> error("stale transfer started a relay") },
+        knownPeerKey: ByteArray? = null,
     ): DropEngine {
         val pair = DropWire.ephemeralKey()
         return DropEngine(
             api, object : DropSecrets {
-                override fun get(name: String): ByteArray? = null
+                override fun get(name: String): ByteArray? = knownPeerKey?.let {
+                    """{"peer":"${DropWire.keyHash(it)}"}""".encodeToByteArray()
+                }
                 override fun put(name: String, value: ByteArray) = Unit
             }, {
                 object : DropIdentity {
@@ -76,7 +79,70 @@ class DropEngineTest {
     }
 
     @Test
-    fun `receiver exposes the matching verification code before sender releases manifest`() = runBlocking {
+    fun `trusted sender still exposes code when receiver has not pinned its identity`() = runBlocking {
+        val directory = Files.createTempDirectory("drop-one-sided-pin").toFile()
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val scope = CoroutineScope(SupervisorJob() + dispatcher)
+        val sockets = ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { listener ->
+            val client = Socket(InetAddress.getLoopbackAddress(), listener.localPort)
+            client to listener.accept()
+        }
+        val senderChannel = FrameChannel(sockets.first, scope)
+        val receiverChannel = FrameChannel(sockets.second, scope)
+        val created = java.util.concurrent.atomic.AtomicBoolean()
+        val api = object : Api() {
+            override suspend fun transfers() = if (created.get()) Json.parseToJsonElement("""{"transfers":[${transfer(oldId, "offered")}]}""").jsonObject else empty
+            override suspend fun create(receiverDeviceId: String, fileCount: Int, totalBytes: Long): JsonObject {
+                created.set(true)
+                return Json.parseToJsonElement("""{"transfer":${transfer(oldId, "offered")}}""").jsonObject
+            }
+            override suspend fun update(id: String, action: String, reason: String?) = Json.parseToJsonElement("""{
+                "connection":{"token":"test","endpoints":[{"host":"127.0.0.1","port":443,"pin":"${"a".repeat(43)}"}]}
+            }""").jsonObject
+        }
+        val pair = DropWire.ephemeralKey()
+        val identity = object : DropIdentity {
+            override val spki = pair.public.encoded
+            override fun sign(payload: ByteArray): ByteArray = Signature.getInstance("SHA256withECDSA").run {
+                initSign(pair.private); update(payload); sign()
+            }
+        }
+        val engine = engine(api, directory.resolve("state.json"), dispatcher, RelayJoiner { _, _, _ -> senderChannel }, identity.spki)
+        val code = CompletableDeferred<String>()
+        val answer = CompletableDeferred<TargetFiles?>()
+        val receiver = DropSession(receiverChannel, ReceiverWork(oldId, identity, "windows", "android", { Trust.NEW }, false,
+            SessionEvents({ value, _, _ -> code.complete(value) }, {}, {}), { _, _ -> true }, null, null,
+            { _, _, _ -> answer.await() }), scope)
+        try {
+            scope.launch { try { while (true) receiver.inbox.send(receiverChannel.next()) } catch (_: Exception) { receiver.abort("closed") } }
+            engine.start()
+            withTimeout(5_000) { while (engine.snapshot.value.loadedAtMs == null) delay(10) }
+            engine.send("peer", listOf("source"))
+            receiverChannel.send(byteArrayOf(0) + """{"t":"peer"}""".encodeToByteArray())
+            scope.launch { receiver.run() }
+            val expected = withTimeout(5_000) { code.await() }
+            delay(400)
+            val outgoing = engine.snapshot.value.transfers.single()
+            assertNull(outgoing.prompt)
+            assertEquals(expected, outgoing.verificationCode)
+        } finally {
+            answer.complete(null)
+            engine.signedOut()
+            scope.cancel()
+            sockets.first.close()
+            sockets.second.close()
+            dispatcher.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `receiver exposes the matching verification code before sender releases manifest`() = receiverCodeCase(false)
+
+    @Test
+    fun `trusted receiver exposes code while untrusted sender waits for confirmation`() = receiverCodeCase(true)
+
+    private fun receiverCodeCase(receiverTrustsSender: Boolean) = runBlocking {
         val directory = Files.createTempDirectory("drop-code-hint").toFile()
         val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
@@ -92,7 +158,6 @@ class DropEngineTest {
                 "connection":{"token":"test","endpoints":[{"host":"127.0.0.1","port":443,"pin":"${"a".repeat(43)}"}]}
             }""").jsonObject
         }
-        val engine = engine(api, directory.resolve("state.json"), dispatcher, RelayJoiner { _, _, _ -> receiverChannel })
         val code = CompletableDeferred<String>()
         val confirmation = CompletableDeferred<Boolean>()
         val pair = DropWire.ephemeralKey()
@@ -102,6 +167,8 @@ class DropEngineTest {
                 initSign(pair.private); update(payload); sign()
             }
         }
+        val engine = engine(api, directory.resolve("state.json"), dispatcher, RelayJoiner { _, _, _ -> receiverChannel },
+            identity.spki.takeIf { receiverTrustsSender })
         val sources = object : DropSources {
             override suspend fun describe(refs: List<String>) = listOf(SourceFile("source", "file.txt", 3, 0))
             override fun stat(file: SourceFile) = SourceStat(3, 0)

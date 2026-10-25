@@ -660,10 +660,10 @@ class DropEngine(
             }
         }
         val events = SessionEvents(
-            keyed = { code, level, key ->
+            keyed = { code, _, key ->
                 if (current(generation)) {
                     peerKey = key
-                    liveFor(id).verificationCode = code.takeIf { stored !is StoredSender && level != Trust.TRUSTED }
+                    liveFor(id).verificationCode = code
                     protocolFailures.remove(id)
                     changed()
                 }

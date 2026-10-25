@@ -935,6 +935,7 @@
     <string name="drop_key_changed">Ключ «%1$s» изменился — например, после переустановки Levik VPN. Продолжайте, только если коды совпадают.</string>
     <string name="drop_code_hint">Проверьте, что на «%1$s» показан этот же код. Так никто посередине не подменит устройство.</string>
     <string name="drop_code_description">Код %1$s</string>
+    <string name="drop_code_available_hint">Если другое устройство просит сверить код, сравните его с этим.</string>
     <string name="drop_accept">Принять</string>
     <string name="drop_decline">Отклонить</string>
     <string name="drop_later">Позже</string>
