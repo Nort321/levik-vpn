@@ -1,16 +1,26 @@
 # Ordinary VPN service routes, protocol 1
 
 Implementation contract for the website and Android/Windows/macOS/Linux clients.
-No deployment or OTA publication is part of this change.
+The implementation and the separately authorized production release are
+recorded independently below.
 
 ## Protected boundary
 
 Only explicitly classified ordinary endpoints can use the new policy. The
 read-only Remnawave registry joins published hosts to their inbound/profile and
 node UUID. The ordinary squads are the bridge's existing `Levik Runtime Xray`
-and `Levik Runtime Hysteria`. LTE and every other squad are excluded; an inbound
+and `Levik Runtime Hysteria`. LTE and other unknown squads are excluded; an inbound
 or address/port shared with a protected role is denied conservatively. Missing
 LTE metadata makes discovery unavailable rather than authorizing by omission.
+
+The existing `Service Gemini DE NL` entitlement may reuse inbounds already
+classified by those ordinary squads. It never supplies new ordinary inbounds;
+if any member has an unknown profile, inbound or protocol, the whole entitlement
+is treated as protected. An unrestricted host with an empty node list is joined
+only to one node with the exact active profile and inbound. Multi-node hosts or
+ambiguous active-profile joins remain excluded. Production registry reads use
+the existing authenticated, IP-restricted `/levik-status/remnawave/` namespace,
+including exact GET-only `internal-squads` and `hosts` proxy routes.
 
 Ordinary XHTTP is eligible. XHTTP belonging to the LTE squad, the Levik relays,
 Yandex/VK/Telemost and every other whitelist-bypass mode retain their existing
@@ -170,6 +180,10 @@ operations and cached owner context.
 The existing remote feature flag `service_routes` is seeded disabled with a
 zero-percent rollout. New enrollment is gated by that flag; an already applied
 strict policy must not be silently forgotten if rollout is disabled later.
+The server also checks the first supported release separately per platform:
+Android 2.8.10, Windows 1.3.75, macOS 1.1.24 and Linux 1.0.9. Older reported
+device versions show `client_update_required`; a missing version remains
+unknown rather than being labelled as successfully applied or outdated.
 Deploying the backend, applying the migration, enabling selected test clients,
 publishing apps and OTA updates are separate later operations.
 
@@ -217,3 +231,57 @@ These checks are not end-to-end acceptance of a physical phone, Windows/Linux
 TUN/process matching, or current production egress rules. The feature remains
 disabled until a separate controlled rollout; source, migration and app
 publication are not substitutes for those canary checks.
+
+### Authorized production release on 2026-10-25
+
+The website release `20261025-service-routes` runs site commit `2becca6`.
+Migration 029 was applied after a verified database backup. The new source was
+compared file-for-file with the commit, then built and switched through the
+existing preview, health check and automatic rollback procedure. Website tests:
+680 passed, 49 environment-dependent tests skipped; lint, typecheck and build
+passed. The user's pre-existing `next-env.d.ts` change was preserved locally.
+
+Published ordinary-routing clients:
+
+| Platform | OTA version | Immutable release source |
+| --- | --- | --- |
+| Android Direct | 2.8.10 / code 96 | `799d7ff` |
+| Windows | 1.3.75 | `1a90068` |
+| macOS arm64/x64 | 1.1.24 | `76630b3` |
+| Linux x64 | 1.0.9 | `b8aa5b8` |
+
+These releases were built from the published base plus the service-routing
+changes; other unpublished local features were kept out. Exact release-source
+tests passed: Android Direct 515 and Play 462; Windows 519 (7 skipped); macOS
+257 (2 skipped) plus 16 pinned-core checks; Linux 251 (2 skipped) plus 15
+pinned-core and 23 Python checks (4 skipped). Native CI completed successfully,
+including existing Windows TUN and Linux TUN/nftables checks. Desktop installer
+and manifest hashes, sizes and packaged source were verified. Mac bundles use
+the existing ad-hoc signing/custom installer scheme; no new Developer ID or
+Windows Authenticode identity was introduced.
+
+The production network canary used one newly created ordinary trial and signed
+public mobile APIs, without customer keys. It verified masks, the Russian
+preset with optional .su, current-device scope, foreign-device denial,
+idempotency, real tunnel decryption and nine entitled ordinary exits. An
+isolated temporary container ran the real pinned Xray and desktop routing
+runtime: the main connection exited in Germany, an explicit route in the
+Netherlands, with different external IPs. Closing only the local German test
+forwarder left the Netherlands route, DNS and YouTube request working. The
+main route became blocked and the core restart count remained zero. Both
+healthy and failure status acknowledgements were accepted by the live API.
+The test policy was then cleared and acknowledged, and its session signed out.
+Node/LTE/relay configuration was not modified for failure injection.
+
+After the canary passed and OTA publication completed, `service_routes` was
+enabled for all four platforms at 100%, subject to the minimum client versions
+above. Publishing makes the update available; installation still follows each
+client's normal update flow. Google Play is a separate distribution channel:
+its Integrity project and store publishing configuration remain unavailable,
+so no Play Store publication is claimed. A Play-only loopback validation fix
+and regression were subsequently committed for that future channel (463 Play
+tests passed); the immutable Direct tag was preserved.
+
+The native-Xray/TUIC and macOS process-filter limitations described above
+remain. Physical-phone lifecycle and installation over every real user
+environment are not established by the isolated canary.
