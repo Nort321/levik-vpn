@@ -157,6 +157,9 @@ class AppViewModel(
         isAuthenticated = { mutableState.value.session == SessionStatus.Authenticated },
         enabled = !BuildConfig.IS_PLAY_DISTRIBUTION,
     )
+    val serviceRoutesState = repository.serviceRouteState
+    val serviceRouteExclusions = repository.serviceRouteExclusions
+    val serviceRouteDetail = repository.serviceRouteDetail
 
     /** LevikDrop in the profile and files shared to the app (Direct builds). */
     val drop: com.leviknet.vpn.ui.drop.DropController? = appPlatform?.drop?.let { engine ->

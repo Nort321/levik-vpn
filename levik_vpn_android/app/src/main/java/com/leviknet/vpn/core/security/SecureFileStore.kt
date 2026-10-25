@@ -145,6 +145,7 @@ class SecureFileStore(context: Context) {
         const val ACCOUNT_HINT = "account_hint"
         const val PENDING_REVOCATION_TOKEN = "pending_revocation_token"
         const val TUNNEL_PROFILE = "tunnel_profile"
+        const val SERVICE_ROUTES = "service_routes"
         const val YANDEX_DOCUMENT = "yandex_document"
         const val YANDEX_TELEMOST = "yandex_telemost"
         const val SELECTED_SERVER = "selected_server"

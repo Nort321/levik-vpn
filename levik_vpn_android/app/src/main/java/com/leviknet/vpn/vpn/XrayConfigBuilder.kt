@@ -118,6 +118,7 @@ class XrayConfigBuilder(
         lteDirectDomains: List<String> = emptyList(),
         preserveTargetAddress: Boolean = false,
         xhttpMuxHosts: Set<String> = emptySet(),
+        serviceRouteSession: ServiceRouteConfig? = null,
     ): String {
         require(tunFileDescriptor >= 0) { "Invalid TUN file descriptor" }
         profile.subscriptionExpiresAt?.let { value ->
@@ -336,7 +337,12 @@ class XrayConfigBuilder(
                 })
             })
         }
-        return json.encodeToString(JsonObject.serializer(), config)
+        val servicePolicy = profile.serviceRoutes?.takeIf { it.appliesTo(profile, selected) && !isLte }
+        require(servicePolicy == null || serviceRouteSession?.policy == servicePolicy) {
+            "Service route control session is unavailable"
+        }
+        val effective = if (servicePolicy != null) requireNotNull(serviceRouteSession).apply(config) else config
+        return json.encodeToString(JsonObject.serializer(), effective)
     }
 
     /**

@@ -104,7 +104,7 @@ class HomeWatcher(
                                 home,
                                 System.currentTimeMillis(),
                                 vpnConnected = vpnController.state.value.state == VpnConnectionState.CONNECTED,
-                                enabled = settings.sleepAtHome.value,
+                                enabled = settings.sleepAtHome.value && !repository.requiresLocalServiceRoutes(),
                             ),
                         )
                     }

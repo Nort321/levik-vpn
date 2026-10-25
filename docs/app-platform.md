@@ -799,3 +799,14 @@ After payment and from emails the website links to
 
 The link can only choose a screen. An unknown screen opens the main one, and
 nothing else in the link is used. The apps then refresh the subscription.
+
+## Ordinary service routes
+
+Protocol 1 adds a separate cloud policy for domain masks, services, presets,
+device overrides and route-local failure behavior. Its signed mobile resource
+is `/api/mobile/v1/service-routes/profile`, its event is `service_routes`, and
+its rollout flag starts disabled. It does not modify the legacy tunnel-profile
+resource or the LTE/relay builders. Ordinary XHTTP remains eligible; LTE squad
+and all whitelist-bypass endpoints are excluded by authoritative metadata.
+See [service-routes.md](service-routes.md) for the wire contract, bootstrap and
+application states, limits, security boundary and rollout acceptance checks.
