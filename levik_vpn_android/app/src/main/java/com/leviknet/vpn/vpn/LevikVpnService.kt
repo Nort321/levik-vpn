@@ -63,6 +63,7 @@ import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -84,7 +85,10 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 class LevikVpnService : VpnService() {
     private val coreOwner = NEXT_CORE_OWNER.incrementAndGet()
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // A failed background job (a receipt, a probe) is logged; it must never kill the process and the tunnel with it.
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, failure ->
+        AppLogger.w(LOG_TAG, "Background service job failed: ${failure.javaClass.simpleName}")
+    })
     private val serviceCommands = VpnServiceCommands(serviceScope)
     private val connectionMutex = Mutex()
     private val mobileEvaluationMutex = Mutex()
@@ -824,7 +828,13 @@ class LevikVpnService : VpnService() {
                 startServiceRouteRuntime()
             } else if (profile.serviceRoutes?.rules?.isEmpty() == true) {
                 val policy = requireNotNull(profile.serviceRoutes)
-                serviceScope.launch { container.repository.reportServiceRoutes(ServiceRouteReport(policy.revision, policy.fingerprint, "applied", emptyList()), profile.serviceRouteOwner) }
+                serviceScope.launch {
+                    try {
+                        container.repository.reportServiceRoutes(ServiceRouteReport(policy.revision, policy.fingerprint, "applied", emptyList()), profile.serviceRouteOwner)
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (_: Exception) { /* Optional receipt: an offline control plane or an old target never ends the tunnel. */ }
+                }
             } else if (container.repository.serviceRouteState.value == "suspended") {
                 serviceScope.launch { container.repository.reportSuspendedServiceRoutes(profile.subscriptionId) }
             }
