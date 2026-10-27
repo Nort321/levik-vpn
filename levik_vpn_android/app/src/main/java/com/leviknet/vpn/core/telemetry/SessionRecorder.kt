@@ -117,6 +117,10 @@ private const val KEPT_HEAD_EVENTS = 120
 private const val MAX_COUNTER = 1_000
 const val MAX_SESSION_MS = 31L * 24 * 60 * 60 * 1_000
 private val CODE = Regex("^[a-z0-9_.:-]{1,48}$")
+private val NODE_ID = Regex("^n1[0-9a-f]{20}$")
+
+/** The website accepts check times up to a minute. */
+private const val MAX_CHECK_MS = 60_000L
 
 fun safeTelemetryCode(code: String): String = if (CODE.matches(code)) code else "other"
 
@@ -218,6 +222,19 @@ class SessionRecorder(
     fun power(state: PowerState) = push("power") { put("state", state.wire) }
 
     fun recovery(action: RecoveryAction) = push("recovery") { put("action", action.wire) }
+
+    /**
+     * A 64 KB traffic check through the tunnel to node [nodeId], docs/connection-telemetry.md:
+     * the website ranks nodes per operator by it, docs/app-platform.md "Node quality".
+     */
+    fun trafficCheck(nodeId: String, ms: Long, ok: Boolean) {
+        if (!NODE_ID.matches(nodeId)) return
+        push("check") {
+            put("nid", nodeId)
+            put("ms", ms.coerceIn(0L, MAX_CHECK_MS))
+            put("ok", ok)
+        }
+    }
 
     fun pause() = push("pause") {}
 

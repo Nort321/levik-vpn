@@ -31,6 +31,7 @@ import com.leviknet.vpn.core.logger.AppLogger
 import com.leviknet.vpn.core.notification.AppIconArtwork
 import com.leviknet.vpn.core.network.ApiException
 import com.leviknet.vpn.core.network.WhitelistMode
+import com.leviknet.vpn.core.platform.FavoriteNodes
 import com.leviknet.vpn.core.security.SecureFileStore
 import com.leviknet.vpn.core.telemetry.AttemptCause
 import com.leviknet.vpn.core.telemetry.AttemptStage
@@ -2496,8 +2497,13 @@ class LevikVpnService : VpnService() {
             delay(initialDelayMs)
             val vpnNetwork = vpnNetwork() ?: return@launch
             val size = if (allowlist) TrafficCheckSize.ALLOWLIST else TrafficCheckSize.REGULAR
-            val passed = smartAuto.checkTraffic(vpnNetwork, size)
+            val elapsedMs = smartAuto.checkTraffic(vpnNetwork, size)
+            val passed = elapsedMs != null
             if (!coreRunning || currentServer?.id != server.id || currentNetwork != network) return@launch
+            val checkedNode = FavoriteNodes.nodeId(server)
+            if (!allowlist && elapsedMs != null && checkedNode != null) {
+                telemetry.record { it.trafficCheck(checkedNode, elapsedMs, ok = true) }
+            }
             if (allowlist) {
                 onAllowlistTrafficChecked(server, network, passed)
                 return@launch
@@ -2515,6 +2521,8 @@ class LevikVpnService : VpnService() {
                 AppLogger.w(LOG_TAG, "Smart Auto: traffic check failed while the network itself is offline; ignored")
                 return@launch
             }
+            // A failure counts as the check's deadline, docs/app-platform.md "Node quality".
+            if (checkedNode != null) telemetry.record { it.trafficCheck(checkedNode, TrafficCheckSize.REGULAR.deadlineMs, ok = false) }
             if (returnAfterFalseAllowlistEnd(server, network)) return@launch
             if (networkMonitor.isCellular(network) && allowlistsActive(network)) {
                 // Allowlists, not the protocol: every regular server fails here, a mobile one is next.
