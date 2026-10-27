@@ -414,6 +414,12 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                             com.leviknet.vpn.ui.drop.DropCard(state = dropState, controller = drop)
                         }
                     },
+                    dropDock = {
+                        viewModel.drop?.let { drop ->
+                            val dropState by drop.state.collectAsStateWithLifecycle()
+                            com.leviknet.vpn.ui.drop.DropDock(state = dropState, controller = drop)
+                        }
+                    },
                 )
             }
         }
@@ -1538,6 +1544,8 @@ private fun MainContent(
     onSharePresenceChanged: (Boolean) -> Unit,
     onSleepAtHomeChanged: (Boolean) -> Unit,
     remoteDevices: @Composable () -> Unit = {},
+    /** LevikDrop above the tab bar, on every tab. */
+    dropDock: @Composable () -> Unit = {},
 ) {
     val isTelevision = LocalConfiguration.current.uiMode and
         Configuration.UI_MODE_TYPE_MASK == Configuration.UI_MODE_TYPE_TELEVISION
@@ -1548,7 +1556,12 @@ private fun MainContent(
     Scaffold(
         containerColor = Color.Transparent,
         contentWindowInsets = if (isTelevision) WindowInsets(0, 0, 0, 0) else WindowInsets.safeDrawing,
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = {
+            Column(horizontalAlignment = Alignment.End) {
+                Box(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) { dropDock() }
+                SnackbarHost(snackbarHostState)
+            }
+        },
         bottomBar = {
             if (!isTelevision) {
                 AppNavigationBar(

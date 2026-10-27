@@ -46,14 +46,11 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.leviknet.vpn.R
 import com.leviknet.vpn.core.drop.AndroidDropFolders
 import com.leviknet.vpn.core.drop.DropAction
-import com.leviknet.vpn.core.drop.DropAnswer
 import com.leviknet.vpn.core.drop.DropDevice
 import com.leviknet.vpn.core.drop.DropFormat
 import com.leviknet.vpn.core.drop.DropPrompt
@@ -62,12 +59,10 @@ import com.leviknet.vpn.core.drop.DropTransferView
 import com.leviknet.vpn.core.drop.DropUserError
 import com.leviknet.vpn.core.drop.LinkStatus
 import com.leviknet.vpn.core.drop.SessionPath
-import com.leviknet.vpn.core.drop.Trust
 import com.leviknet.vpn.ui.theme.LevikBlue
 import com.leviknet.vpn.ui.theme.LevikGreen
 
 private const val DROP_STALE_MS = 30_000L
-private const val SHOWN_NAMES = 5
 
 /** "File transfer" in the profile, right under "My devices", docs/levik-drop.md. */
 @Composable
@@ -212,7 +207,7 @@ private fun DropDeviceRow(device: DropDevice, busy: Boolean, sending: Boolean, e
 
 /** "Downloads/Levik", "Folder “Documents”" or a call to pick one. */
 @Composable
-private fun folderLabel(folder: String?): String {
+internal fun folderLabel(folder: String?): String {
     if (folder == null) return stringResource(R.string.drop_folder_none)
     if (folder == AndroidDropFolders.DOWNLOADS) return stringResource(R.string.drop_folder_downloads)
     val id = runCatching { DocumentsContract.getTreeDocumentId(Uri.parse(folder)) }.getOrNull().orEmpty()
@@ -385,8 +380,8 @@ private fun dropMessage(message: DropMessage, maxFiles: Int, maxBytes: Long): St
 }
 
 /**
- * Dialogs that may come up on any screen: an offer or a code to compare, a
- * folder for Android 9 and older, files shared from another app.
+ * Dialogs that may come up on any screen: a folder for Android 9 and older and
+ * files shared from another app. Offers and codes are in [DropDock].
  */
 @Composable
 internal fun DropDialogs(state: DropUiState, controller: DropController, signedIn: Boolean) {
@@ -396,103 +391,9 @@ internal fun DropDialogs(state: DropUiState, controller: DropController, signedI
     LaunchedEffect(state.folderFor) {
         if (state.folderFor != null) folderPicker.launch(null)
     }
-    val prompted = state.snapshot.transfers.firstOrNull { transfer ->
-        val prompt = transfer.prompt
-        prompt != null && controller.promptKey(transfer.id, prompt.code) !in state.later
-    }
-    if (prompted != null) {
-        DropPromptDialog(prompted, state.answering, controller)
-    } else if (state.shared.isNotEmpty()) {
+    if (state.shared.isNotEmpty()) {
         DropShareDialog(state, controller, signedIn)
     }
-}
-
-@Composable
-private fun DropPromptDialog(transfer: DropTransferView, answering: Boolean, controller: DropController) {
-    val prompt = transfer.prompt ?: return
-    val context = LocalContext.current
-    val offer = prompt.kind == DropPrompt.Kind.OFFER
-    AlertDialog(
-        onDismissRequest = { controller.later(transfer.id, prompt.code) },
-        shape = RoundedCornerShape(24.dp),
-        title = {
-            Column {
-                Text(
-                    stringResource(if (offer) R.string.drop_offer_title else R.string.drop_confirm_title, transfer.peerName),
-                    fontWeight = FontWeight.Bold,
-                )
-                if (!offer) {
-                    Text(
-                        stringResource(if (transfer.sender) R.string.drop_confirm_sending else R.string.drop_confirm_receiving, transfer.peerName),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (offer) {
-                    val files = transfer.files.orEmpty()
-                    files.take(SHOWN_NAMES).forEach { file ->
-                        Text("${file.name} · ${DropFormat.bytes(context, file.size)}", style = MaterialTheme.typography.bodyMedium, maxLines = 2)
-                    }
-                    if (files.size > SHOWN_NAMES) {
-                        Text(stringResource(R.string.drop_offer_more, files.size - SHOWN_NAMES), style = MaterialTheme.typography.bodySmall)
-                    }
-                    Text(
-                        stringResource(R.string.drop_files_size, DropFormat.fileCount(context, transfer.fileCount), DropFormat.bytes(context, transfer.totalBytes)),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (prompt.trust == Trust.CHANGED) {
-                    Text(
-                        stringResource(R.string.drop_key_changed, transfer.peerName),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-                prompt.code?.let { code ->
-                    Text(
-                        stringResource(R.string.drop_code_hint, transfer.peerName),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    val description = stringResource(R.string.drop_code_description, code.replace(" ", ""))
-                    Text(
-                        code,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 30.sp,
-                        letterSpacing = 2.sp,
-                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp).semantics { contentDescription = description },
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = { controller.answer(transfer.id, if (offer) DropAnswer.ACCEPT else DropAnswer.CONFIRM, prompt.code) },
-                enabled = !answering,
-                shape = RoundedCornerShape(12.dp),
-            ) {
-                Text(stringResource(if (offer) R.string.drop_accept else R.string.drop_codes_match))
-            }
-        },
-        dismissButton = {
-            Row {
-                TextButton(onClick = { controller.later(transfer.id, prompt.code) }) { Text(stringResource(R.string.drop_later)) }
-                TextButton(
-                    onClick = { controller.answer(transfer.id, if (offer) DropAnswer.DECLINE else DropAnswer.REJECT, prompt.code) },
-                    enabled = !answering,
-                ) {
-                    Text(stringResource(if (offer) R.string.drop_decline else R.string.drop_codes_differ))
-                }
-            }
-        },
-    )
 }
 
 @Composable

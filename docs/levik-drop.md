@@ -227,9 +227,11 @@ that blocks the connection simply leaves the transfer on the relay.
   or to a folder picked with the system picker (required on Android 8–9).
   Files picked in the app stay readable after a restart; files shared from
   another app are readable only while the transfer service runs. The identity
-  key is a non-exportable Android Keystore key.
+  key is a non-exportable Android Keystore key. Offers, codes, progress and
+  the result show in a card above the tab bar on every screen.
 - **Desktops** are ready while signed in. Files, keys and sockets stay in the
-  main process; the window only asks and shows. Files can be dragged onto a
-  device.
+  main process; the window only asks and shows. Files dragged into the window
+  open a drop zone with the devices. Offers, codes, progress and the result
+  show in a card in the corner on every tab, which folds into a small pill.
 - With the VPN on, the relay connection follows the app's normal routing and
   Kill Switch.
