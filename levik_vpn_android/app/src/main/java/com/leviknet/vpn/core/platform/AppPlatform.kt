@@ -32,6 +32,7 @@ import com.leviknet.vpn.vpn.SmartAuto
 import com.leviknet.vpn.vpn.TunnelServer
 import com.leviknet.vpn.vpn.VpnConnectionState
 import com.leviknet.vpn.vpn.VpnController
+import com.leviknet.vpn.vpn.countryServers
 import com.leviknet.vpn.vpn.isEligibleForAutomaticSelection
 import com.leviknet.vpn.vpn.isMobileServer
 import com.leviknet.vpn.vpn.telemetryProtocol
@@ -441,7 +442,10 @@ class AppPlatform(
                 now,
             )
             if (move == MaintenanceMove.STAY || (move == MaintenanceMove.WHEN_IDLE && !idleMeter.idle(now))) return
-            val target = fastestOfKind(current, servers, now, includeCurrent = false) ?: run {
+            // The same country first, docs/app-platform.md "Server list".
+            val neighbours = countryServers(servers, current.countryCode)
+            val target = neighbours.takeIf { it.size > 1 }?.let { fastestOfKind(current, it, now, includeCurrent = false) }
+                ?: fastestOfKind(current, servers, now, includeCurrent = false) ?: run {
                 AppLogger.w(TAG, "No server to move to before maintenance")
                 return
             }

@@ -996,4 +996,15 @@
         <item quantity="many">%d файлов</item>
         <item quantity="other">%d файла</item>
     </plurals>
+    <plurals name="server_country_count">
+        <item quantity="one">%d сервер</item>
+        <item quantity="few">%d сервера</item>
+        <item quantity="many">%d серверов</item>
+        <item quantity="other">%d сервера</item>
+    </plurals>
+    <string name="server_number">Сервер %1$d</string>
+    <string name="server_country_from_ping">от %1$d мс</string>
+    <string name="server_country_servers">Серверы: %1$s</string>
+    <string name="server_country_expanded">Развёрнуто</string>
+    <string name="server_country_collapsed">Свёрнуто</string>
 </resources>

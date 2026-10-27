@@ -994,4 +994,13 @@
         <item quantity="one">%d file</item>
         <item quantity="other">%d files</item>
     </plurals>
+    <plurals name="server_country_count">
+        <item quantity="one">%d server</item>
+        <item quantity="other">%d servers</item>
+    </plurals>
+    <string name="server_number">Server %1$d</string>
+    <string name="server_country_from_ping">from %1$d ms</string>
+    <string name="server_country_servers">Servers: %1$s</string>
+    <string name="server_country_expanded">Expanded</string>
+    <string name="server_country_collapsed">Collapsed</string>
 </resources>

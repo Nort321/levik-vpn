@@ -283,6 +283,45 @@ both lists. Google Play builds keep favourites on the phone.
 - Sync can be turned off in each app's settings. It stops on sign-out and the
   account's stored settings are deleted with the account.
 
+## Server list
+
+The apps show regular servers by country: one card per country, the
+country's servers inside it, and the protocols of each server inside that.
+
+```text
+🇩🇪 Germany              country: the flag in the host remark
+ ├─ Frankfurt            server: one node id, named by its label
+ │   VLESS · Hysteria 2 · TUIC
+ └─ Nuremberg
+     VLESS · Hysteria 2
+```
+
+- **Server.** The VLESS, Hysteria 2 and TUIC variants of one endpoint host
+  ([node id](#node-ids)) and country make one server, one variant per
+  protocol.
+- **Country.** Servers with the same country code. Mobile, LTE, relay, Yandex,
+  Game and home-road («🏠») entries, and servers whose country or protocol is
+  unknown, are never grouped and keep cards of their own.
+- **Label.** Hosts are named `<flag> <country> · <label>`, for example
+  `🇩🇪 Германия · Франкфурт`; ` | ` separates as well. Without a separator the
+  label is what remains of the remark after the flag, the country's Russian or
+  English name and protocol names (`VLESS`, `Reality`, `Hysteria 2`, `Hy2`,
+  `TUIC`). The first variant of a server that has a label names it. A server
+  without one is `Сервер N`, N being its place among the country's servers in
+  subscription order, and a label that repeats inside a country gets ` 2`,
+  ` 3`. Renaming a host keeps its node id: favourites and maintenance stay.
+- A country with a single server looks as before: one card named after the
+  country, with the label next to the protocol.
+- **Choosing a country** takes its best server by the [Smart Auto](#smart-auto)
+  score; a server in maintenance only when the country has no other. When one
+  of the country's servers is already selected, the choice stays. Expanding the
+  country picks a server, and its protocol, by hand.
+- Before [maintenance](#server-maintenance) the app moves to the best other
+  server of the same country first, and to another country only when the
+  country has none left.
+- Favourites stay per server; a country shows a star when any of its servers
+  is a favourite.
+
 ## Live events
 
 `GET /api/mobile/v1/events` (signed like every app request, `Accept:
