@@ -189,9 +189,54 @@ second provider. Missing backend telemetry does not disable working
 routes: client measurements and the bootstrap fallback remain available.
 
 Preflight never starts a competing unbound core inside an active system TUN.
-Reconnects and network changes can obtain new observations after teardown;
-the existing freeze/protocol ladder and conservative overload handover remain
-in place. Changing an exit can change the public IP and interrupt flows.
+While ordinary Auto is active, private candidate proxies live inside the same
+core and force their own outbounds. Roughly every 30 seconds the client checks
+the incumbent and up to two rotating alternatives. Successful 64 KB body
+verification is reused for at most five minutes within that core lease;
+ordinary rounds use small latency requests. Bounded sequential speed samples
+run at most once every five minutes and only in a quiet window.
+
+A single coordinator owns the ordinary main balancer. Service-specific rules
+retain their own routing and follow the acknowledged main choice where their
+policy says `main`. Selecting a better default changes only the balancer
+target through Xray's RoutingService; it does not replace outbounds, restart
+the core, recreate TUN or release protected-mode settings. Existing TCP,
+UDP/QUIC associations and multiplexed streams keep their old outbound; new
+flows take the new one. An old flow cannot be migrated off a failed exit by
+this mechanism. An application may also open several connections during one
+session, so retaining old flows alone is not a universal IP-affinity promise.
+
+Optimization requires two consecutive confirmed wins. A normal improvement is
+at least 20% and 10 ms in stable delay, or 25% in balanced bidirectional
+throughput without a substantial delay regression. Near-equivalent routes
+retain the incumbent, and a successful move starts a five-minute cooldown.
+Confirmed path failure or fresh overload may bypass this cooldown, but never
+the user-activity guard. Partial/unknown challenger evidence does not displace
+a working route. Failed control requests retain the acknowledged target.
+
+The activity guard uses only uplink plus downlink counters of the user TUN
+inbound, excluding Smart Auto's private probes. At 16 KiB/s, or a 64 KiB burst
+within five seconds, it blocks optimization. Rates at or above 4 KiB/s prevent
+the quiet timer from completing; a move or a speed sample is permitted only
+after 60 continuous seconds below 4 KiB/s. Keepalives below that threshold are
+allowed. Both exact counters must exist, samples must be fresh within five
+seconds, and missing/reset/backwards or invalid counters disarm the guard.
+The coordinator checks fresh activity again immediately before installing a
+target. Manual selection remains pinned; no application/process inspection is
+needed to recognize ordinary foreground transfer activity.
+Desktop ordinary manual sessions preload the private control channel but do
+not run the Auto owner or its probes. Enabling/disabling Auto on such a
+running session starts/stops that owner without replacing the core; disabling
+it freezes the last acknowledged main target. Protected/Home/TUIC modes retain
+their existing lifecycle.
+
+Reconnects and network changes can obtain new preflight observations after
+teardown. A failed core, physical network or TUN cannot be repaired through a
+balancer override; connection recovery remains a distinct lifecycle operation.
+Planned maintenance and explicit profile/network changes retain their separate
+lifecycle rules and may require a reconnect; they are not fatigue-based Auto
+optimization. On Android a wedged TUN/control path can require manual recovery
+when no trustworthy in-place decision can be made.
 
 Without usable full-route observations, Android's bootstrap order among
 regular servers (VLESS, Hysteria 2 and TUIC) uses
