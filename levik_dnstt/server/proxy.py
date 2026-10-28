@@ -15,8 +15,8 @@ import socket
 import time
 from pathlib import Path
 
-MAX_CONNECTIONS = 96
-MAX_PER_USER = 16
+MAX_CONNECTIONS = 256
+MAX_PER_USER = 48
 BYTES_PER_SECOND = 64 * 1024
 ALLOWED_PORTS = {53, 80, 443, 5222, 5223, 8443}
 YANDEX_DNS = {'77.88.8.8', '77.88.8.1'}

@@ -254,7 +254,8 @@ func acceptStreams(conn *kcp.UDPSession, privkey []byte, upstream string) error 
 		return err
 	}
 	defer sess.Close()
-	slots := make(chan struct{}, 16)
+	// Levik: a whole phone keeps ~10 idle streams; 16 reset browser connections.
+	slots := make(chan struct{}, 48)
 
 	for {
 		stream, err := sess.AcceptStream()
