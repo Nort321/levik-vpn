@@ -51,6 +51,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	utls "github.com/refraction-networking/utls"
@@ -60,9 +61,6 @@ import (
 	"www.bamsoftware.com/git/dnstt.git/noise"
 	"www.bamsoftware.com/git/dnstt.git/turbotunnel"
 )
-
-// smux streams will be closed after this much time without receiving data.
-const idleTimeout = 2 * time.Minute
 
 // dnsNameCapacity returns the number of bytes remaining for encoded data after
 // including domain in a DNS name.
@@ -162,9 +160,33 @@ func handle(local *net.TCPConn, sess *smux.Session, conv uint32) error {
 	return err
 }
 
-func run(pubkey []byte, domain dns.Name, localAddr *net.TCPAddr, remoteAddr net.Addr, pconn net.PacketConn) error {
-	defer pconn.Close()
+// Levik: the session of a dead server or a long network loss ends silently
+// (nothing tells the client). The loopback listener lives as long as the
+// sidecar; each session gets a fresh transport, ClientID and KCP conv, so a
+// server restart costs seconds instead of the VPN's transport.
+const sessionKeepAliveTimeout = 30 * time.Second
 
+type tunnelSession struct {
+	sess      *smux.Session
+	conv      uint32
+	closeOnce sync.Once
+	closeFn   func()
+}
+
+func (s *tunnelSession) close() { s.closeOnce.Do(s.closeFn) }
+
+// sessionPacketConn also closes the transport, ending its receive/send loops.
+type sessionPacketConn struct {
+	*DNSPacketConn
+	transport net.PacketConn
+}
+
+func (c *sessionPacketConn) Close() error {
+	c.transport.Close()
+	return c.DNSPacketConn.Close()
+}
+
+func run(pubkey []byte, domain dns.Name, localAddr *net.TCPAddr, remoteAddr net.Addr, dial func() (net.PacketConn, error)) error {
 	ln, err := net.ListenTCP("tcp", localAddr)
 	if err != nil {
 		return fmt.Errorf("opening local listener: %v", err)
@@ -177,15 +199,82 @@ func run(pubkey []byte, domain dns.Name, localAddr *net.TCPAddr, remoteAddr net.
 	}
 	log.Printf("effective MTU %d", mtu)
 
+	var current atomic.Pointer[tunnelSession]
+	go func() {
+		backoff := time.Second
+		for {
+			s, err := openSession(pubkey, remoteAddr, mtu, dial)
+			if err != nil {
+				log.Printf("opening session: %v", err)
+				time.Sleep(backoff)
+				backoff = min(2*backoff, 15*time.Second)
+				continue
+			}
+			backoff = time.Second
+			current.Store(s)
+			<-s.sess.CloseChan()
+			current.CompareAndSwap(s, nil)
+			s.close()
+		}
+	}()
+
+	// Matches the server's per-tunnel stream limit.
+	slots := make(chan struct{}, 48)
+	for {
+		local, err := ln.Accept()
+		if err != nil {
+			if err, ok := err.(net.Error); ok && err.Temporary() {
+				continue
+			}
+			return err
+		}
+		select {
+		case slots <- struct{}{}:
+		default:
+			local.Close()
+			continue
+		}
+		go func() {
+			defer func() { <-slots }()
+			defer local.Close()
+			// Hold a connection briefly while a replacement session opens.
+			deadline := time.Now().Add(10 * time.Second)
+			s := current.Load()
+			for (s == nil || s.sess.IsClosed()) && time.Now().Before(deadline) {
+				time.Sleep(100 * time.Millisecond)
+				s = current.Load()
+			}
+			if s == nil || s.sess.IsClosed() {
+				return
+			}
+			err := handle(local.(*net.TCPConn), s.sess, s.conv)
+			if err != nil {
+				log.Printf("handle: %v", err)
+			}
+		}()
+	}
+}
+
+func openSession(pubkey []byte, remoteAddr net.Addr, mtu int, dial func() (net.PacketConn, error)) (*tunnelSession, error) {
+	pconn, err := dial()
+	if err != nil {
+		return nil, err
+	}
 	// Open a KCP conn on the PacketConn.
 	conn, err := kcp.NewConn2(remoteAddr, nil, 0, 0, pconn)
 	if err != nil {
-		return fmt.Errorf("opening KCP conn: %v", err)
+		pconn.Close()
+		return nil, fmt.Errorf("opening KCP conn: %v", err)
 	}
-	defer func() {
+	result := &tunnelSession{conv: conn.GetConv()}
+	result.closeFn = func() {
 		log.Printf("end session %08x", conn.GetConv())
+		if result.sess != nil {
+			result.sess.Close()
+		}
 		conn.Close()
-	}()
+		pconn.Close()
+	}
 	log.Printf("begin session %08x", conn.GetConv())
 	// Permit coalescing the payloads of consecutive sends.
 	conn.SetStreamMode(true)
@@ -206,46 +295,23 @@ func run(pubkey []byte, domain dns.Name, localAddr *net.TCPAddr, remoteAddr net.
 	_ = conn.SetDeadline(time.Now().Add(25 * time.Second))
 	rw, err := noise.NewClient(conn, pubkey)
 	if err != nil {
-		return err
+		result.close()
+		return nil, err
 	}
 	_ = conn.SetDeadline(time.Time{})
 
 	// Start a smux session on the Noise channel.
 	smuxConfig := smux.DefaultConfig()
 	smuxConfig.Version = 2
-	smuxConfig.KeepAliveTimeout = idleTimeout
+	smuxConfig.KeepAliveTimeout = sessionKeepAliveTimeout
 	smuxConfig.MaxStreamBuffer = 1 * 1024 * 1024 // default is 65536
 	sess, err := smux.Client(rw, smuxConfig)
 	if err != nil {
-		return fmt.Errorf("opening smux session: %v", err)
+		result.close()
+		return nil, fmt.Errorf("opening smux session: %v", err)
 	}
-	defer sess.Close()
-	go func() { <-sess.CloseChan(); ln.Close() }()
-	slots := make(chan struct{}, 16)
-
-	for {
-		local, err := ln.Accept()
-		if err != nil {
-			if err, ok := err.(net.Error); ok && err.Temporary() {
-				continue
-			}
-			return err
-		}
-		select {
-		case slots <- struct{}{}:
-		default:
-			local.Close()
-			continue
-		}
-		go func() {
-			defer func() { <-slots }()
-			defer local.Close()
-			err := handle(local.(*net.TCPConn), sess, conn.GetConv())
-			if err != nil {
-				log.Printf("handle: %v", err)
-			}
-		}()
-	}
+	result.sess = sess
+	return result, nil
 }
 
 func main() {
@@ -360,8 +426,8 @@ Known TLS fingerprints for -utls are:
 
 	// Iterate over the remote resolver address options and select one and
 	// only one.
-	var remoteAddr net.Addr
-	var pconn net.PacketConn
+	var remoteSpec string
+	var openTransport func(string) (net.Addr, net.PacketConn, error)
 	for _, opt := range []struct {
 		s string
 		f func(string) (net.Addr, net.PacketConn, error)
@@ -419,24 +485,35 @@ Known TLS fingerprints for -utls are:
 		if opt.s == "" {
 			continue
 		}
-		if pconn != nil {
+		if openTransport != nil {
 			fmt.Fprintf(os.Stderr, "only one of -doh, -dot, and -udp may be given\n")
 			os.Exit(1)
 		}
-		var err error
-		remoteAddr, pconn, err = opt.f(opt.s)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
+		remoteSpec, openTransport = opt.s, opt.f
 	}
-	if pconn == nil {
+	if openTransport == nil {
 		fmt.Fprintf(os.Stderr, "one of -doh, -dot, or -udp is required\n")
 		os.Exit(1)
 	}
+	remoteAddr, first, err := openTransport(remoteSpec)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 
-	pconn = NewDNSPacketConn(pconn, remoteAddr, domain)
-	err = run(pubkey, domain, localAddr, remoteAddr, pconn)
+	// Every session after the first gets a freshly opened (and protected) transport.
+	dial := func() (net.PacketConn, error) {
+		transport := first
+		first = nil
+		if transport == nil {
+			var err error
+			if _, transport, err = openTransport(remoteSpec); err != nil {
+				return nil, err
+			}
+		}
+		return &sessionPacketConn{NewDNSPacketConn(transport, remoteAddr, domain), transport}, nil
+	}
+	err = run(pubkey, domain, localAddr, remoteAddr, dial)
 	if err != nil {
 		log.Fatal(err)
 	}
