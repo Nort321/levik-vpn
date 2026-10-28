@@ -42,8 +42,9 @@ class SmartAuto(
     private val advice: () -> ProtocolAdvice?,
     private val physicalNetwork: () -> Network?,
     private val clock: () -> Long = System::currentTimeMillis,
+    private val probeSettings: () -> List<String> = { emptyList() },
 ) {
-    private data class MeasuredRoute(val network: String, val routeId: String?, val atMs: Long, val value: SmartRouteMeasurement)
+    private data class MeasuredRoute(val network: String, val routeId: String?, val transport: String, val atMs: Long, val value: SmartRouteMeasurement)
     private val measuredRoutes = ConcurrentHashMap<String, MeasuredRoute>()
 
     private fun measurementNetwork(network: Network?): String? = network?.let { "${it.networkHandle}|${networkKey(it).orEmpty()}" }
@@ -58,12 +59,21 @@ class SmartAuto(
         }.toMap()
     }
 
-    fun recordRouteMeasurement(server: TunnelServer, network: Network, measurement: SmartRouteMeasurement) {
+    fun measurementContext(server: TunnelServer): String = SmartRouteCacheContext.fingerprint(server, probeSettings())
+
+    fun eligibleRoutes(servers: List<TunnelServer>): List<TunnelServer> {
+        val view = loadView()
+        val full = servers.filter { FavoriteNodes.load(view.full.associateWith { 1.0 }, it) != null }.mapTo(mutableSetOf(), TunnelServer::id)
+        val eligible = SmartRouteSelection.eligibleIds(servers.map(TunnelServer::id), routeResources(servers), full)
+        return servers.filter { it.id in eligible }
+    }
+
+    fun recordRouteMeasurement(server: TunnelServer, network: Network, measurement: SmartRouteMeasurement, transport: String = measurementContext(server)) {
         val key = measurementNetwork(network) ?: return
         val now = clock()
         measuredRoutes.entries.removeIf { now - it.value.atMs >= it.value.value.cacheMs }
         if (measuredRoutes.size >= 256) measuredRoutes.clear()
-        measuredRoutes[server.id] = MeasuredRoute(key, routeResources(listOf(server))[server.id]?.id, now, measurement)
+        measuredRoutes[server.id] = MeasuredRoute(key, routeResources(listOf(server))[server.id]?.id, transport, now, measurement)
     }
 
     fun routeMeasurements(servers: List<TunnelServer>, network: Network? = null): Map<String, SmartRouteMeasurement> {
@@ -71,7 +81,7 @@ class SmartAuto(
         val resources = routeResources(servers)
         val now = clock()
         return servers.mapNotNull { server -> measuredRoutes[server.id]?.takeIf {
-            it.network == key && now - it.atMs in 0 until it.value.cacheMs && it.routeId == resources[server.id]?.id
+            it.network == key && now - it.atMs in 0 until it.value.cacheMs && it.routeId == resources[server.id]?.id && it.transport == measurementContext(server)
         }?.let { server.id to it.value } }.toMap()
     }
 
@@ -153,10 +163,11 @@ class SmartAuto(
         val view = loadView()
         val snapshot = history.current()
         val now = clock()
-        val candidates = servers.map { server -> candidate(server, latencies, view, snapshot, key, now, relays) }
+        val eligible = eligibleRoutes(servers)
+        val candidates = eligible.map { server -> candidate(server, latencies, view, snapshot, key, now, relays) }
         val fallback = SmartServerRanking.rank(candidates, advice(), SmartServerRanking.spreadSeed(spreadSalt(), now))
-        val measurements = routeMeasurements(servers, network)
-        val measured = SmartRouteSelection.order(measurements, routeResources(servers))
+        val measurements = routeMeasurements(eligible, network)
+        val measured = SmartRouteSelection.order(measurements, routeResources(eligible), eligible.map(TunnelServer::id))
             .map { id -> RankedServer(id, servers.first { it.id == id }.smartProtocol(), measurements.getValue(id).delayCost) }
         return measured + fallback.filterNot { item -> measured.any { it.id == item.id } }
     }
@@ -187,7 +198,7 @@ class SmartAuto(
             load = SmartServerRanking.agedLoad(FavoriteNodes.load(view.load, server), view.ageMs),
             verdict = snapshot.verdict(key, protocol, now),
             quality = FavoriteNodes.nodeId(server)?.let(view.quality::get),
-            full = FavoriteNodes.load(view.full.associateWith { 1.0 }, server) != null,
+            full = FavoriteNodes.load(view.full.associateWith { 1.0 }, server) != null || routeResources(listOf(server))[server.id]?.overloaded == true,
         )
     }
 

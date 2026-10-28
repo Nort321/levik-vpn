@@ -31,11 +31,24 @@ object SmartRouteSelection {
     const val MAX_CANDIDATES = 32
     const val CACHE_MS = 2 * 60_000L
 
-    fun order(measurements: Map<String, SmartRouteMeasurement>, resources: Map<String, SmartRouteResource>): List<String> {
-        val passing = measurements.filterValues { it.delayCost.isFinite() }
+    fun eligibleIds(ids: Collection<String>, resources: Map<String, SmartRouteResource>, full: Set<String> = emptySet()): Set<String> =
+        ids.filter { it !in full && resources[it]?.overloaded != true }.ifEmpty { ids.toList() }.toSet()
+
+    fun select(measurements: Map<String, SmartRouteMeasurement>, resources: Map<String, SmartRouteResource>, candidateIds: Collection<String>, fallbackId: String?): String? {
+        order(measurements, resources, candidateIds).firstOrNull()?.let { return it }
+        val eligible = eligibleIds(candidateIds, resources)
+        return fallbackId?.takeIf(eligible::contains) ?: eligible.firstOrNull()
+    }
+
+    fun order(
+        measurements: Map<String, SmartRouteMeasurement>,
+        resources: Map<String, SmartRouteResource>,
+        candidateIds: Collection<String> = measurements.keys,
+    ): List<String> {
+        val eligible = eligibleIds(candidateIds, resources)
+        val passing = measurements.filter { (id, value) -> id in eligible && value.delayCost.isFinite() }
         if (passing.isEmpty()) return emptyList()
-        val available = passing.filterKeys { resources[it]?.overloaded != true }.ifEmpty { passing }
-        val healthy = available.filterValues(SmartRouteMeasurement::confirmed).ifEmpty { available }
+        val healthy = passing.filterValues(SmartRouteMeasurement::confirmed).ifEmpty { passing }
         val measured = healthy.filterValues(SmartRouteMeasurement::hasBandwidth)
         fun ordering(values: Map<String, SmartRouteMeasurement>) = compareBy<String> { kotlin.math.floor(values.getValue(it).delayCost / 5.0) }
             .thenBy { id -> resources[id]?.takeIf(SmartRouteResource::fresh)?.let { if (it.state == "degraded") 1 else 0 } ?: 2 }

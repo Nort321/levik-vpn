@@ -598,6 +598,7 @@ class LevikVpnService : VpnService() {
                     servers = pool,
                     network = network,
                     smartAuto = container.appPlatform.smartAuto,
+                    fallbackServerId = selected.id,
                     environment = { candidate -> TunnelEngineEnvironment(
                         network = network,
                         protector = fileDescriptorProtector(network, candidate),
@@ -607,6 +608,7 @@ class LevikVpnService : VpnService() {
                     baseConfig = { probeProfile, id -> XrayConfigBuilder(container.json).build(
                         profile = probeProfile, selectedServerId = id, tunFileDescriptor = 0,
                         primaryDnsIp = primaryDns, secondaryDnsIp = secondaryDns,
+                        dohEndpoint = dohUrl,
                         antiDpiEnabled = antiDpi,
                         antiDpiPackets = container.settings.antiDpiPackets.value,
                         antiDpiLength = container.settings.antiDpiLength.value,

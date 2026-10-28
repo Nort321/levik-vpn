@@ -376,6 +376,13 @@ class AppPlatform(
         spreadSalt = { salt },
         advice = ::protocolAdvice,
         physicalNetwork = directNetwork,
+        probeSettings = { listOf(
+            settings.antiDpiEnabled.value.toString(), settings.antiDpiPackets.value,
+            settings.antiDpiLength.value, settings.antiDpiInterval.value,
+            settings.dnsProvider.value.name, settings.customDnsIpv4.value,
+            settings.useDoh.value.toString(), settings.customDohUrl.value,
+            xhttpMuxHosts().sorted().joinToString(","),
+        ) },
     )
 
     /**

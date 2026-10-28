@@ -56,6 +56,21 @@ class SmartRouteSelectionTest {
         assertEquals("partial", SmartRouteSelection.order(mapOf("partial" to partial), emptyMap()).first())
     }
 
+    @Test fun `a measured overloaded route cannot displace an unmeasured unknown alternative`() {
+        val measured = mapOf("full" to measurement(20.0))
+        val resources = mapOf("full" to resource(state = "overloaded", load = 1.0))
+        val ids = listOf("full", "unknown")
+        assertTrue(SmartRouteSelection.order(measured, resources, ids).isEmpty())
+        assertEquals(setOf("unknown"), SmartRouteSelection.eligibleIds(ids, resources))
+        assertEquals("unknown", SmartRouteSelection.select(measured, resources, ids, "full"))
+    }
+
+    @Test fun `all overloaded still leaves a route to try`() {
+        val resources = mapOf("a" to resource(state = "overloaded"), "b" to resource(state = "overloaded"))
+        assertEquals(setOf("a", "b"), SmartRouteSelection.eligibleIds(listOf("a", "b"), resources))
+        assertEquals("a", SmartRouteSelection.select(mapOf("a" to measurement(40.0)), resources, listOf("a", "b"), "b"))
+    }
+
     @Test fun `many shared Moscow entries cannot consume the entire shortlist`() {
         fun server(id: String, host: String) = TunnelServer(id, id, id, "DE", JsonObject(mapOf("settings" to JsonObject(mapOf(
             "address" to JsonPrimitive(host), "port" to JsonPrimitive(443),

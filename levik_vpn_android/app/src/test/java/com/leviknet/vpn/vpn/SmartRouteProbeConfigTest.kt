@@ -13,6 +13,28 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SmartRouteProbeConfigTest {
+    @Test fun `only proxy endpoint hostname bootstrap uses the protected physical resolver`() {
+        val folder = Files.createTempDirectory(Paths.get("/tmp"), "sa-dns-").toFile()
+        try {
+            val server = TunnelServer("cascade", "cascade", "Node", "DE", Json.parseToJsonElement("""{"settings":{"address":"vpn.example.net","port":443}}""").jsonObject)
+            SmartRouteProbeConfig(listOf(server), folder).use { config ->
+                val base = Json.parseToJsonElement("""{"dns":{"queryStrategy":"UseIPv4","servers":["https://dns.example.net/dns-query","1.1.1.1"]},"inbounds":[],"outbounds":[],"routing":{"rules":[]}}""").jsonObject
+                val applied = config.apply(base)
+                val dns = applied.getValue("dns").jsonObject.getValue("servers").jsonArray
+                val bootstrap = dns.first().jsonObject
+                assertEquals(JsonPrimitive("localhost"), bootstrap["address"])
+                assertEquals(listOf(JsonPrimitive("full:vpn.example.net")), bootstrap.getValue("domains").jsonArray.toList())
+                assertEquals(JsonPrimitive(true), bootstrap["skipFallback"])
+                assertEquals(JsonPrimitive(true), bootstrap["finalQuery"])
+                assertEquals(JsonPrimitive("https://dns.example.net/dns-query"), dns[1])
+                val rules = applied.getValue("routing").jsonObject.getValue("rules").jsonArray
+                assertEquals(JsonPrimitive("cascade"), rules.first().jsonObject["outboundTag"])
+                assertEquals(JsonPrimitive("levik-block"), rules.last().jsonObject["outboundTag"])
+                assertFalse(rules.any { it.jsonObject["outboundTag"] == JsonPrimitive("levik-direct") })
+            }
+        } finally { folder.delete() }
+    }
+
     @Test fun `every probe is forced through its own outbound and split routes cannot bypass it`() {
         val folder = Files.createTempDirectory(Paths.get("/tmp"), "sa-probe-").toFile()
         try {

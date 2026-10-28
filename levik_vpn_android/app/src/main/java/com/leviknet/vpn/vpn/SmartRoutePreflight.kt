@@ -24,20 +24,23 @@ internal class SmartRoutePreflight(
         servers: List<TunnelServer>,
         network: Network,
         smartAuto: SmartAuto,
+        fallbackServerId: String?,
         environment: (TunnelServer) -> TunnelEngineEnvironment,
         baseConfig: (PreparedTunnelProfile, String) -> String,
     ): String? = withContext(Dispatchers.IO) {
-        val candidates = SmartRouteSelection.candidates(servers)
+        val candidates = SmartRouteSelection.candidates(smartAuto.eligibleRoutes(servers))
+        val contexts = candidates.associate { it.id to smartAuto.measurementContext(it) }
         val previous = smartAuto.routeMeasurements(candidates, network)
         if (previous.keys.containsAll(candidates.map { it.id })) {
-            SmartRouteSelection.order(previous, smartAuto.routeResources(candidates)).firstOrNull()?.let { return@withContext it }
+            SmartRouteSelection.order(previous, smartAuto.routeResources(servers), smartAuto.eligibleRoutes(servers).map(TunnelServer::id))
+                .firstOrNull()?.let { return@withContext it }
         }
         val native = mutableListOf<NativeRouteProbe>()
         val measurements = java.util.concurrent.ConcurrentHashMap<String, SmartRouteMeasurement>()
         val byId = candidates.associateBy(TunnelServer::id)
         fun measured(id: String, value: SmartRouteMeasurement) {
             measurements[id] = value
-            byId[id]?.let { smartAuto.recordRouteMeasurement(it, network, value) }
+            byId[id]?.let { smartAuto.recordRouteMeasurement(it, network, value, contexts.getValue(id)) }
         }
         try {
             withTimeoutOrNull(22_000L) {
@@ -98,6 +101,8 @@ internal class SmartRoutePreflight(
                 }
             }
         } finally { native.forEach { runCatching { it.close() } } }
-        SmartRouteSelection.order(measurements, smartAuto.routeResources(candidates)).firstOrNull()
+        val current = measurements.filterKeys { id -> byId[id]?.let { smartAuto.measurementContext(it) == contexts[id] } == true }
+        val eligible = smartAuto.eligibleRoutes(servers)
+        SmartRouteSelection.select(current, smartAuto.routeResources(eligible), eligible.map(TunnelServer::id), fallbackServerId)
     }
 }
