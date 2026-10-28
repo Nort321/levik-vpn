@@ -1007,6 +1007,4 @@
     <string name="server_country_servers">Серверы: %1$s</string>
     <string name="server_country_expanded">Развёрнуто</string>
     <string name="server_country_collapsed">Свёрнуто</string>
-    <string name="filter_dns_test">DNS · тест</string>
-    <string name="servers_category_dns_test_desc">Через Яндекс DNS. Ограниченная скорость: сайты и переписка. Звонки и игры не поддерживаются.</string>
 </resources>

@@ -630,22 +630,6 @@ class LevikVpnService : VpnService() {
             )
 
             val request = when (selected.engine) {
-                TunnelEngineKind.LEVIK_DNSTT -> TunnelEngineRequest.Dnstt(
-                    config = requireNotNull(selected.dnsttConfig),
-                    configFactory = RelayXrayConfigFactory { tunFileDescriptor, proxy ->
-                        dnsttTcpConfig(XrayConfigBuilder(container.json).buildRelayProxy(
-                            profile = profile, tunFileDescriptor = tunFileDescriptor, proxy = proxy,
-                            primaryDnsIp = "77.88.8.8", secondaryDnsIp = "77.88.8.1",
-                            routingPreset = routingPreset,
-                            customDirectDomains = container.settings.customDirectDomains.value,
-                            customProxyDomains = container.settings.customProxyDomains.value,
-                            lteDirectCidrs = if (routingPreset == RoutingPreset.BYPASS_RU) container.lteRoutingData.cidrs else emptyList(),
-                            lteDirectDomains = if (routingPreset == RoutingPreset.BYPASS_RU) container.lteRoutingData.domains else emptyList(),
-                        ))
-                    },
-                    tunPlan = xrayTunPlan(primaryDns = "77.88.8.8", secondaryDns = "77.88.8.1")
-                        .copy(extraIpv4Routes = listOf(DNSTT_FAKE_IP_POOL)),
-                )
                 TunnelEngineKind.XRAY -> TunnelEngineRequest.Xray(
                     configFactory = XrayConfigFactory { tunFileDescriptor ->
                         regularXrayConfig(profile, tunFileDescriptor, antiDpi)
@@ -1181,11 +1165,6 @@ class LevikVpnService : VpnService() {
                 // before accepting a connection. Do not call allowFamily:
                 // that would permit fallback to the physical network.
                 VpnRoutes.apply(this, useNativeExclusions, includeIpv6 = tunPlan.ipv6Enabled)
-                // More specific than the 198.18.0.0/15 exclusion, so it wins on lookup.
-                tunPlan.extraIpv4Routes.forEach { cidr ->
-                    val (address, prefix) = VpnRoutes.splitCidr(cidr)
-                    addRoute(address, prefix)
-                }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     setMetered(false)
                 }
@@ -1870,7 +1849,6 @@ class LevikVpnService : VpnService() {
                         is TunnelEngineRequest.Yandex -> request.tunPlan
                         is TunnelEngineRequest.Tuic -> request.tunPlan
                         is TunnelEngineRequest.Game -> request.tunPlan
-                        is TunnelEngineRequest.Dnstt -> request.tunPlan
                     }
                     val activeTun = if (prepared.tunPlan == previousTunPlan) {
                         previousTun
@@ -2264,7 +2242,7 @@ class LevikVpnService : VpnService() {
             connectionMutex.withLock {
                 if (!serviceCommands.permitsAutomaticConnection(generation) ||
                     (expectedEngineAttempt != null && currentEngineAttempt !== expectedEngineAttempt) ||
-                    !coreRunning || (currentEngine?.kind !in DOCUMENT_RELAY_ENGINES && currentEngine?.kind != TunnelEngineKind.LEVIK_DNSTT)
+                    !coreRunning || currentEngine?.kind !in DOCUMENT_RELAY_ENGINES
                 ) {
                     return@withLock
                 }
@@ -2433,9 +2411,7 @@ class LevikVpnService : VpnService() {
         autoHealingJob = serviceScope.launch {
             var failedRounds = 0
             while (coreRunning) {
-                delay(if (currentServer?.engine == TunnelEngineKind.LEVIK_DNSTT) {
-                    maxOf(60_000L, autoHealingDelayMs(failedRounds))
-                } else autoHealingDelayMs(failedRounds))
+                delay(autoHealingDelayMs(failedRounds))
                 if (!coreRunning) break
                 val probe = checkConnectivity()
                 val nowMs = SystemClock.elapsedRealtime()
@@ -2884,12 +2860,11 @@ class LevikVpnService : VpnService() {
             TunnelProbeObservation("vpn", success = false, failure = "network_unavailable"),
         ))
         val observations = mutableListOf<TunnelProbeObservation>()
-        val dnsTunnel = currentServer?.engine == TunnelEngineKind.LEVIK_DNSTT
-        val relay = dnsTunnel || currentServer?.engine in DOCUMENT_RELAY_ENGINES
+        val relay = currentServer?.engine in DOCUMENT_RELAY_ENGINES
         // Probe the IP endpoint first on relay, avoiding a DNS lookup on the
         // common path while still retaining independent endpoint fallbacks.
         val endpoints = if (relay) HEALTH_CHECK_ENDPOINTS else HEALTH_CHECK_ENDPOINTS.shuffled()
-        val timeoutMs = if (dnsTunnel) 20_000 else if (relay) RELAY_HEALTH_CHECK_TIMEOUT_MS else HEALTH_CHECK_TIMEOUT_MS
+        val timeoutMs = if (relay) RELAY_HEALTH_CHECK_TIMEOUT_MS else HEALTH_CHECK_TIMEOUT_MS
         for (endpoint in endpoints) {
             coroutineContext.ensureActive()
             val observation = probeEndpoint(vpnNetwork, endpoint, timeoutMs)
