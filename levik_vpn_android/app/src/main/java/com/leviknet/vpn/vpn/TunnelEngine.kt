@@ -39,8 +39,15 @@ data class TunPlan(
     val addresses: List<TunAddress>,
     val dnsServers: List<String>,
     val ipv6Enabled: Boolean = true,
+    /** Routed into the TUN despite the local-network exclusions (a fake-IP pool). */
+    val extraIpv4Routes: List<String> = emptyList(),
 ) {
     init {
+        require(extraIpv4Routes.size <= 4) { "Too many extra TUN routes" }
+        extraIpv4Routes.forEach { cidr ->
+            val (address, prefix) = VpnRoutes.splitCidr(cidr)
+            require(numericIpAddressBits(address) == 32 && prefix in 8..32) { "Invalid extra TUN route" }
+        }
         require(mtu in 576..9_000) { "Invalid TUN MTU" }
         require(addresses.isNotEmpty()) { "TUN plan must contain an address" }
         require(addresses.size <= 8) { "Too many TUN addresses" }

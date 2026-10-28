@@ -9,16 +9,28 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 
-/** DNS queries use TCP inside the tunnel; unsupported proxied UDP fails closed. */
+/** Inside 198.18.0.0/15, which every other TUN plan leaves outside the VPN. */
+internal const val DNSTT_FAKE_IP_POOL = "198.18.0.0/16"
+
+/**
+ * Applications get fake A answers at once; the sniffed name reaches the node in the
+ * SOCKS request and is resolved there. A tunnelled lookup per name took a stream and
+ * several DNS round trips each, and parallel lookups timed out. Unsupported proxied
+ * UDP fails closed.
+ */
 internal fun dnsttTcpConfig(base: String): String {
     val root = Json.parseToJsonElement(base).jsonObject
     val outbound = root.getValue("outbounds").jsonArray
     val proxyTag = outbound.first().jsonObject.getValue("tag")
+    val directTag = JsonPrimitive("levik-direct")
+    require(outbound.any { it.jsonObject["tag"] == directTag }) { "DNSTT config has no direct outbound" }
     val dns = JsonObject(root.getValue("dns").jsonObject + mapOf(
-        "servers" to JsonArray(listOf("77.88.8.8", "77.88.8.1").map { resolver ->
+        // Xray skips fakedns for its own lookups: only direct-routed names reach Yandex,
+        // over the same UDP path the DNS tunnel itself uses.
+        "servers" to JsonArray(listOf(JsonPrimitive("fakedns")) + listOf("77.88.8.8", "77.88.8.1").map { resolver ->
             buildJsonObject {
-                put("address", "tcp://$resolver")
-                put("timeoutMs", 20_000)
+                put("address", resolver)
+                put("timeoutMs", 5_000)
             }
         }),
         "tag" to JsonPrimitive("dnstt-dns-query"),
@@ -32,7 +44,9 @@ internal fun dnsttTcpConfig(base: String): String {
             put("rewriteAddress", "77.88.8.8")
             put("rewritePort", 53)
             put("rules", JsonArray(listOf(
-                buildJsonObject { put("action", "return"); put("qType", 28); put("rCode", 0) },
+                buildJsonObject { put("action", "hijack"); put("qType", 1) },
+                // No IPv6 egress; SVCB/HTTPS would cost a tunnel stream per lookup.
+                buildJsonObject { put("action", "return"); put("qType", "28,64,65"); put("rCode", 0) },
                 buildJsonObject { put("action", "direct") },
             )))
         })
@@ -43,7 +57,7 @@ internal fun dnsttTcpConfig(base: String): String {
         buildJsonObject {
             put("type", "field")
             put("inboundTag", JsonArray(listOf(JsonPrimitive("dnstt-dns-query"))))
-            put("outboundTag", proxyTag)
+            put("outboundTag", directTag)
         },
         buildJsonObject {
             put("type", "field")
@@ -59,13 +73,20 @@ internal fun dnsttTcpConfig(base: String): String {
     }
     return JsonObject(root + mapOf(
         "dns" to dns,
+        "fakedns" to JsonArray(listOf(buildJsonObject {
+            put("ipPool", DNSTT_FAKE_IP_POOL)
+            put("poolSize", 65_535)
+        })),
         "outbounds" to JsonArray(outbound + dnsOutbound),
-        // DNS responses already give the TUN an address. Sniffed names may route
-        // traffic, but must not trigger another slow lookup or replace that IP.
+        // The fake address must be replaced by its name before the SOCKS outbound.
         "inbounds" to JsonArray(root.getValue("inbounds").jsonArray.map { inbound ->
             val value = inbound.jsonObject
             val sniffing = value["sniffing"]?.jsonObject ?: return@map inbound
-            JsonObject(value + ("sniffing" to JsonObject(sniffing + ("routeOnly" to JsonPrimitive(true)))))
+            val protocols = sniffing["destOverride"]?.jsonArray.orEmpty()
+            JsonObject(value + ("sniffing" to JsonObject(sniffing + mapOf(
+                "routeOnly" to JsonPrimitive(false),
+                "destOverride" to JsonArray(listOf(JsonPrimitive("fakedns")) + protocols),
+            ))))
         }),
         "routing" to JsonObject(routing + mapOf(
             "domainStrategy" to JsonPrimitive("AsIs"),
