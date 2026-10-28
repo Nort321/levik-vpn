@@ -38,9 +38,16 @@ class DnsttSupportTest {
     }
 
     @Test fun `DNS uses TCP through proxy before any direct routing rule`() {
-        val base = """{"dns":{"servers":["1.1.1.1"]},"outbounds":[{"tag":"proxy","protocol":"socks"},{"tag":"levik-block","protocol":"blackhole"}],"routing":{"rules":[{"type":"field","ip":["geoip:ru"],"outboundTag":"direct"}]}}"""
+        val base = """{"dns":{"servers":["1.1.1.1"]},"inbounds":[{"tag":"tun","sniffing":{"enabled":true}}],"outbounds":[{"tag":"proxy","protocol":"socks"},{"tag":"levik-block","protocol":"blackhole"}],"routing":{"rules":[{"type":"field","ip":["geoip:ru"],"outboundTag":"direct"}]}}"""
         val config = Json.parseToJsonElement(dnsttTcpConfig(base)).jsonObject
-        assertEquals(listOf("tcp://77.88.8.8", "tcp://77.88.8.1"), config.getValue("dns").jsonObject.getValue("servers").jsonArray.map { it.jsonPrimitive.content })
+        val resolvers = config.getValue("dns").jsonObject.getValue("servers").jsonArray
+        assertEquals(listOf("tcp://77.88.8.8", "tcp://77.88.8.1"), resolvers.map { it.jsonObject.getValue("address").jsonPrimitive.content })
+        assertTrue(resolvers.all { it.jsonObject.getValue("timeoutMs").jsonPrimitive.content.toInt() >= 20_000 })
+        assertEquals("AsIs", config.getValue("routing").jsonObject.getValue("domainStrategy").jsonPrimitive.content)
+        assertEquals("true", config.getValue("inbounds").jsonArray.first().jsonObject.getValue("sniffing").jsonObject.getValue("routeOnly").jsonPrimitive.content)
+        val dnsOutbound = config.getValue("outbounds").jsonArray.last().jsonObject
+        assertEquals("proxy", dnsOutbound.getValue("proxySettings").jsonObject.getValue("tag").jsonPrimitive.content)
+        assertEquals("tcp", dnsOutbound.getValue("settings").jsonObject.getValue("rewriteNetwork").jsonPrimitive.content)
         val rules = config.getValue("routing").jsonObject.getValue("rules").jsonArray
         assertEquals("proxy", rules[0].jsonObject.getValue("outboundTag").jsonPrimitive.content)
         assertEquals("dnstt-dns", rules[1].jsonObject.getValue("outboundTag").jsonPrimitive.content)
