@@ -244,6 +244,9 @@ interface TunnelEngineAdapter {
 
     fun retireOwner(owner: Long)
 
+    /** An isolated native proxy used before the TUN exists; never takes over the active core. */
+    suspend fun prepareRouteProbe(server: TunnelServer, environment: TunnelEngineEnvironment): NativeRouteProbe? = null
+
     /** May perform an upstream handshake; Android has not established the TUN yet. */
     suspend fun prepare(
         owner: Long,
@@ -264,6 +267,10 @@ interface TunnelEngineAdapter {
         prepared: PreparedTunnelEngineSession?,
         lease: Long? = null,
     )
+}
+
+interface NativeRouteProbe : AutoCloseable {
+    val proxy: LocalProxyEndpoint
 }
 
 class TunnelEngineRegistry(

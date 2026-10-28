@@ -9,12 +9,14 @@ import android.telephony.TelephonyManager
 import com.leviknet.vpn.core.platform.FavoriteNodes
 import com.leviknet.vpn.core.platform.NodeLoadView
 import com.leviknet.vpn.core.platform.ProtocolAdvice
+import com.leviknet.vpn.core.platform.SmartRouteResource
 import com.leviknet.vpn.data.hasUsableYandexAuth
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 import java.time.Instant
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -41,6 +43,38 @@ class SmartAuto(
     private val physicalNetwork: () -> Network?,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
+    private data class MeasuredRoute(val network: String, val routeId: String?, val atMs: Long, val value: SmartRouteMeasurement)
+    private val measuredRoutes = ConcurrentHashMap<String, MeasuredRoute>()
+
+    private fun measurementNetwork(network: Network?): String? = network?.let { "${it.networkHandle}|${networkKey(it).orEmpty()}" }
+
+    fun routeResources(servers: List<TunnelServer>): Map<String, SmartRouteResource> {
+        val routes = loadView().routes
+        return servers.mapNotNull { server ->
+            val host = server.syncHost() ?: return@mapNotNull null
+            val route = server.syncPort()?.let { FavoriteNodes.endpointId(host, it) }?.let(routes::get)
+                ?: FavoriteNodes.nodeId(host)?.let(routes::get)
+            route?.let { server.id to it }
+        }.toMap()
+    }
+
+    fun recordRouteMeasurement(server: TunnelServer, network: Network, measurement: SmartRouteMeasurement) {
+        val key = measurementNetwork(network) ?: return
+        val now = clock()
+        measuredRoutes.entries.removeIf { now - it.value.atMs >= it.value.value.cacheMs }
+        if (measuredRoutes.size >= 256) measuredRoutes.clear()
+        measuredRoutes[server.id] = MeasuredRoute(key, routeResources(listOf(server))[server.id]?.id, now, measurement)
+    }
+
+    fun routeMeasurements(servers: List<TunnelServer>, network: Network? = null): Map<String, SmartRouteMeasurement> {
+        val key = measurementNetwork(network ?: physicalNetwork()) ?: return emptyMap()
+        val resources = routeResources(servers)
+        val now = clock()
+        return servers.mapNotNull { server -> measuredRoutes[server.id]?.takeIf {
+            it.network == key && now - it.atMs in 0 until it.value.cacheMs && it.routeId == resources[server.id]?.id
+        }?.let { server.id to it.value } }.toMap()
+    }
+
     /** Checks outlive the caller when it moves on; each one ends by its own deadline. */
     private val checkScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -120,11 +154,16 @@ class SmartAuto(
         val snapshot = history.current()
         val now = clock()
         val candidates = servers.map { server -> candidate(server, latencies, view, snapshot, key, now, relays) }
-        return SmartServerRanking.rank(candidates, advice(), SmartServerRanking.spreadSeed(spreadSalt(), now))
+        val fallback = SmartServerRanking.rank(candidates, advice(), SmartServerRanking.spreadSeed(spreadSalt(), now))
+        val measurements = routeMeasurements(servers, network)
+        val measured = SmartRouteSelection.order(measurements, routeResources(servers))
+            .map { id -> RankedServer(id, servers.first { it.id == id }.smartProtocol(), measurements.getValue(id).delayCost) }
+        return measured + fallback.filterNot { item -> measured.any { it.id == item.id } }
     }
 
     /** [server]'s score as [rank] computes it, without the spread. */
     fun score(server: TunnelServer, latencies: Map<String, Long?>, relays: Set<String>, network: Network? = null): Double {
+        routeMeasurements(listOf(server), network)[server.id]?.delayCost?.takeIf(Double::isFinite)?.let { return it }
         val now = clock()
         val candidate = candidate(server, latencies, loadView(), history.current(), networkKey(network ?: physicalNetwork()), now, relays)
         return SmartServerRanking.score(candidate, advice())

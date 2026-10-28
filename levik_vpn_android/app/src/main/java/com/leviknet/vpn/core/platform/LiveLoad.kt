@@ -25,6 +25,7 @@ data class LiveLoad(
     /** When [quality] was measured on the user's own network; null without one. */
     val qualityAtMs: Long?,
     val etag: String?,
+    val routes: Map<String, SmartRouteResource> = emptyMap(),
 )
 
 sealed interface LiveLoadAnswer {
@@ -34,6 +35,7 @@ sealed interface LiveLoadAnswer {
         /** Null: the answer came through the tunnel and says nothing about the operator. */
         val quality: Map<String, Double>?,
         val etag: String?,
+        val routes: Map<String, SmartRouteResource> = emptyMap(),
     ) : LiveLoadAnswer
 
     /** 304: nothing changed since [LiveLoad.etag]. */
@@ -49,6 +51,7 @@ data class NodeLoadView(
     val ageMs: Long,
     val full: Set<String>,
     val quality: Map<String, Double>,
+    val routes: Map<String, SmartRouteResource> = emptyMap(),
 ) {
     companion object {
         val EMPTY = NodeLoadView(emptyMap(), Long.MAX_VALUE, emptySet(), emptyMap())
@@ -57,10 +60,10 @@ data class NodeLoadView(
 
 object LiveLoadPolicy {
     /** A load answer is asked for again after this. */
-    const val MAX_AGE_MS = 60_000L
+    const val MAX_AGE_MS = 30_000L
 
     /** While an automatic connection runs on a screen in use: often enough to notice a full node. */
-    const val CONNECTED_EVERY_MS = 10 * 60_000L
+    const val CONNECTED_EVERY_MS = 30_000L
 
     /** While the current node is full, to confirm it before moving. */
     const val FULL_RECHECK_MS = 2 * 60_000L
@@ -90,6 +93,7 @@ object LiveLoadPolicy {
                 .toSet(),
             quality = if (quality == null || quality is JsonNull) null else numbers(quality, 0.5, 2.0),
             etag = etag?.takeIf(ETAG::matches),
+            routes = SmartRouteResource.parse(root["routes"]),
         )
     }
 
@@ -106,7 +110,9 @@ object LiveLoadPolicy {
     /** The next state after an answer; [throughTunnel] answers keep the previous quality. */
     fun merge(previous: LiveLoad?, answer: LiveLoadAnswer, nowMs: Long, throughTunnel: Boolean): LiveLoad? = when (answer) {
         LiveLoadAnswer.Unsupported -> previous
-        LiveLoadAnswer.Same -> previous?.copy(fetchedAtMs = nowMs)
+        LiveLoadAnswer.Same -> previous?.copy(fetchedAtMs = nowMs, routes = previous.routes.mapValues { (_, route) ->
+            route.copy(ageSeconds = route.ageSeconds?.plus((nowMs - previous.fetchedAtMs).coerceAtLeast(0L) / 1000.0))
+        })
         is LiveLoadAnswer.Fresh -> {
             val fresh = !throughTunnel && answer.quality != null
             LiveLoad(
@@ -116,6 +122,7 @@ object LiveLoadPolicy {
                 fetchedAtMs = nowMs,
                 qualityAtMs = if (fresh) nowMs else previous?.qualityAtMs,
                 etag = answer.etag,
+                routes = answer.routes,
             )
         }
     }
@@ -136,6 +143,9 @@ object LiveLoadPolicy {
             ageMs = (nowMs - fetchedAt).coerceAtLeast(0L),
             full = live?.takeIf { nowMs - it.fetchedAtMs < FORGET_MS }?.full.orEmpty(),
             quality = live?.takeIf { state -> state.qualityAtMs?.let { nowMs - it < QUALITY_TTL_MS } == true }?.quality.orEmpty(),
+            routes = live?.routes.orEmpty().mapValues { (_, route) ->
+                route.copy(ageSeconds = route.ageSeconds?.plus(((nowMs - requireNotNull(live).fetchedAtMs).coerceAtLeast(0L)) / 1000.0))
+            },
         )
     }
 
@@ -143,5 +153,36 @@ object LiveLoadPolicy {
     fun shown(view: NodeLoadView): Map<String, Double> {
         if (view.ageMs >= FORGET_MS) return emptyMap()
         return view.load + view.full.associateWith { 1.0 }
+    }
+}
+
+/** Resource status for every physical hop; configured link capacity is not client bandwidth. */
+data class SmartRouteResource(
+    val id: String,
+    val complete: Boolean,
+    val ageSeconds: Double?,
+    val state: String,
+    val resourceLoad: Double?,
+    val resourceHeadroom: Double?,
+) {
+    val fresh: Boolean get() = complete && ageSeconds != null && ageSeconds <= 45.0
+    val overloaded: Boolean get() = ageSeconds != null && ageSeconds <= 45.0 && state == "overloaded"
+
+    companion object {
+        private val NODE = Regex("^n1[0-9a-f]{20}$")
+        private val ROUTE = Regex("^r1[0-9a-f]{20}$")
+        fun parse(value: JsonElement?): Map<String, SmartRouteResource> =
+            (value as? JsonObject).orEmpty().entries.asSequence().take(200).mapNotNull { (key, raw) ->
+                if (!NODE.matches(key)) return@mapNotNull null
+                val route = raw as? JsonObject ?: return@mapNotNull null
+                val id = (route["id"] as? JsonPrimitive)?.takeIf(JsonPrimitive::isString)?.content
+                    ?.takeIf(ROUTE::matches) ?: return@mapNotNull null
+                val state = (route["state"] as? JsonPrimitive)?.content
+                    ?.takeIf { it in setOf("healthy", "degraded", "overloaded", "unknown") } ?: "unknown"
+                fun number(name: String, max: Double): Double? = (route[name] as? JsonPrimitive)
+                    ?.takeUnless(JsonPrimitive::isString)?.doubleOrNull?.takeIf { it.isFinite() && it in 0.0..max }
+                key to SmartRouteResource(id, (route["complete"] as? JsonPrimitive)?.booleanOrNull == true,
+                    number("ageSeconds", 86400.0), state, number("resourceLoad", 1.0), number("resourceHeadroom", 1.0))
+            }.toMap()
     }
 }

@@ -129,7 +129,7 @@ internal fun probeServiceExit(candidate: ServiceRouteConfig.Candidate): Boolean 
     return false
 }
 
-private class PrivateUnixSocketFactory(private val path: String) : SocketFactory() {
+internal class PrivateUnixSocketFactory(private val path: String) : SocketFactory() {
     init { require(path.startsWith('/') && path.toByteArray().size < 100 && !path.contains('\u0000')) }
     override fun createSocket(): Socket = PrivateUnixSocket(path)
     override fun createSocket(host: String?, port: Int): Socket = throw UnsupportedOperationException()

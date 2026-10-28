@@ -517,7 +517,7 @@ class LevikVpnService : VpnService() {
             }
             progress.reach(AttemptStage.PROFILE, "config_invalid")
             attemptedServerId = selectedId
-            val selected = if (fallbackAttempt != null) {
+            var selected = if (fallbackAttempt != null) {
                 profile.servers.firstOrNull { it.id == selectedId }
                     ?: error("Auto-failover server is no longer present in the tunnel profile")
             } else {
@@ -527,11 +527,6 @@ class LevikVpnService : VpnService() {
                     ?: profile.servers.singleOrNull { it.engine == TunnelEngineKind.LEVIK_GAME }
                     ?: error("Tunnel profile has no server eligible for automatic selection")
             }
-            // This separate request is gated and endpoint-specific; LTE and relay profiles are untouched.
-            profile = container.repository.prepareServiceRoutes(profile, selected, container.appPlatform.flagEnabled("service_routes"))
-            val routes = ServiceRouteConfig.prepare(profile, selected, filesDir, container.settings.autoFallbackServer.value)
-            serviceRouteConfig = routes
-            telemetry.record { it.attempt(selected.name, selected.telemetryProtocol(), attemptCause) }
             progress.reach(AttemptStage.PROFILE, "profile_expired")
             val yandexExpiry = selected.yandexConfig?.let {
                 Instant.ofEpochSecond(it.expiresAt).toString()
@@ -570,7 +565,7 @@ class LevikVpnService : VpnService() {
             enforceNetworkRequirement(selected, network)
             underlyingNetwork.set(network)
             prepareTelemetryNetwork(network)
-            val bootstrapDnsServer = resolveBootstrapDnsServer(selected, network)
+            var bootstrapDnsServer = resolveBootstrapDnsServer(selected, network)
             currentBootstrapDnsServer = bootstrapDnsServer
             progress.reach(AttemptStage.CORE, "config_invalid")
             val dnsProvider = container.settings.dnsProvider.value
@@ -592,6 +587,51 @@ class LevikVpnService : VpnService() {
                     dnsProvider.dohUrl
                 }
             } else null
+
+            if (fallbackAttempt == null && container.settings.automaticServer.value && selected.isSmartAutoCandidate()) {
+                container.appPlatform.refreshNodeLoad(maxAgeMs = 15_000L, waitMs = 1_200L)
+                val probeBootstrapDns = bootstrapDnsServer ?: networkMonitor.awaitBootstrapDnsServer(network)
+                val pool = container.appPlatform.avoidMaintenance(profile.servers.filter(TunnelServer::isSmartAutoCandidate))
+                val chosen = SmartRoutePreflight(container.xrayRuntime, container.tunnelEngineRegistry, container.json, filesDir).select(
+                    owner = coreOwner,
+                    profile = profile,
+                    servers = pool,
+                    network = network,
+                    smartAuto = container.appPlatform.smartAuto,
+                    environment = { candidate -> TunnelEngineEnvironment(
+                        network = network,
+                        protector = fileDescriptorProtector(network, candidate),
+                        dnsServer = probeBootstrapDns,
+                        unboundSocketProtector = { fd -> protectUnboundTunnelSocket(fd, ::protect) },
+                    ) },
+                    baseConfig = { probeProfile, id -> XrayConfigBuilder(container.json).build(
+                        profile = probeProfile, selectedServerId = id, tunFileDescriptor = 0,
+                        primaryDnsIp = primaryDns, secondaryDnsIp = secondaryDns,
+                        antiDpiEnabled = antiDpi,
+                        antiDpiPackets = container.settings.antiDpiPackets.value,
+                        antiDpiLength = container.settings.antiDpiLength.value,
+                        antiDpiInterval = container.settings.antiDpiInterval.value,
+                        xhttpMuxHosts = container.appPlatform.xhttpMuxHosts(),
+                    ) },
+                )
+                coroutineContext.ensureActive()
+                if (!serviceCommands.permitsConnection(generation)) return@connection
+                if (networkMonitor.activeNetwork(selected.networkRequirement) != network) {
+                    throw NetworkSetupException("Underlying network changed during route selection")
+                }
+                if (container.settings.automaticServer.value && chosen != null) {
+                    selected = pool.first { it.id == chosen }
+                    attemptedServerId = selected.id
+                    bootstrapDnsServer = resolveBootstrapDnsServer(selected, network)
+                    currentBootstrapDnsServer = bootstrapDnsServer
+                    container.repository.selectServer(selected.id)
+                }
+            }
+            // Load endpoint-specific routing only after the actual complete route has been chosen.
+            profile = container.repository.prepareServiceRoutes(profile, selected, container.appPlatform.flagEnabled("service_routes"))
+            val routes = ServiceRouteConfig.prepare(profile, selected, filesDir, container.settings.autoFallbackServer.value)
+            serviceRouteConfig = routes
+            telemetry.record { it.attempt(selected.name, selected.telemetryProtocol(), attemptCause) }
 
             // Regular servers and the TUIC sidecar share one Xray configuration path.
             fun regularXrayConfig(
@@ -1610,6 +1650,10 @@ class LevikVpnService : VpnService() {
                 if (replacement != null) {
                     AppLogger.i(LOG_TAG, "Underlying network changed, triggering reconnect")
                     telemetry.record { it.network(networkType(replacement), NetworkState.CHANGED) }
+                    if (container.settings.automaticServer.value && server.isSmartAutoCandidate()) {
+                        reconnectMeasuredNetwork(generation)
+                        return@withLock
+                    }
                     if (moveToNetworkWinner(server, replacement)) return@withLock
                     scheduleReconnectLocked(AttemptCause.NETWORK_CHANGE)
                     return@withLock
@@ -1629,6 +1673,24 @@ class LevikVpnService : VpnService() {
                 }
                 showForeground(VpnConnectionState.RECONNECTING, currentServerName)
             }
+        }
+    }
+
+    /** Retain the old TUN as a traffic barrier while the new physical network is measured. */
+    private fun reconnectMeasuredNetwork(generation: Long) {
+        nextAttemptCause = AttemptCause.NETWORK_CHANGE
+        pendingAutoFallback = null
+        reconnectJob?.cancel()
+        connectionJob?.cancel()
+        connectionJob = serviceScope.launch {
+            val retainedTun = connectionMutex.withLock {
+                if (!serviceCommands.permitsAutomaticConnection(generation)) return@launch
+                tunInterface.also { tunInterface = null }
+            }
+            try {
+                stopConnection(stopService = false)
+                connect()
+            } finally { runCatching { retainedTun?.close() } }
         }
     }
 

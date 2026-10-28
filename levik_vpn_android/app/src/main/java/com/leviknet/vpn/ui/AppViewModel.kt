@@ -2393,7 +2393,12 @@ class AppViewModel(
                     async(Dispatchers.IO) {
                         server.id to ServerPinger.measure(server)
                     }
-                }.awaitAll().toMap()
+                }.awaitAll().toMap().let { entryPings ->
+                    val routes = appPlatform?.smartAuto?.routeMeasurements(servers).orEmpty()
+                    entryPings.mapValues { (id, entry) -> routes[id]?.samplesMs?.sorted()?.let { values ->
+                        values.getOrNull(values.size / 2)?.toLong()
+                    } ?: entry }
+                }
             }
         }
 

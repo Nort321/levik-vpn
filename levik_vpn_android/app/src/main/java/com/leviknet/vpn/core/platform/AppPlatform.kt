@@ -280,6 +280,16 @@ class AppPlatform(
                 HomeWatcher(context, settings, repository, vpnController, directNetwork, foreground.asStateFlow()).run()
             }
         }
+        scope.launch {
+            while (true) {
+                delay(15_000L)
+                val snapshot = vpnController.state.value
+                if (snapshot.state == VpnConnectionState.CONNECTED && settings.automaticServer.value &&
+                    repository.tunnelProfile.value?.servers?.any { it.id == snapshot.serverId && it.isSmartAutoCandidate() } == true) {
+                    refreshNodeLoad(maxAgeMs = LiveLoadPolicy.CONNECTED_EVERY_MS, waitMs = 0L)
+                }
+            }
+        }
         if (MAINTENANCE_ENABLED) {
             scope.launch {
                 vpnController.state.collect { snapshot ->
@@ -1247,7 +1257,7 @@ class RemoteConfigClient(private val version: String) {
     suspend fun load(network: Network?, etag: String?): LiveLoadAnswer? = withContext(Dispatchers.IO) {
         for (origin in ServiceEndpoints.current().apiOrigins) {
             val headers = etag?.takeIf(LiveLoadPolicy.ETAG::matches)?.let { mapOf("If-None-Match" to it) }.orEmpty()
-            val reply = runCatching { request(URL("$origin/api/app/v1/load"), network, headers, LOAD_TIMEOUT_MS) }.getOrNull()
+            val reply = runCatching { request(URL("$origin/api/app/v1/load"), network, headers, LOAD_TIMEOUT_MS, 128 * 1024) }.getOrNull()
                 ?: continue
             val (status, text) = reply
             if (status == 304) return@withContext LiveLoadAnswer.Same
@@ -1281,6 +1291,7 @@ class RemoteConfigClient(private val version: String) {
         network: Network?,
         headers: Map<String, String> = emptyMap(),
         timeoutMs: Int = TIMEOUT_MS,
+        maxResponseBytes: Int = MAX_RESPONSE_BYTES,
     ): Reply {
         val connection = (network?.openConnection(url, Proxy.NO_PROXY) ?: url.openConnection(Proxy.NO_PROXY))
             as HttpURLConnection
@@ -1299,14 +1310,14 @@ class RemoteConfigClient(private val version: String) {
             val status = connection.responseCode
             if (status != 200) return Reply(status, null)
             val text = connection.inputStream.use { input ->
-                val buffer = ByteArray(MAX_RESPONSE_BYTES + 1)
+                val buffer = ByteArray(maxResponseBytes + 1)
                 var size = 0
                 while (size < buffer.size) {
                     val count = input.read(buffer, size, buffer.size - size)
                     if (count < 0) break
                     size += count
                 }
-                if (size > MAX_RESPONSE_BYTES) null else String(buffer, 0, size, Charsets.UTF_8)
+                if (size > maxResponseBytes) null else String(buffer, 0, size, Charsets.UTF_8)
             }
             return Reply(status, text, connection.getHeaderField("ETag"))
         } finally {
