@@ -78,6 +78,11 @@ jobs:
         working-directory: levik_vpn_android
         run: ./gradlew --no-daemon --stacktrace verifyAllDependencyLocks
 
+      - name: Test DNSTT helper
+        working-directory: levik_vpn_android/native/dnstt/fork
+        # Upstream noise tests call Fatal inside goroutines; vet our changed packages.
+        run: GOTOOLCHAIN=local go vet ./dnstt-client ./dnstt-server && GOTOOLCHAIN=local go test -race ./...
+
       - name: Test Game helper
         working-directory: levik_vpn_android/native/game/source
         run: GOTOOLCHAIN=local "${GAME_GO_BIN}" vet ./... && GOTOOLCHAIN=local "${GAME_GO_BIN}" test -race ./...

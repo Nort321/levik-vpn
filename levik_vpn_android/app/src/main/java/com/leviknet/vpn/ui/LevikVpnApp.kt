@@ -3139,6 +3139,7 @@ private fun ServersScreen(
                     add(ServerFilterType.ALL to stringResource(R.string.filter_all))
                     add(ServerFilterType.REGULAR to stringResource(R.string.filter_regular))
                     add(ServerFilterType.MOBILE_ALLOWLIST to stringResource(R.string.filter_mobile_allowlist))
+                    if (servers.any { it.dnsttConfig != null }) add(ServerFilterType.DNS_TEST to stringResource(R.string.filter_dns_test))
                     add(ServerFilterType.FAVORITES to stringResource(R.string.filter_favorites))
                     add(ServerFilterType.FASTEST to stringResource(R.string.filter_fastest))
                 }.forEach { (type, label) ->
@@ -3286,9 +3287,11 @@ private fun ServersScreen(
                         val allowlistServers = filtered.filter {
                             it.isMobileServer()
                         }
+                        val dnsServers = filtered.filter { it.dnsttConfig != null }
                         val categoryCount = listOf(
                             regularServers,
                             allowlistServers,
+                            dnsServers,
                         ).count(List<TunnelServer>::isNotEmpty)
 
                         if (categoryCount > 1) {
@@ -3338,6 +3341,28 @@ private fun ServersScreen(
                                         isDark = isDark,
                                         onServerSelected = onServerSelection,
                                         onYandexSetup = if (yandexAvailable) onYandexSetup else null,
+                                        onToggleFavorite = onToggleFavorite,
+                                    )
+                                }
+                            }
+                            if (dnsServers.isNotEmpty()) {
+                                item(key = "section_dns_test_header") {
+                                    ServerCategoryHeader(
+                                        title = R.string.filter_dns_test,
+                                        description = R.string.servers_category_dns_test_desc,
+                                    )
+                                }
+                                items(dnsServers, key = TunnelServer::id) { server ->
+                                    ServerItemCard(
+                                        server = server,
+                                        selected = !automaticServer && server.id == selectedServerId,
+                                        isFav = favoriteServerIds.contains(server.id),
+                                        pingValue = serverPings[server.id],
+                                        maintenanceEndsAt = serverMaintenance[server.id],
+                                        pingingServers = pingingServers,
+                                        isDark = isDark,
+                                        onServerSelected = onServerSelection,
+                                        onYandexSetup = null,
                                         onToggleFavorite = onToggleFavorite,
                                     )
                                 }

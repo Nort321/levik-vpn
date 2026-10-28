@@ -1003,4 +1003,6 @@
     <string name="server_country_servers">Servers: %1$s</string>
     <string name="server_country_expanded">Expanded</string>
     <string name="server_country_collapsed">Collapsed</string>
+    <string name="filter_dns_test">DNS · test</string>
+    <string name="servers_category_dns_test_desc">Through Yandex DNS. Limited speed; browsing and messaging. Calls and games are not supported.</string>
 </resources>

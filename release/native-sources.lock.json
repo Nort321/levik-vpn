@@ -110,6 +110,14 @@
     "upstreamCommit": "74cac6d47bf4c27947348ee957538a2c0728a485",
     "telemostUpstreamCommit": "1adc1fe1f4ac8180952779d4d580ee82a34abe98"
   },
+  "dnsttArtifact": {
+    "name": "liblevikdnstt.so",
+    "version": "levik-dnstt-yandex-pilot1",
+    "embeddedGoVersion": "go1.26.9",
+    "license": "CC0-1.0",
+    "sourceDirectory": "levik_vpn_android/native/dnstt/fork",
+    "upstreamCommit": "0c5c52a57d899c05428c116898941761a2ed83c2"
+  },
   "tuicArtifact": {
     "name": "libleviktuic.so",
     "version": "levik-tuic-client-v2-sing-box-v1.14.2",

@@ -113,6 +113,12 @@ fun interface GameXrayConfigFactory {
 }
 
 sealed interface TunnelEngineRequest {
+    data class Dnstt(
+        val config: DnsttServerConfig,
+        val configFactory: RelayXrayConfigFactory,
+        val tunPlan: TunPlan,
+    ) : TunnelEngineRequest
+
     data class Xray(
         val configFactory: XrayConfigFactory,
         val tunPlan: TunPlan,

@@ -3274,13 +3274,15 @@ enum class ServerFilterType {
     ALL,
     REGULAR,
     MOBILE_ALLOWLIST,
+    DNS_TEST,
     FAVORITES,
     FASTEST;
 
     fun matches(server: TunnelServer, favorites: Set<String>): Boolean = when (this) {
         ALL, FASTEST -> true
-        REGULAR -> !server.isMobileServer()
+        REGULAR -> !server.isMobileServer() && server.dnsttConfig == null
         MOBILE_ALLOWLIST -> server.isMobileServer()
+        DNS_TEST -> server.dnsttConfig != null
         FAVORITES -> server.id in favorites
     }
 }

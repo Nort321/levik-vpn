@@ -1,0 +1,7 @@
+{
+  "repository": "https://www.bamsoftware.com/git/dnstt.git",
+  "version": "v1.20260501.0",
+  "commit": "0c5c52a57d899c05428c116898941761a2ed83c2",
+  "goVersion": "1.26.9",
+  "changes": ["protected Android UDP socket", "bounded adaptive DNS query pacing", "bounded local streams and handshake timeout"]
+}

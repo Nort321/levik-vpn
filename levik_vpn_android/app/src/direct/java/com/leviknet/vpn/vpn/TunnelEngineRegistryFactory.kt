@@ -9,6 +9,10 @@ internal fun createTunnelEngineRegistry(
 ): TunnelEngineRegistry = TunnelEngineRegistry(
     listOf(
         XrayTunnelEngineAdapter(xrayRuntime),
+        DnsttTunnelEngineAdapter(
+            AndroidDnsttNativeSessionFactory(java.io.File(nativeLibraryDir, "liblevikdnstt.so").absolutePath),
+            xrayRuntime,
+        ),
         RelayTunnelEngineAdapter(
             AndroidRelayNativeSessionFactory(
                 java.io.File(nativeLibraryDir, "liblevikrelay.so").absolutePath,
