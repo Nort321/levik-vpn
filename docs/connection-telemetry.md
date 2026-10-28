@@ -130,6 +130,7 @@ users. `proto` is one of `vless-reality`, `vless-xhttp`, `vless-ws`,
 | `power` | `state` | `suspend`, `resume`, `doze_on`, `doze_off`, `screen_off`, `screen_on` |
 | `recovery` | `action` | `reconnect_same`, `failover`, `rollback`, `lockdown`, `gave_up` |
 | `pause` / `unpause` | — | The user paused the VPN |
+| `check` | `nid`, `ms`, `ok` | Smart Auto's 64 KB traffic check through node `nid` (a [node id](app-platform.md#node-ids), never an address) took `ms` milliseconds (0–60000) or failed (`ok: false`, `ms` = its 8-second deadline). A failure is sent only when the device's own network works. The website ranks nodes per operator by these, [Live node load](app-platform.md#live-node-load) |
 
 ## Codes
 

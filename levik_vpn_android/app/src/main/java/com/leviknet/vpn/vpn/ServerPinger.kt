@@ -7,6 +7,11 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.security.SecureRandom
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -15,6 +20,10 @@ import kotlinx.serialization.json.intOrNull
 
 object ServerPinger {
     const val TIMEOUT_MS = 3_000
+
+    /** Probes per server, started this far apart: one lost SYN no longer adds a second. */
+    private const val PROBES = 3
+    private const val PROBE_STAGGER_MS = 150L
     private val socketProtector = AtomicReference<SocketProtector?>(null)
     private val random = SecureRandom()
 
@@ -34,8 +43,29 @@ object ServerPinger {
         socketProtector.updateAndGet { current -> current?.takeUnless { it.owner == owner } }
     }
 
-    fun measure(server: TunnelServer): Long? =
-        if (server.engine == TunnelEngineKind.XRAY || server.engine == TunnelEngineKind.LEVIK_TUIC) measure(server.outbound) else null
+    /**
+     * The median of three probes, or the faster of two when one went
+     * unanswered: a single probe that lost its first packet looked a second
+     * slower than the server is.
+     */
+    suspend fun measure(server: TunnelServer): Long? {
+        if (server.engine != TunnelEngineKind.XRAY && server.engine != TunnelEngineKind.LEVIK_TUIC) return null
+        return coroutineScope {
+            List(PROBES) { index ->
+                async(Dispatchers.IO) {
+                    delay(index * PROBE_STAGGER_MS)
+                    measure(server.outbound)
+                }
+            }.awaitAll()
+        }.let(::robustLatency)
+    }
+
+    fun robustLatency(values: List<Long?>): Long? {
+        val answered = values.filterNotNull().sorted()
+        if (answered.isEmpty()) return null
+        if (answered.size == 2) return answered.first()
+        return answered[answered.size / 2]
+    }
 
     /** A TCP server that does not answer is down; a UDP one may only ignore probes. */
     fun silenceMeansDown(server: TunnelServer): Boolean {

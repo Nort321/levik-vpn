@@ -59,15 +59,56 @@ identifier. Only the client header is sent.
   If the advice would leave no server, it is ignored. Android uses it as one
   input of [Smart Auto](#smart-auto).
 - **Node load** tells how busy each server is, from 0 (idle) to 1 (full), by
-  [node id](#node-ids): the busier of the server's CPU and its online users,
-  rounded to hundredths. A server is listed under its own address and every
+  [node id](#node-ids), rounded to hundredths: what the node itself reports
+  (see [Live node load](#live-node-load)), else the busier of the panel's
+  five-minute CPU load and its online users. A server is listed under its own address and every
   host bound to it. A server behind a shared relay (`APP_RELAYED_NODES` on the
   website) is also listed under the relay address, where the busiest server
   behind it decides, and under its own relay ports as
   [endpoint ids](#node-ids). The apps look up a server's endpoint id first and
   its node id after that. The website reads the panel at most every 30
-  seconds; an unreachable panel gives an empty object. The apps use it for 10
-  minutes.
+  seconds; an unreachable panel gives an empty object. Apps that know
+  [Live node load](#live-node-load) use whichever answer is newer.
+
+### Live node load
+
+`GET /api/app/v1/load`, anonymous like the configuration, about a kilobyte:
+
+```json
+{
+  "ok": true,
+  "freshSeconds": 120,
+  "load": { "n1…": 0.42 },
+  "full": ["n1…"],
+  "quality": { "n1…": 0.85 }
+}
+```
+
+- **load** is the node load as in the configuration, but measured on the node:
+  a small agent on each server reports every 15 seconds the busiest of its
+  uplink (against the tariff's capacity), its CPU (time the hypervisor takes
+  away included) and its memory once it runs short, each averaged over a
+  minute. A server behind a relay counts with every hop on its way. A node
+  whose agent fell silent for 45 seconds falls back to the panel's numbers.
+- **full** lists nodes that stayed at 0.95 or more for two minutes; they take
+  no new automatic connections until they drop below 0.9.
+- **quality** tells how each node works from the caller's operator: the median
+  time of the apps' traffic checks through it over the last day (a failed
+  check counts as 8 seconds), against the operator's typical node. It needs at
+  least five checks from three installs per node and two such nodes; it is
+  rounded to steps of 0.05 and limited to 0.7–1.6. It is `null` when the
+  request came through a Levik server, since the website then cannot see the
+  operator.
+
+The answer carries an `ETag`; an app sends it back in `If-None-Match` and gets
+an empty 304 while nothing changed. An app asks only before an automatic
+connection (unless its answer is younger than a minute, waiting 1.5 seconds at
+most), when the server list is measured, every 10 minutes while an automatic
+connection runs (on Android only while the screen is on) and every 2 minutes
+while its current node is full. It never asks in the background otherwise.
+Quality is kept for two hours and only from answers outside the tunnel.
+A website without the endpoint answers 404: the apps then use the
+configuration's node load as before and ask again an hour later.
 
 The apps ask again after `refreshAfterSeconds` (clamped to 5 minutes–24
 hours), when they come to the screen, and keep the last answer for offline
@@ -98,13 +139,20 @@ Android does this in the Direct build only; iOS does not take part.
 The automatic server on Android picks among regular servers (VLESS, Hysteria 2
 and TUIC; mobile, relay and home-road servers stay separate choices) by
 
-    score = latency × (1 + 2 × load) × history × advice      (lower is better)
+    score = latency × 1 / (1 − load) × history × advice × quality      (lower is better)
 
-- **Latency** is the TCP connect time, or the QUIC answer for UDP servers. A
-  TCP server that does not answer is down; a UDP server that does not answer
+- **Latency** is the median of three TCP connects (or QUIC answers for UDP
+  servers) started 150 ms apart, the faster of two when one went unanswered,
+  so one lost packet no longer makes a server look a second slower. A TCP
+  server that does not answer is down; a UDP server that does not answer
   counts as 400 ms, since obfuscated servers ignore probes.
-- **Load** is the node load above, 0.35 when unknown; from 0.9 the server
-  counts twice as busy.
+- **Load** is the node load above, 0.35 when unknown. It weighs like a queue:
+  half full doubles the score, 80 % makes it five times, and the curve stops
+  at 0.95 (twenty times). A reading counts fully for two minutes, then fades
+  into the unknown 0.35 until it is forgotten after 15 minutes. Nodes listed
+  as **full** are left out while another server remains.
+- **Quality** is the operator's factor from [Live node load](#live-node-load),
+  1 when unknown.
 - **History** is the phone's own record per network: ×0.8 for a protocol that
   carried traffic here within a week, ×2 after one failed check (6 hours), and
   left out after failures on two different servers (a day). A network is named
@@ -122,10 +170,25 @@ sites, the protocol is noted as failing and the app moves to the next rung of
 the ladder: the best server of a protocol not yet tried, else the best untried
 server, three moves at most until the user connects again or the network
 changes. In the Anti-Block routing mode the check is skipped, because
-unlisted sites go around the tunnel. Before connecting, the app asks for the
-configuration again when its load is older than two minutes, waiting 2.5
-seconds at most. The server list moves the automatic choice only to a server
-scoring at least 25% better, and failover uses the same order.
+unlisted sites go around the tunnel. Each 64 KB check (not the allowlist one)
+is recorded as a `check` event in [connection telemetry](connection-telemetry.md)
+when the user allows it; a failure only when the phone's own network works.
+Before connecting, the app asks for the [live node load](#live-node-load). The
+server list moves the automatic choice only to a server scoring at least 25%
+better, and failover uses the same order.
+
+Servers within 15 % of the best share new connections: the app picks among up
+to three of them, the better ones more often, by a number that stays the same
+for ten minutes on one device and differs between devices (a hash of a random
+salt that never leaves the device and the current ten minutes). So the devices
+that see the same free node do not all land on it at once.
+
+A running automatic connection leaves a node that stayed full, but only when
+all of these hold: the node has been full for five minutes by readings no
+older than three minutes, the connection has carried less than 4 KB/s for 20
+seconds (nothing the user does is cut), the last such move was at least half
+an hour ago, and freshly measured, another server with room scores at least
+40 % better. Android does this in the Direct build only.
 
 The check runs again mid-session when the tunnel looks frozen: over 12
 seconds at least 24 KB went out and less than half as much came back. A false
@@ -213,6 +276,8 @@ the previous teardown, and callbacks from before OFF cannot restart it.
 
 The Windows, macOS and Linux apps use the same score, history, ladder, freeze
 check and load labels (`src/main/vpn/smartAuto.ts`), with these differences:
+the automatic choice is the first entry of the server list, "Automatic", as on
+Android (choosing any server turns it off, choosing it again turns it back on);
 a network is named by a salted hash of its adapters' subnets and the IPv6
 prefix the provider assigned; the download goes through the core's local
 health proxy; a failed download counts against the protocol only when a TLS
@@ -282,6 +347,45 @@ both lists. Google Play builds keep favourites on the phone.
   back. Edits made while a request is in flight are kept and sent next.
 - Sync can be turned off in each app's settings. It stops on sign-out and the
   account's stored settings are deleted with the account.
+
+## Server list
+
+The apps show regular servers by country: one card per country, the
+country's servers inside it, and the protocols of each server inside that.
+
+```text
+🇩🇪 Germany              country: the flag in the host remark
+ ├─ Frankfurt            server: one node id, named by its label
+ │   VLESS · Hysteria 2 · TUIC
+ └─ Nuremberg
+     VLESS · Hysteria 2
+```
+
+- **Server.** The VLESS, Hysteria 2 and TUIC variants of one endpoint host
+  ([node id](#node-ids)) and country make one server, one variant per
+  protocol.
+- **Country.** Servers with the same country code. Mobile, LTE, relay, Yandex,
+  Game and home-road («🏠») entries, and servers whose country or protocol is
+  unknown, are never grouped and keep cards of their own.
+- **Label.** Hosts are named `<flag> <country> · <label>`, for example
+  `🇩🇪 Германия · Франкфурт`; ` | ` separates as well. Without a separator the
+  label is what remains of the remark after the flag, the country's Russian or
+  English name and protocol names (`VLESS`, `Reality`, `Hysteria 2`, `Hy2`,
+  `TUIC`). The first variant of a server that has a label names it. A server
+  without one is `Сервер N`, N being its place among the country's servers in
+  subscription order, and a label that repeats inside a country gets ` 2`,
+  ` 3`. Renaming a host keeps its node id: favourites and maintenance stay.
+- A country with a single server looks as before: one card named after the
+  country, with the label next to the protocol.
+- **Choosing a country** takes its best server by the [Smart Auto](#smart-auto)
+  score; a server in maintenance only when the country has no other. When one
+  of the country's servers is already selected, the choice stays. Expanding the
+  country picks a server, and its protocol, by hand.
+- Before [maintenance](#server-maintenance) the app moves to the best other
+  server of the same country first, and to another country only when the
+  country has none left.
+- Favourites stay per server; a country shows a star when any of its servers
+  is a favourite.
 
 ## Live events
 

@@ -7,6 +7,7 @@ import android.net.NetworkCapabilities
 import android.os.SystemClock
 import android.telephony.TelephonyManager
 import com.leviknet.vpn.core.platform.FavoriteNodes
+import com.leviknet.vpn.core.platform.NodeLoadView
 import com.leviknet.vpn.core.platform.ProtocolAdvice
 import com.leviknet.vpn.data.hasUsableYandexAuth
 import java.net.HttpURLConnection
@@ -32,7 +33,9 @@ import kotlinx.coroutines.launch
 class SmartAuto(
     private val context: Context,
     private val history: ProtocolHistoryStore,
-    private val nodeLoad: () -> Map<String, Double>,
+    private val loadView: () -> NodeLoadView,
+    /** A random salt that never leaves the phone, for [SmartServerRanking.spreadSeed]. */
+    private val spreadSalt: () -> String,
     private val advice: () -> ProtocolAdvice?,
     private val physicalNetwork: () -> Network?,
     private val clock: () -> Long = System::currentTimeMillis,
@@ -65,7 +68,7 @@ class SmartAuto(
         network: Network?,
     ): List<RankedServer> {
         val key = networkKey(network, allowlist = true)
-        val load = nodeLoad()
+        val view = loadView()
         val snapshot = history.current()
         val now = clock()
         val vkSession = storedVkSession()
@@ -78,7 +81,7 @@ class SmartAuto(
                     protocol = server.smartProtocol(),
                     latencyMs = latencies[server.id],
                     silenceMeansDown = ServerPinger.silenceMeansDown(server),
-                    load = FavoriteNodes.load(load, server),
+                    load = SmartServerRanking.agedLoad(FavoriteNodes.load(view.load, server), view.ageMs),
                     verdict = snapshot.verdict(key, record, now),
                 ),
                 relay = server.isAllowlistMobileServer(),
@@ -107,21 +110,39 @@ class SmartAuto(
         network: Network? = null,
     ): List<RankedServer> {
         val key = networkKey(network ?: physicalNetwork())
-        val load = nodeLoad()
+        val view = loadView()
         val snapshot = history.current()
         val now = clock()
-        val candidates = servers.map { server ->
-            val protocol = server.smartProtocol()
-            SmartCandidate(
-                id = server.id,
-                protocol = protocol,
-                latencyMs = latencies[server.id],
-                silenceMeansDown = ServerPinger.silenceMeansDown(server),
-                load = FavoriteNodes.load(load, server),
-                verdict = snapshot.verdict(key, protocol, now),
-            )
-        }
-        return SmartServerRanking.rank(candidates, advice())
+        val candidates = servers.map { server -> candidate(server, latencies, view, snapshot, key, now) }
+        return SmartServerRanking.rank(candidates, advice(), SmartServerRanking.spreadSeed(spreadSalt(), now))
+    }
+
+    /** [server]'s score as [rank] computes it, without the spread. */
+    fun score(server: TunnelServer, latencies: Map<String, Long?>, network: Network? = null): Double {
+        val now = clock()
+        val candidate = candidate(server, latencies, loadView(), history.current(), networkKey(network ?: physicalNetwork()), now)
+        return SmartServerRanking.score(candidate, advice())
+    }
+
+    private fun candidate(
+        server: TunnelServer,
+        latencies: Map<String, Long?>,
+        view: NodeLoadView,
+        snapshot: ProtocolHistory,
+        key: String?,
+        now: Long,
+    ): SmartCandidate {
+        val protocol = server.smartProtocol()
+        return SmartCandidate(
+            id = server.id,
+            protocol = protocol,
+            latencyMs = latencies[server.id],
+            silenceMeansDown = ServerPinger.silenceMeansDown(server),
+            load = SmartServerRanking.agedLoad(FavoriteNodes.load(view.load, server), view.ageMs),
+            verdict = snapshot.verdict(key, protocol, now),
+            quality = FavoriteNodes.nodeId(server)?.let(view.quality::get),
+            full = FavoriteNodes.load(view.full.associateWith { 1.0 }, server) != null,
+        )
     }
 
     fun recordSuccess(server: TunnelServer, network: Network?) {
@@ -139,18 +160,19 @@ class SmartAuto(
      * A real download through the tunnel. Operators that throttle a protocol
      * often let the handshake and small requests through and freeze the
      * connection after about 16 KB, so a ping or a status check says nothing.
+     * The time of the download that passed, in milliseconds; null when none did.
      */
-    suspend fun checkTraffic(vpnNetwork: Network, size: TrafficCheckSize = TrafficCheckSize.REGULAR): Boolean {
+    suspend fun checkTraffic(vpnNetwork: Network, size: TrafficCheckSize = TrafficCheckSize.REGULAR): Long? {
         repeat(TRAFFIC_CHECK_ROUNDS) { round ->
             if (round > 0) delay(TRAFFIC_CHECK_RETRY_MS)
-            if (anyAnswers(TRAFFIC_CHECK_URLS) { download(vpnNetwork, it, size) }) return true
+            firstAnswer(TRAFFIC_CHECK_URLS) { download(vpnNetwork, it, size) }?.let { return it }
         }
-        return false
+        return null
     }
 
     /** Whether the phone's own network reaches foreign sites; without that a failed check says nothing about the protocol. */
     suspend fun physicalWorks(network: Network): Boolean =
-        anyAnswers(PHYSICAL_CHECK_URLS) { reaches(network, it) }
+        firstAnswer(PHYSICAL_CHECK_URLS) { url -> 0L.takeIf { reaches(network, url) } } != null
 
     /**
      * A salted hash naming the network without its name or addresses: the
@@ -177,19 +199,21 @@ class SmartAuto(
         return digest.take(NETWORK_KEY_BYTES).joinToString("") { "%02x".format(it) }
     }
 
-    /** True as soon as one URL passes; false when all fail. Slower checks finish on their own. */
-    private suspend fun anyAnswers(urls: List<String>, check: (String) -> Boolean): Boolean {
-        val result = CompletableDeferred<Boolean>()
-        val jobs = urls.map { url -> checkScope.launch { if (check(url)) result.complete(true) } }
+    /** The first URL's answer as soon as one passes; null when all fail. Slower checks finish on their own. */
+    private suspend fun firstAnswer(urls: List<String>, check: (String) -> Long?): Long? {
+        val result = CompletableDeferred<Long?>()
+        val jobs = urls.map { url -> checkScope.launch { check(url)?.let(result::complete) } }
         checkScope.launch {
             jobs.joinAll()
-            result.complete(false)
+            result.complete(null)
         }
         return result.await()
     }
 
-    private fun download(network: Network, url: String, size: TrafficCheckSize): Boolean {
-        val deadline = SystemClock.elapsedRealtime() + size.deadlineMs
+    /** Milliseconds the download took; null when it failed or trickled past the deadline. */
+    private fun download(network: Network, url: String, size: TrafficCheckSize): Long? {
+        val startedAt = SystemClock.elapsedRealtime()
+        val deadline = startedAt + size.deadlineMs
         var connection: HttpURLConnection? = null
         return try {
             connection = (network.openConnection(URL(url)) as HttpURLConnection).apply {
@@ -201,21 +225,21 @@ class SmartAuto(
                 // Compressed zeros would cross the tunnel as a few hundred bytes.
                 setRequestProperty("Accept-Encoding", "identity")
             }
-            if (connection.responseCode != HttpURLConnection.HTTP_OK) return false
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
             connection.inputStream.use { input ->
                 val buffer = ByteArray(16 * 1024)
                 var total = 0
                 while (total < size.bytes) {
                     // A trickle that never reaches the size in time is a throttled tunnel.
-                    if (SystemClock.elapsedRealtime() > deadline) return false
+                    if (SystemClock.elapsedRealtime() > deadline) return null
                     val count = input.read(buffer)
                     if (count < 0) break
                     total += count
                 }
-                total >= size.bytes
+                (SystemClock.elapsedRealtime() - startedAt).takeIf { total >= size.bytes }
             }
         } catch (_: Exception) {
-            false
+            null
         } finally {
             connection?.disconnect()
         }

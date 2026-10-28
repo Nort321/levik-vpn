@@ -29,11 +29,14 @@ import com.leviknet.vpn.data.SessionStatus
 import com.leviknet.vpn.vpn.ProtocolHistoryStore
 import com.leviknet.vpn.vpn.ServerPinger
 import com.leviknet.vpn.vpn.SmartAuto
+import com.leviknet.vpn.vpn.SmartServerRanking
 import com.leviknet.vpn.vpn.TunnelServer
 import com.leviknet.vpn.vpn.VpnConnectionState
 import com.leviknet.vpn.vpn.VpnController
+import com.leviknet.vpn.vpn.countryServers
 import com.leviknet.vpn.vpn.isEligibleForAutomaticSelection
 import com.leviknet.vpn.vpn.isMobileServer
+import com.leviknet.vpn.vpn.isSmartAutoCandidate
 import com.leviknet.vpn.vpn.telemetryProtocol
 import java.io.File
 import java.net.HttpURLConnection
@@ -42,9 +45,11 @@ import java.net.URL
 import java.security.SecureRandom
 import java.time.Duration
 import java.time.Instant
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.random.Random
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -108,6 +113,21 @@ class AppPlatform(
 
     @Volatile
     private var lastSyncAtMs = 0L
+
+    /** The live node load, docs/app-platform.md "Node load"; in memory only. */
+    @Volatile
+    private var liveLoad: LiveLoad? = null
+
+    @Volatile
+    private var liveLoadUnsupportedUntilMs = 0L
+    private var liveLoadJob: Deferred<Unit>? = null
+    private val liveLoadLock = Any()
+
+    /** Since when each server's node has been full, by server id. */
+    private val fullSince = ConcurrentHashMap<String, Long>()
+
+    @Volatile
+    private var lastOverloadMoveAtMs: Long? = null
 
     private val foreground = MutableStateFlow(false)
 
@@ -331,27 +351,64 @@ class AppPlatform(
 
     fun protocolAdvice(): ProtocolAdvice? = RemoteConfigPolicy.currentAdvice(stored, System.currentTimeMillis())
 
-    /** Server load by node id while the configuration is fresh. */
-    fun nodeLoad(): Map<String, Double> = RemoteConfigPolicy.currentNodeLoad(stored, System.currentTimeMillis())
+    /** Server load by node id for the list: full nodes as 1, nothing once the reading is too old. */
+    fun nodeLoad(): Map<String, Double> = LiveLoadPolicy.shown(nodeLoadView())
+
+    /** What Smart Auto ranks with, docs/app-platform.md "Node load". */
+    fun nodeLoadView(nowMs: Long = System.currentTimeMillis()): NodeLoadView = LiveLoadPolicy.view(liveLoad, stored, nowMs)
 
     /** Smart Auto: free servers whose protocol works on this network, docs/app-platform.md "Smart Auto". */
     val smartAuto = SmartAuto(
         context = context,
         history = ProtocolHistoryStore(context, json),
-        nodeLoad = ::nodeLoad,
+        loadView = { nodeLoadView() },
+        spreadSalt = { salt },
         advice = ::protocolAdvice,
         physicalNetwork = directNetwork,
     )
 
     /**
-     * Asks for the configuration again when its server load is older than a
-     * couple of minutes, waiting [waitMs] at most: a slow answer serves the next choice.
+     * Asks for the live node load when the last answer is older than
+     * [maxAgeMs], waiting [waitMs] at most: a slow answer serves the next
+     * choice. An older website without the endpoint gets the configuration
+     * asked for again instead, as before.
      */
-    suspend fun refreshNodeLoad(waitMs: Long = NODE_LOAD_WAIT_MS) {
-        val age = System.currentTimeMillis() - (stored?.fetchedAtMs ?: 0L)
-        if (age < NODE_LOAD_MAX_AGE_MS) return
-        val refresh = scope.async { refreshConfig() }
-        withTimeoutOrNull(waitMs) { refresh.await() }
+    suspend fun refreshNodeLoad(maxAgeMs: Long = LiveLoadPolicy.MAX_AGE_MS, waitMs: Long = NODE_LOAD_WAIT_MS) {
+        val now = System.currentTimeMillis()
+        val refresh = if (now < liveLoadUnsupportedUntilMs) {
+            if (now - (stored?.fetchedAtMs ?: 0L) < NODE_LOAD_MAX_AGE_MS) return
+            scope.async { refreshConfig() }
+        } else {
+            if (now - (liveLoad?.fetchedAtMs ?: 0L) < maxAgeMs) return
+            synchronized(liveLoadLock) {
+                liveLoadJob?.takeIf(Deferred<Unit>::isActive) ?: scope.async { fetchLiveLoad() }.also { liveLoadJob = it }
+            }
+        }
+        if (waitMs > 0) withTimeoutOrNull(waitMs) { refresh.await() }
+    }
+
+    private suspend fun fetchLiveLoad() {
+        val etag = liveLoad?.etag
+        // The phone's own network first: the website then sees the operator and answers with its quality.
+        val physical = directNetwork()?.let { configClient.load(it, etag) }
+        val answer = physical ?: configClient.load(null, etag) ?: return
+        val throughTunnel = physical == null && vpnController.state.value.state !in INACTIVE_TUNNEL
+        val now = System.currentTimeMillis()
+        if (answer == LiveLoadAnswer.Unsupported) {
+            liveLoadUnsupportedUntilMs = now + LiveLoadPolicy.UNSUPPORTED_RETRY_MS
+            if (now - (stored?.fetchedAtMs ?: 0L) >= NODE_LOAD_MAX_AGE_MS) refreshConfig()
+            return
+        }
+        liveLoad = LiveLoadPolicy.merge(liveLoad, answer, now, throughTunnel)
+        trackFullServers(now)
+    }
+
+    /** Remembers since when each server's node has been full; a node with room again is forgotten. */
+    private fun trackFullServers(nowMs: Long) {
+        val full = nodeLoadView(nowMs).full.associateWith { 1.0 }
+        for (server in repository.tunnelProfile.value?.servers.orEmpty()) {
+            if (FavoriteNodes.load(full, server) == null) fullSince.remove(server.id) else fullSince.putIfAbsent(server.id, nowMs)
+        }
     }
 
     fun xhttpMuxHosts(): Set<String> = stored?.config?.xhttpMuxHosts.orEmpty()
@@ -440,8 +497,15 @@ class AppPlatform(
                 ServerMaintenance.windowFor(mutableMaintenance.value, FavoriteNodes.nodeId(current), now),
                 now,
             )
-            if (move == MaintenanceMove.STAY || (move == MaintenanceMove.WHEN_IDLE && !idleMeter.idle(now))) return
-            val target = fastestOfKind(current, servers, now, includeCurrent = false) ?: run {
+            if (move == MaintenanceMove.STAY) {
+                checkOverload(current, servers, now)
+                return
+            }
+            if (move == MaintenanceMove.WHEN_IDLE && !idleMeter.idle(now)) return
+            // The same country first, docs/app-platform.md "Server list".
+            val neighbours = countryServers(servers, current.countryCode)
+            val target = neighbours.takeIf { it.size > 1 }?.let { fastestOfKind(current, it, now, includeCurrent = false) }
+                ?: fastestOfKind(current, servers, now, includeCurrent = false) ?: run {
                 AppLogger.w(TAG, "No server to move to before maintenance")
                 return
             }
@@ -463,6 +527,59 @@ class AppPlatform(
             maintenanceMutex.unlock()
         }
     }
+
+    /**
+     * Stage 4, docs/app-platform.md "Smart Auto": an automatic connection on a
+     * node that stayed full moves, but only while it is idle, so nothing the
+     * user does is cut, and at most every half hour. The load is asked for
+     * every ten minutes while the screen is on, every two while the node is
+     * full, and never otherwise.
+     */
+    private suspend fun checkOverload(current: TunnelServer, servers: List<TunnelServer>, now: Long) {
+        if (!settings.automaticServer.value || !current.isSmartAutoCandidate()) return
+        val every = when {
+            fullSince.containsKey(current.id) -> LiveLoadPolicy.FULL_RECHECK_MS
+            screenOn() -> LiveLoadPolicy.CONNECTED_EVERY_MS
+            else -> return
+        }
+        refreshNodeLoad(maxAgeMs = every, waitMs = 0L)
+        val since = fullSince[current.id] ?: return
+        val due = { currentScore: Double?, bestScore: Double? ->
+            SmartServerRanking.overloadMoveDue(
+                fullSinceMs = since,
+                loadAgeMs = nodeLoadView(now).ageMs,
+                idle = idleMeter.idle(now),
+                lastMoveAtMs = lastOverloadMoveAtMs,
+                currentScore = currentScore,
+                bestScore = bestScore,
+                nowMs = now,
+            )
+        }
+        // Everything but the comparison first: pings cost something.
+        if (!due(1.0, 0.0)) return
+        val pool = servers.filter { it.isSmartAutoCandidate() && !underMaintenance(it, now) }
+        val measured = supervisorScope {
+            pool.map { server -> async(Dispatchers.IO) { server.id to runCatching { ServerPinger.measure(server) }.getOrNull() } }
+                .awaitAll()
+        }.toMap()
+        val target = smartAuto.rank(pool, measured).firstNotNullOfOrNull { ranked ->
+            pool.firstOrNull { it.id == ranked.id && it.id != current.id }
+                ?.takeIf { measured[it.id] != null || !ServerPinger.silenceMeansDown(it) }
+                ?.let { it to ranked.score }
+        } ?: return
+        if (fullSince.containsKey(target.first.id) || !due(smartAuto.score(current, measured), target.second)) return
+        val snapshot = vpnController.state.value
+        if (snapshot.state != VpnConnectionState.CONNECTED || snapshot.serverId != current.id) return
+        AppLogger.i(TAG, "Smart Auto: moving off a full node")
+        lastOverloadMoveAtMs = now
+        repository.selectServer(target.first.id)
+        vpnController.switchServer(target.first.id)
+        idleMeter.reset()
+        mutableServerSwitches.tryEmit(MaintenanceSwitch(current.id, target.first.id))
+    }
+
+    private fun screenOn(): Boolean =
+        context.getSystemService(android.os.PowerManager::class.java)?.isInteractive != false
 
     /**
      * "It's not the VPN", docs/app-platform.md "Diagnosis": the phone's own
@@ -1072,7 +1189,7 @@ class AppPlatform(
         const val MAINTENANCE_NOTIFICATION_ID = 5300
         const val MAINTENANCE_CHECK_MS = 15_000L
         const val NODE_LOAD_MAX_AGE_MS = 2 * 60_000L
-        const val NODE_LOAD_WAIT_MS = 2_500L
+        const val NODE_LOAD_WAIT_MS = 1_500L
         const val MAX_REMEMBERED = 200
         const val MAX_EXCHANGES = 2
         const val DEFAULT_REFRESH_S = 15 * 60L
@@ -1121,6 +1238,27 @@ class RemoteConfigClient(private val version: String) {
         null
     }
 
+    /**
+     * The live node load, docs/app-platform.md "Node load"; null when no host
+     * answered. [etag] makes an unchanged answer a few bytes.
+     */
+    suspend fun load(network: Network?, etag: String?): LiveLoadAnswer? = withContext(Dispatchers.IO) {
+        for (origin in ServiceEndpoints.current().apiOrigins) {
+            val headers = etag?.takeIf(LiveLoadPolicy.ETAG::matches)?.let { mapOf("If-None-Match" to it) }.orEmpty()
+            val reply = runCatching { request(URL("$origin/api/app/v1/load"), network, headers, LOAD_TIMEOUT_MS) }.getOrNull()
+                ?: continue
+            val (status, text) = reply
+            if (status == 304) return@withContext LiveLoadAnswer.Same
+            // An older website: the configuration's node load still works meanwhile.
+            if (status == 404) return@withContext LiveLoadAnswer.Unsupported
+            if (status in 400..499) return@withContext null
+            if (status != 200 || text == null) continue
+            val response = runCatching { Json.parseToJsonElement(text) }.getOrNull() ?: return@withContext null
+            return@withContext LiveLoadPolicy.parse(response, reply.etag)
+        }
+        null
+    }
+
     /** "It's not the VPN": what the website knows about the caller's operator and Levik's servers. */
     suspend fun diagnose(network: Network?): DiagnoseReport? = withContext(Dispatchers.IO) {
         for (origin in ServiceEndpoints.current().apiOrigins) {
@@ -1134,22 +1272,30 @@ class RemoteConfigClient(private val version: String) {
         null
     }
 
-    private fun request(url: URL, network: Network?): Pair<Int, String?> {
+    private data class Reply(val status: Int, val text: String?, val etag: String? = null)
+
+    private fun request(
+        url: URL,
+        network: Network?,
+        headers: Map<String, String> = emptyMap(),
+        timeoutMs: Int = TIMEOUT_MS,
+    ): Reply {
         val connection = (network?.openConnection(url, Proxy.NO_PROXY) ?: url.openConnection(Proxy.NO_PROXY))
             as HttpURLConnection
         try {
             connection.apply {
                 requestMethod = "GET"
-                connectTimeout = TIMEOUT_MS
-                readTimeout = TIMEOUT_MS
+                connectTimeout = timeoutMs
+                readTimeout = timeoutMs
                 instanceFollowRedirects = false
                 useCaches = false
                 setRequestProperty("Accept", "application/json")
                 setRequestProperty("Cache-Control", "no-store")
                 setRequestProperty("X-Levik-Client", "android/$version")
+                headers.forEach(::setRequestProperty)
             }
             val status = connection.responseCode
-            if (status != 200) return status to null
+            if (status != 200) return Reply(status, null)
             val text = connection.inputStream.use { input ->
                 val buffer = ByteArray(MAX_RESPONSE_BYTES + 1)
                 var size = 0
@@ -1160,7 +1306,7 @@ class RemoteConfigClient(private val version: String) {
                 }
                 if (size > MAX_RESPONSE_BYTES) null else String(buffer, 0, size, Charsets.UTF_8)
             }
-            return status to text
+            return Reply(status, text, connection.getHeaderField("ETag"))
         } finally {
             connection.disconnect()
         }
@@ -1168,6 +1314,9 @@ class RemoteConfigClient(private val version: String) {
 
     private companion object {
         const val TIMEOUT_MS = 15_000
+
+        /** The load is asked for right before connecting; a slow answer serves the next choice. */
+        const val LOAD_TIMEOUT_MS = 8_000
         const val MAX_RESPONSE_BYTES = 64 * 1024
         val DIAGNOSE_JSON = Json { ignoreUnknownKeys = true }
     }

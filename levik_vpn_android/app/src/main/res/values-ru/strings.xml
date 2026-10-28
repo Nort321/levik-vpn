@@ -941,6 +941,17 @@
     <string name="drop_later">Позже</string>
     <string name="drop_codes_match">Коды совпадают</string>
     <string name="drop_codes_differ">Коды разные</string>
+    <string name="drop_dock_collapse">Свернуть</string>
+    <string name="drop_dock_expand">Показать передачу файлов</string>
+    <string name="drop_dock_hide">Скрыть</string>
+    <string name="drop_dock_preparing">Готовим файлы…</string>
+    <string name="drop_dock_lan">Локальная сеть</string>
+    <string name="drop_dock_relay">Через сервер</string>
+    <string name="drop_dock_waiting_answer">«%1$s» ждёт ответа</string>
+    <string name="drop_dock_sending">Отправка</string>
+    <string name="drop_dock_receiving">Получение</string>
+    <string name="drop_offer_folder">Сохранятся: %1$s</string>
+    <string name="drop_offer_safety">Файлы не открываются сами. Принимайте только то, что отправляли вы.</string>
     <string name="drop_share_label">На моё устройство</string>
     <string name="drop_share_title">Отправить %1$s</string>
     <string name="drop_share_body">Выберите устройство, на которое их передать.</string>
@@ -985,4 +996,17 @@
         <item quantity="many">%d файлов</item>
         <item quantity="other">%d файла</item>
     </plurals>
+    <plurals name="server_country_count">
+        <item quantity="one">%d сервер</item>
+        <item quantity="few">%d сервера</item>
+        <item quantity="many">%d серверов</item>
+        <item quantity="other">%d сервера</item>
+    </plurals>
+    <string name="server_number">Сервер %1$d</string>
+    <string name="server_country_from_ping">от %1$d мс</string>
+    <string name="server_country_servers">Серверы: %1$s</string>
+    <string name="server_country_expanded">Развёрнуто</string>
+    <string name="server_country_collapsed">Свёрнуто</string>
+    <string name="filter_dns_test">DNS · тест</string>
+    <string name="servers_category_dns_test_desc">Через Яндекс DNS. Ограниченная скорость: сайты и переписка. Звонки и игры не поддерживаются.</string>
 </resources>

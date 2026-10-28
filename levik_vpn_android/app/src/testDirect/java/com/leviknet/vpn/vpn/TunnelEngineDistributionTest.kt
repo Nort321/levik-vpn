@@ -16,7 +16,7 @@ class TunnelEngineDistributionTest {
         assertEquals(
             setOf(
                 TunnelEngineKind.XRAY, TunnelEngineKind.LEVIK_RELAY, TunnelEngineKind.LEVIK_YANDEX, TunnelEngineKind.LEVIK_TUIC,
-                TunnelEngineKind.LEVIK_GAME,
+                TunnelEngineKind.LEVIK_GAME, TunnelEngineKind.LEVIK_DNSTT,
             ),
             registry.supportedProfileEngines,
         )
@@ -35,5 +35,6 @@ class TunnelEngineDistributionTest {
             "Direct must use the native Game sidecar adapter",
             registry.require(TunnelEngineKind.LEVIK_GAME) is GameTunnelEngineAdapter,
         )
+        assertTrue(registry.require(TunnelEngineKind.LEVIK_DNSTT) is DnsttTunnelEngineAdapter)
     }
 }

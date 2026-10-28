@@ -47,6 +47,9 @@ enum class TunnelEngineKind {
     /** Levik Game: only the selected games, their UDP through the Direct-only Game sidecar. */
     @SerialName("levik-game")
     LEVIK_GAME,
+
+    @SerialName("levik-dnstt")
+    LEVIK_DNSTT,
 }
 
 @Serializable
@@ -59,6 +62,9 @@ enum class TunnelServerCategory {
 
     @SerialName("mobile-allowlist")
     MOBILE_ALLOWLIST,
+
+    @SerialName("dns-test")
+    DNS_TEST,
 }
 
 @Serializable
@@ -225,6 +231,7 @@ data class TunnelServer(
     val yandexConfig: YandexServerConfig? = null,
     val tuicConfig: TuicServerConfig? = null,
     val gameConfig: GameServerConfig? = null,
+    val dnsttConfig: DnsttServerConfig? = null,
 )
 
 fun TunnelServer.effectiveCategory(): TunnelServerCategory = category ?: legacyCategory()
@@ -249,7 +256,7 @@ enum class EffectiveRoutingProfile {
 fun TunnelServer.effectiveRoutingProfile(
     routingPreset: RoutingPreset = RoutingPreset.BYPASS_RU,
 ): EffectiveRoutingProfile =
-    if (isMobileServer() && routingPreset == RoutingPreset.BYPASS_RU) {
+    if ((isMobileServer() || effectiveCategory() == TunnelServerCategory.DNS_TEST) && routingPreset == RoutingPreset.BYPASS_RU) {
         EffectiveRoutingProfile.LTE
     } else {
         EffectiveRoutingProfile.USER_SELECTED

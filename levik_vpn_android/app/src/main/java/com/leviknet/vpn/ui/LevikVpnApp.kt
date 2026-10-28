@@ -92,11 +92,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -114,6 +116,7 @@ import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -181,8 +184,10 @@ import com.leviknet.vpn.vpn.effectiveCategory
 import com.leviknet.vpn.vpn.TunnelEngineKind
 import com.leviknet.vpn.vpn.createYandexGuestIntent
 import com.leviknet.vpn.vpn.isMobileServer
+import com.leviknet.vpn.vpn.CountryServerGroup
+import com.leviknet.vpn.vpn.CountryServerNode
 import com.leviknet.vpn.vpn.ServerProtocolGroup
-import com.leviknet.vpn.vpn.groupProtocolVariants
+import com.leviknet.vpn.vpn.groupByCountry
 import com.leviknet.vpn.vpn.localizedCountryName
 import com.leviknet.vpn.vpn.protocol
 import java.time.Instant
@@ -302,6 +307,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     onOpenPauseVpn = { showPauseDialog = true },
                     onResumeVpn = viewModel::resumeVpn,
                     onServerSelected = viewModel::selectServer,
+                    onCountrySelected = viewModel::selectCountry,
                     onYandexSetup = viewModel::openYandexSetup,
                     onRefresh = viewModel::refreshAccount,
                     onSupport = viewModel::openSupport,
@@ -412,6 +418,12 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                         viewModel.drop?.let { drop ->
                             val dropState by drop.state.collectAsStateWithLifecycle()
                             com.leviknet.vpn.ui.drop.DropCard(state = dropState, controller = drop)
+                        }
+                    },
+                    dropDock = {
+                        viewModel.drop?.let { drop ->
+                            val dropState by drop.state.collectAsStateWithLifecycle()
+                            com.leviknet.vpn.ui.drop.DropDock(state = dropState, controller = drop)
                         }
                     },
                 )
@@ -1481,6 +1493,7 @@ private fun MainContent(
     onOpenPauseVpn: () -> Unit,
     onResumeVpn: () -> Unit,
     onServerSelected: (String) -> Unit,
+    onCountrySelected: (String) -> Unit,
     onYandexSetup: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onSupport: () -> Unit,
@@ -1538,6 +1551,8 @@ private fun MainContent(
     onSharePresenceChanged: (Boolean) -> Unit,
     onSleepAtHomeChanged: (Boolean) -> Unit,
     remoteDevices: @Composable () -> Unit = {},
+    /** LevikDrop above the tab bar, on every tab. */
+    dropDock: @Composable () -> Unit = {},
 ) {
     val isTelevision = LocalConfiguration.current.uiMode and
         Configuration.UI_MODE_TYPE_MASK == Configuration.UI_MODE_TYPE_TELEVISION
@@ -1548,7 +1563,12 @@ private fun MainContent(
     Scaffold(
         containerColor = Color.Transparent,
         contentWindowInsets = if (isTelevision) WindowInsets(0, 0, 0, 0) else WindowInsets.safeDrawing,
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = {
+            Column(horizontalAlignment = Alignment.End) {
+                Box(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) { dropDock() }
+                SnackbarHost(snackbarHostState)
+            }
+        },
         bottomBar = {
             if (!isTelevision) {
                 AppNavigationBar(
@@ -1583,6 +1603,7 @@ private fun MainContent(
                 canRefresh = state.session == SessionStatus.Authenticated,
                 onRefresh = onRefresh,
                 onServerSelected = onServerSelected,
+                onCountrySelected = onCountrySelected,
                 onYandexSetup = onYandexSetup,
                 yandexAvailable = state.yandexSupported && state.account?.subscriptions?.any {
                     it.uuid == (state.selectedSubscriptionId ?: state.profile?.subscriptionId) && it.capabilities.yandexRelay
@@ -2965,6 +2986,7 @@ private fun ServersScreen(
     canRefresh: Boolean,
     onRefresh: () -> Unit,
     onServerSelected: (String) -> Unit,
+    onCountrySelected: (String) -> Unit,
     onYandexSetup: (Boolean) -> Unit,
     yandexAvailable: Boolean,
     automaticServer: Boolean,
@@ -3117,6 +3139,7 @@ private fun ServersScreen(
                     add(ServerFilterType.ALL to stringResource(R.string.filter_all))
                     add(ServerFilterType.REGULAR to stringResource(R.string.filter_regular))
                     add(ServerFilterType.MOBILE_ALLOWLIST to stringResource(R.string.filter_mobile_allowlist))
+                    if (servers.any { it.dnsttConfig != null }) add(ServerFilterType.DNS_TEST to stringResource(R.string.filter_dns_test))
                     add(ServerFilterType.FAVORITES to stringResource(R.string.filter_favorites))
                     add(ServerFilterType.FASTEST to stringResource(R.string.filter_fastest))
                 }.forEach { (type, label) ->
@@ -3264,9 +3287,11 @@ private fun ServersScreen(
                         val allowlistServers = filtered.filter {
                             it.isMobileServer()
                         }
+                        val dnsServers = filtered.filter { it.dnsttConfig != null }
                         val categoryCount = listOf(
                             regularServers,
                             allowlistServers,
+                            dnsServers,
                         ).count(List<TunnelServer>::isNotEmpty)
 
                         if (categoryCount > 1) {
@@ -3278,9 +3303,10 @@ private fun ServersScreen(
                                         topPadding = 8,
                                     )
                                 }
-                                items(groupProtocolVariants(regularServers), key = ServerProtocolGroup::id) { group ->
-                                    ServerGroupCard(
-                                        group = group,
+                                items(groupByCountry(regularServers), key = CountryServerGroup::id) { country ->
+                                    CountryServerCard(
+                                        country = country,
+                                        onCountrySelected = onCountrySelected,
                                         automaticServer = automaticServer,
                                         selectedServerId = selectedServerId,
                                         favoriteServerIds = favoriteServerIds,
@@ -3319,10 +3345,33 @@ private fun ServersScreen(
                                     )
                                 }
                             }
+                            if (dnsServers.isNotEmpty()) {
+                                item(key = "section_dns_test_header") {
+                                    ServerCategoryHeader(
+                                        title = R.string.filter_dns_test,
+                                        description = R.string.servers_category_dns_test_desc,
+                                    )
+                                }
+                                items(dnsServers, key = TunnelServer::id) { server ->
+                                    ServerItemCard(
+                                        server = server,
+                                        selected = !automaticServer && server.id == selectedServerId,
+                                        isFav = favoriteServerIds.contains(server.id),
+                                        pingValue = serverPings[server.id],
+                                        maintenanceEndsAt = serverMaintenance[server.id],
+                                        pingingServers = pingingServers,
+                                        isDark = isDark,
+                                        onServerSelected = onServerSelection,
+                                        onYandexSetup = null,
+                                        onToggleFavorite = onToggleFavorite,
+                                    )
+                                }
+                            }
                         } else {
-                            items(groupProtocolVariants(filtered), key = ServerProtocolGroup::id) { group ->
-                                ServerGroupCard(
-                                    group = group,
+                            items(groupByCountry(filtered), key = CountryServerGroup::id) { country ->
+                                CountryServerCard(
+                                    country = country,
+                                    onCountrySelected = onCountrySelected,
                                     automaticServer = automaticServer,
                                     selectedServerId = selectedServerId,
                                     favoriteServerIds = favoriteServerIds,
@@ -3338,9 +3387,10 @@ private fun ServersScreen(
                             }
                         }
                     } else {
-                        items(groupProtocolVariants(filtered), key = ServerProtocolGroup::id) { group ->
-                            ServerGroupCard(
-                                group = group,
+                        items(groupByCountry(filtered), key = CountryServerGroup::id) { country ->
+                            CountryServerCard(
+                                country = country,
+                                onCountrySelected = onCountrySelected,
                                 automaticServer = automaticServer,
                                 selectedServerId = selectedServerId,
                                 favoriteServerIds = favoriteServerIds,
@@ -3431,6 +3481,176 @@ private fun ServerLoadBadge(load: Double, isDark: Boolean) {
 private const val SERVER_LOAD_BUSY = 0.4
 private const val SERVER_LOAD_FULL = 0.75
 
+/**
+ * docs/app-platform.md "Server list": a country with several servers opens into
+ * them; choosing the country takes its best server.
+ */
+@Composable
+private fun CountryServerCard(
+    country: CountryServerGroup,
+    onCountrySelected: (String) -> Unit,
+    automaticServer: Boolean,
+    selectedServerId: String?,
+    favoriteServerIds: Set<String>,
+    serverPings: Map<String, Long?>,
+    serverMaintenance: Map<String, Long>,
+    serverLoad: Map<String, Double>,
+    pingingServers: Boolean,
+    isDark: Boolean,
+    onServerSelected: (String) -> Unit,
+    onToggleFavorite: (String) -> Unit,
+    onYandexSetup: ((Boolean) -> Unit)?,
+) {
+    val code = country.countryCode
+    val countryName = code?.let(::localizedCountryName)
+    val single = country.nodes.singleOrNull()
+    if (code == null || countryName == null || single != null) {
+        val node = single ?: country.nodes.first()
+        ServerGroupCard(
+            group = node.group,
+            automaticServer = automaticServer,
+            selectedServerId = selectedServerId,
+            favoriteServerIds = favoriteServerIds,
+            serverPings = serverPings,
+            serverMaintenance = serverMaintenance,
+            serverLoad = serverLoad,
+            pingingServers = pingingServers,
+            isDark = isDark,
+            onServerSelected = onServerSelected,
+            onToggleFavorite = onToggleFavorite,
+            onYandexSetup = onYandexSetup,
+            title = countryName,
+            subtitle = if (code != null) node.label else null,
+        )
+        return
+    }
+    var expanded by rememberSaveable(country.id) { mutableStateOf(false) }
+    val chevronRotation by animateFloatAsState(if (expanded) 180f else 0f, label = "countryChevron")
+    val selectedNode = if (automaticServer) null else country.nodes.firstOrNull { node ->
+        node.group.variants.any { it.id == selectedServerId }
+    }
+    val favorite = country.nodes.any { node -> node.group.variants.any { it.id in favoriteServerIds } }
+    val selectedPing = selectedNode?.let { serverPings[it.group.active(selectedServerId).id] }
+    val fastestPing = country.nodes.mapNotNull { serverPings[it.group.active(selectedServerId).id] }.minOrNull()
+    val summary = listOfNotNull(
+        pluralStringResource(R.plurals.server_country_count, country.nodes.size, country.nodes.size),
+        selectedNode?.let { countryNodeName(it) },
+        when {
+            selectedNode != null -> selectedPing?.let { stringResource(R.string.ping_ms, it.toInt()) }
+            fastestPing != null -> stringResource(R.string.server_country_from_ping, fastestPing.toInt())
+            else -> null
+        },
+    ).joinToString(" · ")
+    val flagDescriptionText = flagDescription(code)
+    val toggleDescription = stringResource(R.string.server_country_servers, countryName)
+    val toggleState = stringResource(if (expanded) R.string.server_country_expanded else R.string.server_country_collapsed)
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = androidx.compose.foundation.BorderStroke(
+            if (selectedNode != null) 1.5.dp else 1.dp,
+            if (selectedNode != null) LevikBlue else MaterialTheme.colorScheme.outline,
+        ),
+    ) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .selectable(
+                        selected = selectedNode != null,
+                        role = Role.RadioButton,
+                        onClick = { onCountrySelected(code) },
+                    )
+                    .padding(start = 16.dp, top = 14.dp, bottom = 14.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = countryFlag(code),
+                    fontSize = 28.sp,
+                    modifier = Modifier.semantics { contentDescription = flagDescriptionText },
+                )
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = countryName,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        if (favorite) {
+                            Spacer(Modifier.width(6.dp))
+                            Icon(
+                                painter = painterResource(R.drawable.ic_crown),
+                                contentDescription = null,
+                                tint = LevikBlue,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                    }
+                    Text(
+                        text = summary,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                RadioButton(selected = selectedNode != null, onClick = null)
+                IconButton(
+                    onClick = { expanded = !expanded },
+                    modifier = Modifier
+                        .size(LevikDimensions.IconButtonSize)
+                        .semantics {
+                            contentDescription = toggleDescription
+                            stateDescription = toggleState
+                        },
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_chevron_down),
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .size(20.dp)
+                            .rotate(chevronRotation),
+                    )
+                }
+            }
+            AnimatedVisibility(visible = expanded) {
+                Column(
+                    modifier = Modifier.padding(start = 10.dp, end = 10.dp, bottom = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    country.nodes.forEach { node ->
+                        ServerGroupCard(
+                            group = node.group,
+                            automaticServer = automaticServer,
+                            selectedServerId = selectedServerId,
+                            favoriteServerIds = favoriteServerIds,
+                            serverPings = serverPings,
+                            serverMaintenance = serverMaintenance,
+                            serverLoad = serverLoad,
+                            pingingServers = pingingServers,
+                            isDark = isDark,
+                            onServerSelected = onServerSelected,
+                            onToggleFavorite = onToggleFavorite,
+                            onYandexSetup = onYandexSetup,
+                            title = countryNodeName(node),
+                            showFlag = false,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** «Франкфурт», or «Сервер 2» when the host remark names no server. */
+@Composable
+private fun countryNodeName(node: CountryServerNode): String =
+    node.label ?: stringResource(R.string.server_number, node.number)
+
 /** One card per server; protocol variants of the same server switch inside the card. */
 @Composable
 private fun ServerGroupCard(
@@ -3446,6 +3666,9 @@ private fun ServerGroupCard(
     onServerSelected: (String) -> Unit,
     onToggleFavorite: (String) -> Unit,
     onYandexSetup: ((Boolean) -> Unit)?,
+    title: String? = null,
+    subtitle: String? = null,
+    showFlag: Boolean = true,
 ) {
     val server = group.active(selectedServerId)
     val favoriteIds = group.variants.map(TunnelServer::id).filter(favoriteServerIds::contains)
@@ -3465,6 +3688,9 @@ private fun ServerGroupCard(
         },
         onYandexSetup = onYandexSetup,
         protocolVariants = if (group.variants.size > 1) group.variants else emptyList(),
+        title = title,
+        subtitle = subtitle,
+        showFlag = showFlag,
     )
 }
 
@@ -3484,6 +3710,12 @@ private fun ServerItemCard(
     maintenanceEndsAt: Long? = null,
     /** How busy the server is, 0..1, docs/app-platform.md "Node load". */
     load: Double? = null,
+    /** Overrides the name, docs/app-platform.md "Server list". */
+    title: String? = null,
+    /** The server's label inside its country. */
+    subtitle: String? = null,
+    /** False inside a country card, whose header carries the flag. */
+    showFlag: Boolean = true,
 ) {
     var showGuide by remember(server.id) { mutableStateOf(false) }
     if (showGuide) {
@@ -3514,7 +3746,7 @@ private fun ServerItemCard(
                         tint = LevikBlue,
                         modifier = Modifier.size(34.dp),
                     )
-                } else {
+                } else if (showFlag) {
                     Text(
                         text = countryFlag(server.countryCode),
                         fontSize = 28.sp,
@@ -3523,10 +3755,10 @@ private fun ServerItemCard(
                         },
                     )
                 }
-                Spacer(Modifier.width(14.dp))
+                if (showFlag || server.engine == TunnelEngineKind.LEVIK_YANDEX) Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
-                        text = if (protocolVariants.isNotEmpty()) {
+                        text = title ?: if (protocolVariants.isNotEmpty()) {
                             localizedCountryName(server.countryCode) ?: server.name.displayName()
                         } else {
                             server.name.displayName()
@@ -3536,6 +3768,15 @@ private fun ServerItemCard(
                         maxLines = 3,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    if (subtitle != null) {
+                        Text(
+                            text = subtitle,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                     if (server.isMobileServer()) {
                         val badgeColor = if (isDark) Color(0xFF60A5FA) else LevikBlue
                         Surface(

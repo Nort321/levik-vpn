@@ -83,6 +83,7 @@ import com.leviknet.vpn.core.platform.RemoteSnapshot
 import com.leviknet.vpn.core.platform.RemoteConfigPolicy
 import com.leviknet.vpn.vpn.RankedServer
 import com.leviknet.vpn.vpn.SmartServerRanking
+import com.leviknet.vpn.vpn.countryServers
 import com.leviknet.vpn.vpn.SmartSwitch
 import com.leviknet.vpn.vpn.isEligibleForAutomaticSelection
 import com.leviknet.vpn.vpn.isHomeRoadServer
@@ -1650,6 +1651,29 @@ class AppViewModel(
     fun selectServer(serverId: String) {
         if (serverId == "yandex:telemost" || serverId == "yandex:document") selectYandexTransport(serverId == "yandex:telemost")
         else selectServer(serverId, showIntroduction = true)
+    }
+
+    /**
+     * The best server of a country by Smart Auto, docs/app-platform.md "Server list".
+     * A server of the country that is already the user's choice stays.
+     */
+    fun selectCountry(countryCode: String) {
+        val profile = mutableState.value.profile ?: return
+        val servers = countryServers(profile.servers, countryCode)
+        if (servers.isEmpty()) return
+        if (!settings.automaticServer.value && servers.any { it.id == mutableState.value.selectedServerId }) return
+        viewModelScope.launch {
+            val known = mutableState.value.serverPings
+            val measured = if (servers.all { it.id in known }) known else {
+                measureServers(servers).also { fresh ->
+                    mutableState.update { it.copy(serverPings = it.serverPings + fresh, pingingServers = false) }
+                }
+            }
+            val candidates = withoutMaintenance(profile, servers.mapTo(mutableSetOf(), TunnelServer::id))
+            val best = rankAutomatic(profile, candidates, measured).firstOrNull()?.id
+                ?: servers.first { it.id in candidates }.id
+            selectServer(best)
+        }
     }
 
     private fun selectServer(serverId: String, showIntroduction: Boolean) {
@@ -3250,13 +3274,15 @@ enum class ServerFilterType {
     ALL,
     REGULAR,
     MOBILE_ALLOWLIST,
+    DNS_TEST,
     FAVORITES,
     FASTEST;
 
     fun matches(server: TunnelServer, favorites: Set<String>): Boolean = when (this) {
         ALL, FASTEST -> true
-        REGULAR -> !server.isMobileServer()
+        REGULAR -> !server.isMobileServer() && server.dnsttConfig == null
         MOBILE_ALLOWLIST -> server.isMobileServer()
+        DNS_TEST -> server.dnsttConfig != null
         FAVORITES -> server.id in favorites
     }
 }
