@@ -30,6 +30,7 @@ internal class SmartRoutePreflight(
     ): String? = withContext(Dispatchers.IO) {
         val candidates = SmartRouteSelection.candidates(smartAuto.eligibleRoutes(servers))
         val contexts = candidates.associate { it.id to smartAuto.measurementContext(it) }
+        val routeIds = smartAuto.routeResources(candidates).mapValues { it.value.id }
         val previous = smartAuto.routeMeasurements(candidates, network)
         if (previous.keys.containsAll(candidates.map { it.id })) {
             SmartRouteSelection.order(previous, smartAuto.routeResources(servers), smartAuto.eligibleRoutes(servers).map(TunnelServer::id))
@@ -40,7 +41,7 @@ internal class SmartRoutePreflight(
         val byId = candidates.associateBy(TunnelServer::id)
         fun measured(id: String, value: SmartRouteMeasurement) {
             measurements[id] = value
-            byId[id]?.let { smartAuto.recordRouteMeasurement(it, network, value, contexts.getValue(id)) }
+            byId[id]?.let { smartAuto.recordRouteMeasurement(it, network, value, contexts.getValue(id), routeIds[id]) }
         }
         try {
             withTimeoutOrNull(22_000L) {
@@ -73,7 +74,7 @@ internal class SmartRoutePreflight(
                                 override fun protectFd(fd: Long): Boolean = if (localOnly) env.unboundSocketProtector(fd) else env.protector.protectAndBind(fd)
                             }, if (localOnly) null else env.dnsServer, replaceActive = false)
                         SmartRouteProber(config.candidates).use { prober ->
-                            if (speed == null) prober.measureLatency(::measured) else prober.measureBandwidth(speed, ::measured)
+                            if (speed == null) prober.measureLatency(onMeasurement = ::measured) else prober.measureBandwidth(speed, ::measured)
                         }
                     } catch (error: CancellationException) { throw error } catch (_: Exception) {
                         // Probe infrastructure being unavailable does not disable ordinary VPN connections.
@@ -101,7 +102,8 @@ internal class SmartRoutePreflight(
                 }
             }
         } finally { native.forEach { runCatching { it.close() } } }
-        val current = measurements.filterKeys { id -> byId[id]?.let { smartAuto.measurementContext(it) == contexts[id] } == true }
+        val currentRoutes = smartAuto.routeResources(candidates)
+        val current = measurements.filterKeys { id -> byId[id]?.let { smartAuto.measurementContext(it) == contexts[id] } == true && routeIds[id] == currentRoutes[id]?.id }
         val eligible = smartAuto.eligibleRoutes(servers)
         SmartRouteSelection.select(current, smartAuto.routeResources(eligible), eligible.map(TunnelServer::id), fallbackServerId)
     }

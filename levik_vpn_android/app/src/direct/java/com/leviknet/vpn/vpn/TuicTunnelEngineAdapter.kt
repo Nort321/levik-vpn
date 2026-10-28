@@ -236,7 +236,7 @@ private class AndroidTuicNativeSession(
             val port = ServerSocket(0, 1, InetAddress.getByName(LOOPBACK)).use { it.localPort }
             startProtectServer()
             val native = ProcessBuilder(executable.absolutePath, "run", "-c", "stdin", "--disable-color")
-                .also { it.environment().clear() }
+                .also { it.environment().clear(); it.environment()["GOMEMLIMIT"] = "64MiB" }
                 .start()
             process = native
             // The configuration carries credentials; it is passed on stdin, never written to disk.

@@ -13,6 +13,19 @@ import org.junit.Test
 class SmartRouteProberTest {
     private val candidates = (0..2).map { SmartRouteProbeConfig.Candidate("r$it", "r$it", "/unused-$it") }
 
+    @Test fun `background RTT rounds stay tiny and failed data body cannot verify a candidate`() = runTest {
+        var downloaded = 0
+        val transport = SmartRouteProbeTransport { _, _, bytes, _ ->
+            downloaded += bytes
+            if (bytes >= 64 * 1024) null else SmartRouteExchange(40.0, 100.0)
+        }
+        SmartRouteProber(candidates, transport).use { prober ->
+            prober.measureLatency(light = true) { _, _ -> }
+            assertEquals(3 * 6 * 1024, downloaded)
+            assertTrue(!prober.verifyData(candidates.first().id))
+        }
+    }
+
     @Test fun `cancelling selection cancels pending path transfers without publishing stale answers`() = runTest {
         var completed = 0
         var cancelled = 0

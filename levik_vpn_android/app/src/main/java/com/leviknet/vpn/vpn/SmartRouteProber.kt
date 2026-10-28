@@ -43,7 +43,7 @@ internal class SmartRouteProber(
         .connectTimeout(2, TimeUnit.SECONDS).readTimeout(3, TimeUnit.SECONDS).writeTimeout(3, TimeUnit.SECONDS)
         .callTimeout(4, TimeUnit.SECONDS).build() }
 
-    suspend fun measureLatency(onMeasurement: (String, SmartRouteMeasurement) -> Unit) = coroutineScope {
+    suspend fun measureLatency(light: Boolean = false, onMeasurement: (String, SmartRouteMeasurement) -> Unit) = coroutineScope {
         val limit = Semaphore(8)
         val samples = candidates.associate { it.id to mutableListOf<Double>() }
         val attempts = candidates.associate { it.id to java.util.concurrent.atomic.AtomicInteger() }
@@ -56,7 +56,7 @@ internal class SmartRouteProber(
                     if (attempts.getValue(candidate.id).get() >= 2 && samples.getValue(candidate.id).isEmpty()) return@async
                     limit.withPermit {
                         val target = LATENCY_TARGETS[round % LATENCY_TARGETS.size]
-                        val bytes = if (round == 0) 64 * 1024 else target.second
+                        val bytes = if (round == 0 && !light) 64 * 1024 else target.second
                         val url = if (round == 0) "https://speed.cloudflare.com/__down?bytes=$bytes" else target.first
                         ensureActive()
                         val attempt = attempts.getValue(candidate.id).incrementAndGet()
@@ -93,6 +93,12 @@ internal class SmartRouteProber(
                 successfulTargets = initial.successfulTargets + if (down != null || up != null) setOf("speed.cloudflare.com") else emptySet())
             onMeasurement(id, measured)
         }
+    }
+
+    suspend fun verifyData(id: String): Boolean {
+        val bytes = 64 * 1024
+        return exchange(id, Request.Builder().url("https://speed.cloudflare.com/__down?bytes=$bytes")
+            .header("Accept-Encoding", "identity").header("Cache-Control", "no-store").build(), bytes) != null
     }
 
     private suspend fun exchange(id: String, request: Request, bytes: Int, uploadBytes: Int = 0): SmartRouteExchange? {

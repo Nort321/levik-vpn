@@ -17,6 +17,7 @@ import java.security.MessageDigest
 import java.time.Instant
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -44,6 +45,10 @@ class SmartAuto(
     private val clock: () -> Long = System::currentTimeMillis,
     private val probeSettings: () -> List<String> = { emptyList() },
 ) {
+    private val liveOwner = AtomicLong(0L)
+    val liveMainManaged: Boolean get() = liveOwner.get() != 0L
+    fun liveSessionStarted(owner: Long) { liveOwner.set(owner) }
+    fun liveSessionStopped(owner: Long) { liveOwner.compareAndSet(owner, 0L) }
     private data class MeasuredRoute(val network: String, val routeId: String?, val transport: String, val atMs: Long, val value: SmartRouteMeasurement)
     private val measuredRoutes = ConcurrentHashMap<String, MeasuredRoute>()
 
@@ -68,12 +73,12 @@ class SmartAuto(
         return servers.filter { it.id in eligible }
     }
 
-    fun recordRouteMeasurement(server: TunnelServer, network: Network, measurement: SmartRouteMeasurement, transport: String = measurementContext(server)) {
+    fun recordRouteMeasurement(server: TunnelServer, network: Network, measurement: SmartRouteMeasurement, transport: String = measurementContext(server), routeId: String? = routeResources(listOf(server))[server.id]?.id) {
         val key = measurementNetwork(network) ?: return
         val now = clock()
         measuredRoutes.entries.removeIf { now - it.value.atMs >= it.value.value.cacheMs }
         if (measuredRoutes.size >= 256) measuredRoutes.clear()
-        measuredRoutes[server.id] = MeasuredRoute(key, routeResources(listOf(server))[server.id]?.id, transport, now, measurement)
+        measuredRoutes[server.id] = MeasuredRoute(key, routeId, transport, now, measurement)
     }
 
     fun routeMeasurements(servers: List<TunnelServer>, network: Network? = null): Map<String, SmartRouteMeasurement> {
@@ -360,6 +365,9 @@ enum class SmartSwitchReason(
 
     /** The network's last winner was closer at hand. */
     NETWORK_WINNER(noticed = false),
+
+    /** New core flows use a confirmed better path; established flows keep draining. */
+    PATH_QUALITY(noticed = false),
 
     /** The operator turned allowlists on: a mobile server carries traffic then. */
     ALLOWLIST_ON(noticed = true),

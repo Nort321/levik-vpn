@@ -4,6 +4,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
@@ -12,6 +13,8 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.Serializable
 import java.util.concurrent.atomic.AtomicBoolean
@@ -32,9 +35,10 @@ data class ServiceRouteState(val id: String, val state: String, val exitId: Stri
 internal class ServiceRouteRuntime(
     private val config: ServiceRouteConfig,
     private val scope: CoroutineScope,
+    private val automatic: SmartAutoLiveConfig? = null,
     private val report: suspend (ServiceRouteReport) -> Unit,
 ) : AutoCloseable {
-    private val control = ServiceRouteControl(config)
+    private val control = ServiceRouteControl(config, automatic?.candidates?.map { it.tag }?.toSet().orEmpty())
     private val selection = ServiceRouteSelection(config.policy, config.mainExitId)
     private var job: Job? = null
     private var previousReport: ServiceRouteReport? = null
@@ -43,6 +47,37 @@ internal class ServiceRouteRuntime(
     private val health = config.candidates.associate { it.exitId to ServiceExitHealth() }
     private var currentMainExitId = config.mainExitId
     private val closed = AtomicBoolean(false)
+    private val readyGate = CompletableDeferred<Boolean>()
+    private val updates = Mutex()
+    @Volatile private var automaticMain: Pair<String, String>? = automatic?.let { live ->
+        (live.originals.firstOrNull { it.id == live.initial.id }?.let(config.policy::exitFor)?.exitId ?: config.mainExitId) to live.initial.tag
+    }
+    private var automaticHealthy = true
+
+    suspend fun automaticMainHealth(healthy: Boolean) = updates.withLock {
+        if (automatic != null && automaticHealthy != healthy && !closed.get()) {
+            automaticHealthy = healthy
+            try { updateTargets() } catch (error: CancellationException) { throw error } catch (_: Exception) { }
+        }
+    }
+
+    suspend fun tunTrafficCounters(): SmartAutoTrafficCounters? = if (readyGate.await() && !closed.get()) control.tunTrafficCounters() else null
+
+    suspend fun overrideAutomaticMain(exitId: String, tag: String, canSwitch: suspend () -> Boolean): Boolean {
+        check(automatic?.candidates?.any { it.tag == tag } == true)
+        check(readyGate.await() && !closed.get())
+        return updates.withLock {
+            currentCoroutineContext().ensureActive()
+            check(!closed.get())
+            if (!canSwitch()) return@withLock false
+            control.override(ServiceRouteConfig.MAIN, tag)
+            automaticMain = exitId to tag
+            automaticHealthy = true
+            // Acknowledged MAIN is authoritative even if a later service-specific API call fails.
+            try { updateTargets() } catch (error: CancellationException) { throw error } catch (_: Exception) { }
+            true
+        }
+    }
 
     fun start() {
         check(job == null)
@@ -53,12 +88,13 @@ internal class ServiceRouteRuntime(
                 if (!ready) {
                     currentCoroutineContext().ensureActive()
                     check(!closed.get())
-                    val initialMain = if (config.policy.exits.first { it.exitId == config.mainExitId }.state == "enabled")
+                    val initialMain = automatic?.initial?.tag ?: if (config.policy.exits.first { it.exitId == config.mainExitId }.state == "enabled")
                         config.candidates.first { it.exitId == config.mainExitId }.outboundTag else ServiceRouteConfig.BLOCK
                     ready = runCatching { control.override(ServiceRouteConfig.MAIN, initialMain) }.isSuccess
                     if (!ready) delay(100)
                 }
             }
+            readyGate.complete(ready)
             if (!ready) {
                 send("error", emptyList(), "control_unavailable")
                 return@launch
@@ -68,28 +104,13 @@ internal class ServiceRouteRuntime(
                     val limiter = Semaphore(4)
                     config.candidates.filter { candidate -> config.policy.exits.any { it.exitId == candidate.exitId && it.state == "enabled" } }.map { candidate -> async {
                         limiter.withPermit { candidate.exitId to probeServiceExit(candidate) }
-                    } }.awaitAll().forEach { (exitId, success) -> health.getValue(exitId).observe(success) }
-                    val alive = health.filterValues { it.alive }.keys
-                    val initialMainUsable = currentMainExitId == config.mainExitId &&
-                        config.policy.exits.first { it.exitId == config.mainExitId }.state == "enabled" &&
-                        !health.getValue(config.mainExitId).wasConfirmedDown
-                    if (currentMainExitId !in alive && !initialMainUsable) {
-                        val mainCountry = config.policy.exits.first { it.exitId == config.mainExitId }.countryCode
-                        currentMainExitId = config.mainExitId.takeIf { it in alive }
-                            ?: if (config.allowMainFailover) config.policy.exits.filter { it.exitId in alive }
-                                .sortedWith(compareBy({ it.countryCode != mainCountry }, { it.exitId })).firstOrNull()?.exitId ?: config.mainExitId
-                            else config.mainExitId
+                    } }.awaitAll().let { observations ->
+                        val states = updates.withLock {
+                            observations.forEach { (exitId, success) -> health.getValue(exitId).observe(success) }
+                            updateTargets()
+                        }
+                        send("applied", states)
                     }
-                    selection.mainExitId = currentMainExitId
-                    val mainTarget = config.candidates.firstOrNull { it.exitId == currentMainExitId && (it.exitId in alive || initialMainUsable) }?.outboundTag
-                        ?: ServiceRouteConfig.BLOCK
-                    setTarget(ServiceRouteConfig.MAIN, mainTarget)
-                    val states = config.policy.rules.mapIndexed { index, rule ->
-                        val decision = selection.select(rule, alive)
-                        setTarget(ServiceRouteConfig.routeTag(index), config.tagFor(decision))
-                        ServiceRouteState(rule.id, decision.state, decision.exitId)
-                    }
-                    send("applied", states)
                 } catch (error: CancellationException) {
                     throw error
                 } catch (_: Exception) {
@@ -98,6 +119,31 @@ internal class ServiceRouteRuntime(
                 }
                 delay(10_000)
             }
+        }
+    }
+
+    private suspend fun updateTargets(): List<ServiceRouteState> {
+        val automaticMain = this.automaticMain
+        val alive = health.filterValues { it.alive }.keys + listOfNotNull(automaticMain?.first?.takeIf { automaticHealthy })
+        val initialMainUsable = currentMainExitId == config.mainExitId &&
+            config.policy.exits.first { it.exitId == config.mainExitId }.state == "enabled" && !health.getValue(config.mainExitId).wasConfirmedDown
+        if (automaticMain != null) currentMainExitId = automaticMain.first
+        if (automaticMain == null && currentMainExitId !in alive && !initialMainUsable) {
+            val mainCountry = config.policy.exits.first { it.exitId == config.mainExitId }.countryCode
+            currentMainExitId = config.mainExitId.takeIf { it in alive }
+                ?: if (config.allowMainFailover) config.policy.exits.filter { it.exitId in alive }
+                    .sortedWith(compareBy({ it.countryCode != mainCountry }, { it.exitId })).firstOrNull()?.exitId ?: config.mainExitId
+                else config.mainExitId
+        }
+        selection.mainExitId = currentMainExitId
+        if (automaticMain == null) setTarget(ServiceRouteConfig.MAIN, config.candidates.firstOrNull {
+            it.exitId == currentMainExitId && (it.exitId in alive || initialMainUsable)
+        }?.outboundTag ?: ServiceRouteConfig.BLOCK)
+        return config.policy.rules.mapIndexed { index, rule ->
+            val decision = selection.select(rule, alive)
+            val tag = automaticMain?.takeIf { automaticHealthy && decision.target == it.first }?.second ?: config.tagFor(decision)
+            setTarget(ServiceRouteConfig.routeTag(index), tag)
+            ServiceRouteState(rule.id, decision.state, decision.exitId)
         }
     }
 
@@ -128,6 +174,7 @@ internal class ServiceRouteRuntime(
 
     override fun close() {
         closed.set(true)
+        readyGate.complete(false)
         job?.cancel()
         job = null
         control.close()

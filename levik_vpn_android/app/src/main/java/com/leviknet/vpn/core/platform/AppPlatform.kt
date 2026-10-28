@@ -554,6 +554,7 @@ class AppPlatform(
      * full, and never otherwise.
      */
     private suspend fun checkOverload(current: TunnelServer, servers: List<TunnelServer>, now: Long) {
+        if (smartAuto.liveMainManaged) return
         if (!settings.automaticServer.value || !current.isSmartAutoCandidate()) return
         val every = when {
             fullSince.containsKey(current.id) -> LiveLoadPolicy.FULL_RECHECK_MS
