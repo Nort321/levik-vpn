@@ -37,20 +37,34 @@ class DnsttSupportTest {
         assertNull(DnsttLinkParser.withoutLinks(TunnelProfileSource("text/plain", link)))
     }
 
-    @Test fun `DNS uses TCP through proxy before any direct routing rule`() {
-        val base = """{"dns":{"servers":["1.1.1.1"]},"inbounds":[{"tag":"tun","sniffing":{"enabled":true}}],"outbounds":[{"tag":"proxy","protocol":"socks"},{"tag":"levik-block","protocol":"blackhole"}],"routing":{"rules":[{"type":"field","ip":["geoip:ru"],"outboundTag":"direct"}]}}"""
+    @Test fun `application lookups get fake addresses and names reach the node`() {
+        val base = """{"dns":{"servers":["1.1.1.1"]},"inbounds":[{"tag":"tun","sniffing":{"enabled":true,"destOverride":["http","tls"]}}],"outbounds":[{"tag":"proxy","protocol":"socks"},{"tag":"levik-direct","protocol":"freedom"},{"tag":"levik-block","protocol":"blackhole"}],"routing":{"rules":[{"type":"field","ip":["geoip:ru"],"outboundTag":"levik-direct"}]}}"""
         val config = Json.parseToJsonElement(dnsttTcpConfig(base)).jsonObject
         val resolvers = config.getValue("dns").jsonObject.getValue("servers").jsonArray
-        assertEquals(listOf("tcp://77.88.8.8", "tcp://77.88.8.1"), resolvers.map { it.jsonObject.getValue("address").jsonPrimitive.content })
-        assertTrue(resolvers.all { it.jsonObject.getValue("timeoutMs").jsonPrimitive.content.toInt() >= 20_000 })
+        assertEquals("fakedns", resolvers.first().jsonPrimitive.content)
+        assertEquals(listOf("77.88.8.8", "77.88.8.1"), resolvers.drop(1).map { it.jsonObject.getValue("address").jsonPrimitive.content })
+        val pool = config.getValue("fakedns").jsonArray.single().jsonObject.getValue("ipPool").jsonPrimitive.content
+        assertEquals(DNSTT_FAKE_IP_POOL, pool)
         assertEquals("AsIs", config.getValue("routing").jsonObject.getValue("domainStrategy").jsonPrimitive.content)
-        assertEquals("true", config.getValue("inbounds").jsonArray.first().jsonObject.getValue("sniffing").jsonObject.getValue("routeOnly").jsonPrimitive.content)
+        val sniffing = config.getValue("inbounds").jsonArray.first().jsonObject.getValue("sniffing").jsonObject
+        assertEquals("false", sniffing.getValue("routeOnly").jsonPrimitive.content)
+        assertEquals(listOf("fakedns", "http", "tls"), sniffing.getValue("destOverride").jsonArray.map { it.jsonPrimitive.content })
         val dnsOutbound = config.getValue("outbounds").jsonArray.last().jsonObject
         assertEquals("proxy", dnsOutbound.getValue("proxySettings").jsonObject.getValue("tag").jsonPrimitive.content)
-        assertEquals("tcp", dnsOutbound.getValue("settings").jsonObject.getValue("rewriteNetwork").jsonPrimitive.content)
+        val dnsRules = dnsOutbound.getValue("settings").jsonObject.getValue("rules").jsonArray.map { it.jsonObject }
+        assertEquals("hijack", dnsRules.first().getValue("action").jsonPrimitive.content)
+        assertEquals("1", dnsRules.first().getValue("qType").jsonPrimitive.content)
         val rules = config.getValue("routing").jsonObject.getValue("rules").jsonArray
-        assertEquals("proxy", rules[0].jsonObject.getValue("outboundTag").jsonPrimitive.content)
+        // Xray's own lookups serve direct-routed names only; they never enter the tunnel.
+        assertEquals("levik-direct", rules[0].jsonObject.getValue("outboundTag").jsonPrimitive.content)
         assertEquals("dnstt-dns", rules[1].jsonObject.getValue("outboundTag").jsonPrimitive.content)
         assertEquals("levik-block", rules.last().jsonObject.getValue("outboundTag").jsonPrimitive.content)
+    }
+
+    @Test fun `fake address pool is routed into the tunnel`() {
+        val plan = xrayTunPlan("77.88.8.8", "77.88.8.1").copy(extraIpv4Routes = listOf(DNSTT_FAKE_IP_POOL))
+        assertTrue(VpnRoutes.nativeExcludedIpv4Networks.contains("198.18.0.0/15"))
+        assertEquals(listOf(DNSTT_FAKE_IP_POOL), plan.extraIpv4Routes)
+        assertThrows(IllegalArgumentException::class.java) { plan.copy(extraIpv4Routes = listOf("::/0")) }
     }
 }

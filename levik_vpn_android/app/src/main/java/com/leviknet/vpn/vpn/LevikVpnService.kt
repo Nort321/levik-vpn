@@ -643,7 +643,8 @@ class LevikVpnService : VpnService() {
                             lteDirectDomains = if (routingPreset == RoutingPreset.BYPASS_RU) container.lteRoutingData.domains else emptyList(),
                         ))
                     },
-                    tunPlan = xrayTunPlan(primaryDns = "77.88.8.8", secondaryDns = "77.88.8.1"),
+                    tunPlan = xrayTunPlan(primaryDns = "77.88.8.8", secondaryDns = "77.88.8.1")
+                        .copy(extraIpv4Routes = listOf(DNSTT_FAKE_IP_POOL)),
                 )
                 TunnelEngineKind.XRAY -> TunnelEngineRequest.Xray(
                     configFactory = XrayConfigFactory { tunFileDescriptor ->
@@ -1180,6 +1181,11 @@ class LevikVpnService : VpnService() {
                 // before accepting a connection. Do not call allowFamily:
                 // that would permit fallback to the physical network.
                 VpnRoutes.apply(this, useNativeExclusions, includeIpv6 = tunPlan.ipv6Enabled)
+                // More specific than the 198.18.0.0/15 exclusion, so it wins on lookup.
+                tunPlan.extraIpv4Routes.forEach { cidr ->
+                    val (address, prefix) = VpnRoutes.splitCidr(cidr)
+                    addRoute(address, prefix)
+                }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     setMetered(false)
                 }
