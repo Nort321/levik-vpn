@@ -10,6 +10,11 @@ PASSWORD = 'p' * 32
 
 
 class AccessTests(unittest.TestCase):
+    def test_stale_sync_snapshot_is_not_access(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'access.json'
+            path.write_text('{"validUntil":1,"inbounds":[]}')
+            self.assertEqual(read_users(path), {})
     def test_blocks_lan_metadata_translated_addresses_smtp_and_foreign_dns(self):
         for ip, port in [('127.0.0.1', 443), ('169.254.169.254', 80), ('10.0.0.1', 443),
                          ('::ffff:127.0.0.1', 443), ('2002:7f00:1::', 443), ('ff02::1', 443),

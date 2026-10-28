@@ -28,6 +28,8 @@ def read_users(path):
     if len(raw) > 8 * 1024 * 1024:
         raise ValueError('access file too large')
     document = json.loads(raw)
+    if 'validUntil' in document and (type(document['validUntil']) is not int or document['validUntil'] <= time.time()):
+        return {}
     users = {}
     for inbound in document['inbounds']:
         if inbound.get('type') != 'tuic':

@@ -24,8 +24,15 @@ python3 -m py_compile "$root/proxy.py"
 install -d -m 0755 "$release"
 install -m 0755 "$root/dnstt-server" "$release/dnstt-server"
 install -m 0644 "$root/proxy.py" "$release/proxy.py"
-install -d -m 0700 /etc/levik-dnstt
+install -d -m 0750 -o root -g levik-tuic /etc/levik-dnstt
 install -m 0644 "$root/resolv.conf" /etc/levik-dnstt/resolv.conf
+python3 - <<'PY'
+import json, os, grp
+with open('/etc/levik-dnstt/access.json', 'x') as handle:
+    json.dump({'validUntil': 0, 'inbounds': []}, handle)
+os.chmod('/etc/levik-dnstt/access.json', 0o640)
+os.chown('/etc/levik-dnstt/access.json', 0, grp.getgrnam('levik-tuic').gr_gid)
+PY
 umask 077
 "$release/dnstt-server" -gen-key -privkey-file /etc/levik-dnstt/server.key -pubkey-file /etc/levik-dnstt/server.pub
 install -m 0644 "$root/levik-dnstt.service" /etc/systemd/system/levik-dnstt.service

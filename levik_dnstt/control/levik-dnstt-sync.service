@@ -1,0 +1,13 @@
+[Unit]
+Description=Levik DNS mobile entitlement sync
+After=docker.service network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I /opt/levik-dnstt-sync/sync.py
+Restart=always
+RestartSec=10
+NoNewPrivileges=yes
+PrivateTmp=yes
+[Install]
+WantedBy=multi-user.target

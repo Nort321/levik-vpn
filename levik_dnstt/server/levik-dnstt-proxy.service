@@ -10,6 +10,7 @@ Type=simple
 User=levik-tuic
 Group=levik-tuic
 ExecStart=/usr/bin/python3 /opt/levik-dnstt/releases/20261028-pilot1/proxy.py
+Environment=DNSTT_ACCESS_FILE=/etc/levik-dnstt/access.json
 Restart=on-failure
 RestartSec=10
 MemoryMax=96M
