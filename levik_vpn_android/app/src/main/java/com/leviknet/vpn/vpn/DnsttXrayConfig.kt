@@ -34,7 +34,9 @@ internal fun dnsttTcpConfig(base: String): String {
             }
         }),
         "tag" to JsonPrimitive("dnstt-dns-query"),
-        "disableFallback" to JsonPrimitive(true),
+        // With fallback disabled an unmatched name gets only the first server, fakedns,
+        // which Xray's own lookups skip: direct-routed names never resolved.
+        "disableFallback" to JsonPrimitive(false),
     ))
     val dnsOutbound = buildJsonObject {
         put("tag", "dnstt-dns")

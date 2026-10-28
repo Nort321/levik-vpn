@@ -43,6 +43,8 @@ class DnsttSupportTest {
         val resolvers = config.getValue("dns").jsonObject.getValue("servers").jsonArray
         assertEquals("fakedns", resolvers.first().jsonPrimitive.content)
         assertEquals(listOf("77.88.8.8", "77.88.8.1"), resolvers.drop(1).map { it.jsonObject.getValue("address").jsonPrimitive.content })
+        // Otherwise unmatched names reach only fakedns, which Xray's own lookups skip.
+        assertEquals("false", config.getValue("dns").jsonObject.getValue("disableFallback").jsonPrimitive.content)
         val pool = config.getValue("fakedns").jsonArray.single().jsonObject.getValue("ipPool").jsonPrimitive.content
         assertEquals(DNSTT_FAKE_IP_POOL, pool)
         assertEquals("AsIs", config.getValue("routing").jsonObject.getValue("domainStrategy").jsonPrimitive.content)
