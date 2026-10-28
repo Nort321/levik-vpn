@@ -31,6 +31,7 @@ import com.leviknet.vpn.vpn.ServerPinger
 import com.leviknet.vpn.vpn.SmartAuto
 import com.leviknet.vpn.vpn.SmartServerRanking
 import com.leviknet.vpn.vpn.TunnelServer
+import com.leviknet.vpn.vpn.relayHosts
 import com.leviknet.vpn.vpn.VpnConnectionState
 import com.leviknet.vpn.vpn.VpnController
 import com.leviknet.vpn.vpn.countryServers
@@ -562,12 +563,13 @@ class AppPlatform(
             pool.map { server -> async(Dispatchers.IO) { server.id to runCatching { ServerPinger.measure(server) }.getOrNull() } }
                 .awaitAll()
         }.toMap()
-        val target = smartAuto.rank(pool, measured).firstNotNullOfOrNull { ranked ->
+        val relays = relayHosts(servers)
+        val target = smartAuto.rank(pool, measured, relays = relays).firstNotNullOfOrNull { ranked ->
             pool.firstOrNull { it.id == ranked.id && it.id != current.id }
                 ?.takeIf { measured[it.id] != null || !ServerPinger.silenceMeansDown(it) }
                 ?.let { it to ranked.score }
         } ?: return
-        if (fullSince.containsKey(target.first.id) || !due(smartAuto.score(current, measured), target.second)) return
+        if (fullSince.containsKey(target.first.id) || !due(smartAuto.score(current, measured, relays), target.second)) return
         val snapshot = vpnController.state.value
         if (snapshot.state != VpnConnectionState.CONNECTED || snapshot.serverId != current.id) return
         AppLogger.i(TAG, "Smart Auto: moving off a full node")

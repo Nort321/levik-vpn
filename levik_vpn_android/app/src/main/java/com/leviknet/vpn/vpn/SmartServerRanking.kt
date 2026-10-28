@@ -3,6 +3,7 @@ package com.leviknet.vpn.vpn
 import com.leviknet.vpn.core.platform.ProtocolAdvice
 import java.nio.ByteBuffer
 import java.security.MessageDigest
+import java.util.Locale
 
 /** What Smart Auto knows about one server before connecting. */
 data class SmartCandidate(
@@ -80,6 +81,27 @@ object SmartServerRanking {
 
     /** A running connection moves only to a server this much better. */
     const val SWITCH_MARGIN = 0.75
+
+    /** What the path behind a relay entry adds to its ping: entry → hop abroad → the node. */
+    const val RELAY_EXTRA_MS = 120L
+
+    /**
+     * Hosts that servers of different countries share: a relay entry that
+     * forwards each port to another node. A ping only reaches the entry, a few
+     * milliseconds away inside Russia, so these servers looked faster than any
+     * direct one while their traffic still crosses two more hops.
+     * [servers] are pairs of host and country code.
+     */
+    fun relayHosts(servers: List<Pair<String?, String>>): Set<String> =
+        servers
+            .mapNotNull { (host, country) -> host?.lowercase(Locale.ROOT)?.let { it to country.uppercase(Locale.ROOT) } }
+            .groupBy({ it.first }, { it.second })
+            .filterValues { countries -> countries.toSet().size > 1 }
+            .keys
+
+    /** The latency Smart Auto ranks by: a relayed server pays for the path behind its entry. */
+    fun rankingLatency(measuredMs: Long?, relayed: Boolean): Long? =
+        if (measuredMs == null || !relayed) measuredMs else measuredMs + RELAY_EXTRA_MS
 
     /**
      * Best first. [spread] (0..1, see [spreadSeed]) picks among the servers

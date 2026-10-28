@@ -3,6 +3,7 @@ package com.leviknet.vpn.vpn
 import com.leviknet.vpn.core.platform.ProtocolAdvice
 import java.time.Instant
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -276,5 +277,35 @@ class SmartServerRankingTest {
         assertFalse(expired.isSignedInRelay(vkSession = true, now = now))
 
         assertFalse(server("lte", TunnelEngineKind.XRAY, TunnelServerCategory.MOBILE).isSignedInRelay(vkSession = true, now = now))
+    }
+
+    @Test
+    fun `a host shared by servers of different countries is a relay entry`() {
+        fun relayed(id: String, host: String, port: Int, country: String) = TunnelServer(
+            id, id, id, country,
+            JsonObject(mapOf("settings" to JsonObject(mapOf("address" to JsonPrimitive(host), "port" to JsonPrimitive(port))))),
+        )
+        val servers = listOf(
+            relayed("fr", "13.143.244.227", 8443, "FR"),
+            relayed("pl", "13.143.244.227", 8444, "PL"),
+            relayed("de-1", "de.example", 443, "DE"),
+            relayed("de-2", "DE.example", 8443, "DE"),
+        )
+        assertEquals(setOf("13.143.244.227"), relayHosts(servers))
+    }
+
+    @Test
+    fun `a relayed server pays for the path behind its entry`() {
+        assertEquals(14L + SmartServerRanking.RELAY_EXTRA_MS, SmartServerRanking.rankingLatency(14, relayed = true))
+        assertEquals(14L, SmartServerRanking.rankingLatency(14, relayed = false))
+        assertNull(SmartServerRanking.rankingLatency(null, relayed = true))
+        val ranked = SmartServerRanking.rank(
+            listOf(
+                candidate("cascade", latencyMs = SmartServerRanking.rankingLatency(14, relayed = true)),
+                candidate("direct", latencyMs = 60),
+            ),
+            advice = null,
+        )
+        assertEquals(listOf("direct", "cascade"), ranked.map(RankedServer::id))
     }
 }

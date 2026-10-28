@@ -57,6 +57,7 @@ import com.leviknet.vpn.data.hasUsableYandexAuth
 import com.leviknet.vpn.data.relayProfileRefreshDue
 import com.leviknet.vpn.vpn.YandexProviderAuth
 import com.leviknet.vpn.vpn.refreshYandexGuest
+import com.leviknet.vpn.vpn.relayHosts
 import com.leviknet.vpn.vpn.selectYandexGuestNetwork
 import com.leviknet.vpn.vpn.GameApps
 import com.leviknet.vpn.vpn.GameRuntimeStatus
@@ -2359,7 +2360,7 @@ class AppViewModel(
         val servers = profile.servers.filter { it.id in serverIds }
         val smartAuto = appPlatform?.smartAuto
         if (smartAuto != null && servers.all(TunnelServer::isSmartAutoCandidate)) {
-            return smartAuto.rank(servers, measured)
+            return smartAuto.rank(servers, measured, relays = relayHosts(profile.servers))
         }
         // Protocols that work on the user's operator first, unless none of them answers.
         val advised = RemoteConfigPolicy.candidates(servers, appPlatform?.protocolAdvice()) { it.telemetryProtocol().wire }

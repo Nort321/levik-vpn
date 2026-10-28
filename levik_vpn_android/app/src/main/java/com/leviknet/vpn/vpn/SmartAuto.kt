@@ -14,6 +14,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 import java.time.Instant
+import java.util.Locale
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -103,24 +104,29 @@ class SmartAuto(
         history.update { it.recordFailure(key, allowlistRecord(server), server.id, clock(), failedServerId = server.id) }
     }
 
-    /** Best first. [latencies] come from [ServerPinger]; [network] is the physical network, by default the current one. */
+    /**
+     * Best first. [latencies] come from [ServerPinger]; [network] is the physical network, by default the current one.
+     * [relays] are the relay entries among all the profile's servers, see [relayHosts]; a subset such as one
+     * country cannot tell them.
+     */
     fun rank(
         servers: List<TunnelServer>,
         latencies: Map<String, Long?>,
         network: Network? = null,
+        relays: Set<String> = relayHosts(servers),
     ): List<RankedServer> {
         val key = networkKey(network ?: physicalNetwork())
         val view = loadView()
         val snapshot = history.current()
         val now = clock()
-        val candidates = servers.map { server -> candidate(server, latencies, view, snapshot, key, now) }
+        val candidates = servers.map { server -> candidate(server, latencies, view, snapshot, key, now, relays) }
         return SmartServerRanking.rank(candidates, advice(), SmartServerRanking.spreadSeed(spreadSalt(), now))
     }
 
     /** [server]'s score as [rank] computes it, without the spread. */
-    fun score(server: TunnelServer, latencies: Map<String, Long?>, network: Network? = null): Double {
+    fun score(server: TunnelServer, latencies: Map<String, Long?>, relays: Set<String>, network: Network? = null): Double {
         val now = clock()
-        val candidate = candidate(server, latencies, loadView(), history.current(), networkKey(network ?: physicalNetwork()), now)
+        val candidate = candidate(server, latencies, loadView(), history.current(), networkKey(network ?: physicalNetwork()), now, relays)
         return SmartServerRanking.score(candidate, advice())
     }
 
@@ -131,12 +137,13 @@ class SmartAuto(
         snapshot: ProtocolHistory,
         key: String?,
         now: Long,
+        relays: Set<String>,
     ): SmartCandidate {
         val protocol = server.smartProtocol()
         return SmartCandidate(
             id = server.id,
             protocol = protocol,
-            latencyMs = latencies[server.id],
+            latencyMs = SmartServerRanking.rankingLatency(latencies[server.id], server.endpointHost() in relays),
             silenceMeansDown = ServerPinger.silenceMeansDown(server),
             load = SmartServerRanking.agedLoad(FavoriteNodes.load(view.load, server), view.ageMs),
             verdict = snapshot.verdict(key, protocol, now),
@@ -321,6 +328,12 @@ enum class TrafficCheckSize(val bytes: Int, val deadlineMs: Long) {
     /** Relays under allowlists are slow by design; they only need to carry traffic at all. */
     ALLOWLIST(bytes = 32 * 1024, deadlineMs = 12_000L),
 }
+
+/** The relay entries among [servers]: hosts that servers of different countries share. */
+fun relayHosts(servers: List<TunnelServer>): Set<String> =
+    SmartServerRanking.relayHosts(servers.map { it.endpointHost() to it.countryCode })
+
+private fun TunnelServer.endpointHost(): String? = ServerPinger.extractEndpoint(outbound)?.first?.lowercase(Locale.ROOT)
 
 /** Under allowlists the record is per server: the operator lets some addresses through. */
 private fun allowlistRecord(server: TunnelServer): String = "server:${server.id}"
