@@ -68,6 +68,24 @@ class Pacer:
             self.next = time.monotonic() + size / BYTES_PER_SECOND
 
 
+async def relay_dns_query(reader, writer, remote_reader, upstream):
+    """One TCP DNS question per stream: don't exhaust a DNS tunnel with idle sockets."""
+    prefix = await asyncio.wait_for(reader.readexactly(2), 15)
+    size = int.from_bytes(prefix, 'big')
+    if not 12 <= size <= 4096:
+        raise ValueError('invalid DNS question length')
+    question = await asyncio.wait_for(reader.readexactly(size), 15)
+    upstream.write(prefix + question)
+    await asyncio.wait_for(upstream.drain(), 5)
+    prefix = await asyncio.wait_for(remote_reader.readexactly(2), 10)
+    size = int.from_bytes(prefix, 'big')
+    if not 12 <= size <= 65535:
+        raise ValueError('invalid DNS answer length')
+    answer = await asyncio.wait_for(remote_reader.readexactly(size), 10)
+    writer.write(prefix + answer)
+    await asyncio.wait_for(writer.drain(), 15)
+
+
 class Proxy:
     def __init__(self, access_file):
         self.access_file = access_file
@@ -148,6 +166,9 @@ class Proxy:
                 remote_reader, upstream = await asyncio.wait_for(
                     asyncio.open_connection(addresses[0][4][0], port, limit=32768), 10)
                 writer.write(b'\x05\x00\x00\x01' + bytes(6)); await writer.drain()
+            if port == 53:
+                await relay_dns_query(reader, writer, remote_reader, upstream)
+                return
             async def copy(source, destination):
                 while data := await asyncio.wait_for(source.read(8192), 90):
                     await pacer.wait(len(data))

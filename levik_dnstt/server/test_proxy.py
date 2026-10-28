@@ -3,7 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from proxy import Proxy, public_target, read_users
+from proxy import Proxy, public_target, read_users, relay_dns_query
 
 IDENTITY = '123e4567e89b42d3a456426614174000'
 PASSWORD = 'p' * 32
@@ -25,6 +25,24 @@ class AccessTests(unittest.TestCase):
 
 
 class SocksTests(unittest.IsolatedAsyncioTestCase):
+    async def test_dns_stream_is_released_after_its_answer(self):
+        packet = bytes.fromhex('000181800001000000000000')
+        question = bytes.fromhex('000101000001000000000000')
+        remote_reader = asyncio.StreamReader()
+        remote_reader.feed_data(len(packet).to_bytes(2, 'big') + packet)
+        reader = asyncio.StreamReader()
+        reader.feed_data(len(question).to_bytes(2, 'big') + question)
+
+        class Writer:
+            def __init__(self): self.data = bytearray()
+            def write(self, data): self.data.extend(data)
+            async def drain(self): pass
+
+        upstream, downstream = Writer(), Writer()
+        # The remote side stays open: returning here must not wait for its EOF.
+        await asyncio.wait_for(relay_dns_query(reader, downstream, remote_reader, upstream), 1)
+        self.assertEqual(bytes(upstream.data), len(question).to_bytes(2, 'big') + question)
+        self.assertEqual(bytes(downstream.data), len(packet).to_bytes(2, 'big') + packet)
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.path = Path(self.temp.name) / 'access.json'
