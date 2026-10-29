@@ -33,9 +33,13 @@ class XrayRuntime(
     private val lifecycleLock = ReentrantLock()
     private val ownership = CoreOwnershipRegistry()
     private val activeController = AtomicReference<DialerController?>(null)
+    private val activeListenerController = AtomicReference<DialerController?>(null)
     private val processController = object : DialerController {
         override fun protectFd(fd: Long): Boolean =
             activeController.get()?.protectFd(fd) ?: false
+    }
+    private val processListenerController = object : DialerController {
+        override fun protectFd(fd: Long): Boolean = activeListenerController.get()?.protectFd(fd) ?: false
     }
     private var activeOwner: Long? = null
     private var activeLease: Long? = null
@@ -162,6 +166,7 @@ class XrayRuntime(
         controller: DialerController,
         dnsServer: String?,
         replaceActive: Boolean = true,
+        listenerController: DialerController = controller,
     ): Long = lifecycleLock.withLock {
         check(ownership.isCurrent(owner)) { "VPN core owner is stale" }
         check(replaceActive || activeLease == null) { "A probe cannot replace an active VPN core" }
@@ -178,6 +183,7 @@ class XrayRuntime(
         }
         try {
             activeController.set(controller)
+            activeListenerController.set(listenerController)
             // Xray appends these process-wide callbacks; stopping a core does not remove them.
             // Keep one forwarding callback per socket type across every connection/reconnect.
             if (!dialerControllerRegistered) {
@@ -185,7 +191,7 @@ class XrayRuntime(
                 dialerControllerRegistered = true
             }
             if (!listenerControllerRegistered) {
-                LibXray.registerListenerController(processController)
+                LibXray.registerListenerController(processListenerController)
                 listenerControllerRegistered = true
             }
             // This override resolves upstream hostnames before a tunnel exists. It must use
@@ -208,6 +214,7 @@ class XrayRuntime(
             }
         } catch (error: Throwable) {
             activeController.compareAndSet(controller, null)
+            activeListenerController.compareAndSet(listenerController, null)
             runCatching { stopUnownedCore() }
             LibXray.resetDNS()
             throw error
@@ -238,6 +245,7 @@ class XrayRuntime(
             invokeForData(request)
         } finally {
             activeController.set(null)
+            activeListenerController.set(null)
             LibXray.resetDNS()
         }
     }

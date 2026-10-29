@@ -33,6 +33,14 @@ import com.leviknet.vpn.core.network.ApiException
 import com.leviknet.vpn.core.network.WhitelistMode
 import com.leviknet.vpn.core.platform.FavoriteNodes
 import com.leviknet.vpn.core.security.SecureFileStore
+import com.leviknet.vpn.core.sharing.SharingController
+import com.leviknet.vpn.core.sharing.SharingConfig
+import com.leviknet.vpn.core.sharing.SharingHostSession
+import com.leviknet.vpn.core.sharing.SharingInvitation
+import com.leviknet.vpn.core.sharing.SharingGuestState
+import com.leviknet.vpn.core.sharing.SharingNetworks
+import com.leviknet.vpn.core.sharing.SharingStateStore
+import com.leviknet.vpn.core.sharing.freeLocalPort
 import com.leviknet.vpn.core.telemetry.AttemptCause
 import com.leviknet.vpn.core.telemetry.AttemptStage
 import com.leviknet.vpn.core.telemetry.EndBy
@@ -53,6 +61,10 @@ import com.leviknet.vpn.data.isActiveAt
 import com.leviknet.vpn.data.isRelayAccessDenied
 import java.net.DatagramSocket
 import java.net.HttpURLConnection
+import java.net.Inet4Address
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.Proxy
 import java.net.Socket
 import java.net.URL
 import java.time.Instant
@@ -162,6 +174,13 @@ class LevikVpnService : VpnService() {
     @Volatile
     private var pendingRegularNetwork: Network? = null
     private var trafficCheckJob: Job? = null
+    @Volatile private var sharingHost: SharingHostSession? = null
+    private var sharingHostDeadlineMs = 0L
+    @Volatile private var sharingGuest: SharingInvitation? = null
+    private var sharingMonitorJob: Job? = null
+    private var sharingGuestHealthPort = 0
+    private var sharingGuestDeadlineMs = 0L
+    private var sharingTrafficControl: SharingTrafficControl? = null
     /** Smart Auto's protocol ladder since the user connected; a new network starts it over. */
     private val smartLadder = SmartLadder()
     private val freezeDetector = TunnelFreezeDetector()
@@ -249,6 +268,231 @@ class LevikVpnService : VpnService() {
         }
     }
 
+    private fun clearSharing() {
+        sharingTrafficControl?.close()
+        sharingTrafficControl = null
+        sharingMonitorJob?.cancel()
+        sharingMonitorJob = null
+        sharingHost = null
+        sharingHostDeadlineMs = 0L
+        sharingGuest = null
+        sharingGuestHealthPort = 0
+        SharingStateStore.clear()
+    }
+
+    private fun sharingError(message: String) {
+        SharingStateStore.update { it.copy(busy = false, error = message) }
+        if (!coreRunning && connectionJob?.isActive != true && sharingGuest == null) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
+    }
+
+    private fun handleSharingCommand(action: String, intent: Intent?) {
+        when (action) {
+            SharingController.START_HOST -> {
+                if (BuildConfig.IS_PLAY_DISTRIBUTION || !coreRunning || lockdownActive || sharingGuest != null ||
+                    currentServer?.engine != TunnelEngineKind.XRAY || serviceCommands.isStopping) {
+                    sharingError("Сначала подключите обычный VPN или LTE-сервер Xray. Раздача этого режима пока недоступна.")
+                    return
+                }
+                val address = intent?.getStringExtra(SharingController.ADDRESS).orEmpty()
+                val host = runCatching { SharingHostSession.create(address, Build.MODEL, filesDir) }.getOrNull()
+                if (host == null) { sharingError("Не удалось открыть раздачу. Включите точку доступа и выберите её текущий адрес."); return }
+                sharingHost = host
+                sharingHostDeadlineMs = SystemClock.elapsedRealtime() + SharingInvitation.MAX_LIFETIME_MS
+                SharingStateStore.update { it.copy(busy = true, error = null, host = host.snapshot(), guest = null) }
+                restartSharingHost()
+            }
+            SharingController.STOP_HOST -> {
+                if (sharingHost == null) {
+                    SharingStateStore.update { it.copy(host = null, busy = false) }
+                    if (!coreRunning && sharingGuest == null && connectionJob?.isActive != true) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+                    return
+                }
+                sharingHost = null
+                SharingStateStore.update { it.copy(host = null, busy = true, error = null) }
+                restartSharingHost()
+            }
+            SharingController.CONNECT_GUEST -> {
+                if (BuildConfig.IS_PLAY_DISTRIBUTION) { sharingError("Гостевой режим доступен в прямой версии Levik"); return }
+                val invite = runCatching { SharingInvitation.parse(intent?.getStringExtra(SharingController.INVITATION).orEmpty()) }.getOrNull()
+                if (invite == null) { sharingError("Приглашение недействительно или истекло. Попросите владельца показать новый QR."); return }
+                if (guestWifiNetwork(invite.host) == null) { sharingError("Подключитесь к Wi-Fi телефона владельца и повторите подключение."); return }
+                clearSharing()
+                sharingGuest = invite
+                sharingGuestDeadlineMs = SystemClock.elapsedRealtime() + (invite.expiresAt - System.currentTimeMillis()).coerceAtLeast(0)
+                serviceCommands.requestConnection(true)
+                connectionJob?.cancel()
+                reconnectJob?.cancel()
+                pauseJob?.cancel()
+                SharingStateStore.update { it.copy(busy = true, guest = SharingGuestState(invite.name, invite.expiresAt)) }
+                connectionJob = serviceScope.launch {
+                    stopConnection(stopService = false)
+                    connectGuestSession(invite)
+                }
+            }
+            SharingController.DISCONNECT_GUEST -> {
+                if (sharingGuest == null) {
+                    if (!coreRunning && connectionJob?.isActive != true) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+                    return
+                }
+                clearSharing()
+                serviceCommands.requestConnection(false)
+                connectionJob?.cancel()
+                serviceCommands.enqueueStop { stopConnection(stopService = true) }
+            }
+        }
+    }
+
+    private fun restartSharingHost() {
+        connectionJob?.cancel()
+        reconnectJob?.cancel()
+        retireHotSwitch()
+        connectionJob = serviceScope.launch {
+            stopConnection(stopService = false)
+            connect()
+            SharingStateStore.update { it.copy(busy = false,
+                error = if (sharingHost != null && !coreRunning) "Раздача приостановлена: восстановите VPN или остановите раздачу." else it.error) }
+        }
+    }
+
+    private fun startHostSharingMonitor(host: SharingHostSession) {
+        sharingMonitorJob?.cancel()
+        val deadline = sharingHostDeadlineMs
+        sharingMonitorJob = serviceScope.launch {
+            while (sharingHost === host && isActive) {
+                delay(1_000)
+                if (SystemClock.elapsedRealtime() >= deadline || host.invitation.host !in SharingNetworks.localAddresses()) {
+                    handleSharingCommand(SharingController.STOP_HOST, null)
+                    SharingStateStore.update { it.copy(error = "Раздача завершена: истекло время или изменилась точка доступа.") }
+                    return@launch
+                }
+            }
+        }
+    }
+
+    /** A guest relay is reachable only through its Wi-Fi subnet, even when Android prefers LTE. */
+    private fun guestWifiNetwork(host: String): Network? {
+        val manager = getSystemService(ConnectivityManager::class.java) ?: return null
+        val target = runCatching { InetAddress.getByName(host).address }.getOrNull()?.takeIf { it.size == 4 } ?: return null
+        return manager.allNetworks.firstOrNull { network ->
+            val caps = manager.getNetworkCapabilities(network)
+            caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true && !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
+                manager.getLinkProperties(network)?.linkAddresses.orEmpty().any { local ->
+                    val bytes = local.address.address
+                    local.address is Inet4Address && bytes.indices.all { index ->
+                        val bits = (local.prefixLength - index * 8).coerceIn(0, 8)
+                        val mask = (0xff shl (8 - bits)) and 0xff
+                        (bytes[index].toInt() and mask) == (target[index].toInt() and mask)
+                    }
+                }
+        }
+    }
+
+    private suspend fun connectGuestSession(invite: SharingInvitation) = connectionMutex.withLock {
+        try {
+            check(sharingGuest === invite && !destroyed.get())
+            checkDisclosureConsent()
+            val network = guestWifiNetwork(invite.host) ?: error("wifi unavailable")
+            sharingGuestHealthPort = freeLocalPort()
+            val tun = Builder().setSession("Levik · ${invite.name}").setMtu(1400)
+                .addAddress("10.89.0.2", 30).addRoute("0.0.0.0", 0)
+                .addDnsServer("1.1.1.1").addDnsServer("8.8.8.8")
+                // Transport sockets belong to Levik, are excluded from TUN and bound to Wi-Fi.
+                // No IPv6 address/route/allowFamily: Android blocks IPv6 instead of leaking it.
+                .addDisallowedApplication(packageName).setBlocking(true).establish()
+                ?: error("vpn permission unavailable")
+            tunInterface = tun
+            startGuestCore(invite, network, tun)
+            currentServerName = invite.name
+            acquireWakeLock()
+            SharingStateStore.update { it.copy(busy = false, error = null) }
+            VpnStateStore.set(coreOwner, VpnSnapshot(state = VpnConnectionState.CONNECTING, serverName = invite.name))
+            showForeground(VpnConnectionState.CONNECTING, invite.name)
+            startGuestMonitor(invite)
+        } catch (error: CancellationException) {
+            stopCoreAndTun()
+            throw error
+        } catch (_: Exception) {
+            // Keep an established TUN present: failed native start must not restore direct access.
+            coreRunning = false
+            SharingStateStore.update { it.copy(busy = false, error = "Не удалось подключиться к телефону. Проверьте Wi-Fi и попросите владельца обновить приглашение.", guest = it.guest?.copy(connected = false)) }
+            VpnStateStore.set(coreOwner, VpnSnapshot(state = if (tunInterface != null) VpnConnectionState.LOCKDOWN else VpnConnectionState.ERROR, failure = VpnFailure.NETWORK))
+            showForeground(VpnConnectionState.LOCKDOWN, invite.name)
+        }
+    }
+
+    private suspend fun startGuestCore(invite: SharingInvitation, network: Network, tun: ParcelFileDescriptor) {
+        require(SystemClock.elapsedRealtime() < sharingGuestDeadlineMs)
+        currentEngine?.stop(coreOwner, currentPreparedSession, coreLease)
+        coreRunning = false
+        coreLease = null
+        val request = TunnelEngineRequest.Xray(
+            XrayConfigFactory { fd -> SharingConfig.guest(invite, fd, sharingGuestHealthPort, container.json) },
+            xrayTunPlan(primaryDns = "1.1.1.1", secondaryDns = "8.8.8.8", ipv6Enabled = false),
+        )
+        val engine = container.tunnelEngineRegistry.require(TunnelEngineKind.XRAY)
+        val prepared = engine.prepare(coreOwner, request, TunnelEngineEnvironment(
+            network = network,
+            protector = TunnelFileDescriptorProtector { fd -> protectTunnelSocket(fd, requireNetworkBinding = true,
+                protect = ::protect, bind = { borrowed -> ParcelFileDescriptor.fromFd(borrowed).use { network.bindSocket(it.fileDescriptor) } },
+                onBindingFailure = {}) },
+            dnsServer = null,
+            unboundSocketProtector = { fd -> protectUnboundTunnelSocket(fd, ::protect) },
+            listenerSocketProtector = { fd -> protectUnboundTunnelSocket(fd, ::protect) },
+        ))
+        currentEngineRequest = request
+        currentPreparedSession = prepared
+        currentEngine = engine
+        currentNetwork = network
+        underlyingNetwork.set(network)
+        check(setUnderlyingNetworks(arrayOf(network)))
+        coreLease = engine.start(coreOwner, prepared, AndroidTunnelFileDescriptorHandle(tun))
+        coreRunning = true
+    }
+
+    private fun startGuestMonitor(invite: SharingInvitation) {
+        sharingMonitorJob?.cancel()
+        sharingMonitorJob = serviceScope.launch {
+            while (sharingGuest === invite && isActive) {
+                val expired = SystemClock.elapsedRealtime() >= sharingGuestDeadlineMs
+                val network = if (expired) null else guestWifiNetwork(invite.host)
+                if (network == null) {
+                    connectionMutex.withLock {
+                        currentEngine?.stop(coreOwner, currentPreparedSession, coreLease)
+                        coreLease = null; coreRunning = false; currentNetwork = null
+                    }
+                } else if (!coreRunning || currentNetwork != network) {
+                    connectionMutex.withLock {
+                        runCatching { tunInterface?.let { startGuestCore(invite, network, it) } }
+                    }
+                }
+                val connected = !expired && coreRunning && guestProbe()
+                if (sharingGuest !== invite) return@launch
+                SharingStateStore.update { it.copy(guest = it.guest?.copy(connected = connected), error = when {
+                    expired -> "Время гостевого доступа истекло. Получите новое приглашение или отключите гостевой режим."
+                    connected -> null
+                    else -> "Ожидаем телефон владельца. Гостевой VPN не переключается на обычный интернет."
+                }) }
+                VpnStateStore.update(coreOwner) { it.copy(state = if (connected) VpnConnectionState.CONNECTED else VpnConnectionState.LOCKDOWN, serverName = invite.name) }
+                showForeground(if (connected) VpnConnectionState.CONNECTED else VpnConnectionState.LOCKDOWN, invite.name)
+                if (expired) return@launch
+                delay(5_000)
+            }
+        }
+    }
+
+    private fun guestProbe(): Boolean = runCatching {
+        val connection = URL("https://captive.apple.com/hotspot-detect.html")
+            .openConnection(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", sharingGuestHealthPort))) as HttpURLConnection
+        try {
+            connection.connectTimeout = 3_000; connection.readTimeout = 3_000
+            connection.instanceFollowRedirects = false; connection.useCaches = false
+            connection.responseCode == 200
+        } finally { connection.disconnect() }
+    }.getOrDefault(false)
+
     override fun onCreate() {
         super.onCreate()
         AppLogger.i(LOG_TAG, "LevikVpnService onCreate")
@@ -267,6 +511,14 @@ class LevikVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         serviceCommands.onStart(startId)
         val action = intent?.action ?: ACTION_CONNECT
+        if (action in SHARING_ACTIONS) {
+            showForeground(if (coreRunning) VpnConnectionState.CONNECTED else VpnConnectionState.CONNECTING, currentServerName)
+            handleSharingCommand(action, intent)
+            return START_NOT_STICKY
+        }
+        // Account refresh, auto-connect and server changes must never replace a guest's local tunnel.
+        if (sharingGuest != null && (action != ACTION_DISCONNECT ||
+                intent?.getStringExtra(EXTRA_END_BY) == EndBy.SYSTEM.wire)) return START_NOT_STICKY
         when (action) {
             ACTION_DISCONNECT -> serviceCommands.requestConnection(false)
             ACTION_CONNECT, ACTION_RESUME, ACTION_RECONFIGURE ->
@@ -277,6 +529,7 @@ class LevikVpnService : VpnService() {
         AppLogger.d(LOG_TAG, "onStartCommand action: $action")
         when (action) {
             ACTION_DISCONNECT -> {
+                clearSharing()
                 retireHotSwitch()
                 val endBy = EndBy.entries.firstOrNull { it.wire == intent?.getStringExtra(EXTRA_END_BY) }
                 if (endBy == null) {
@@ -448,6 +701,7 @@ class LevikVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        clearSharing()
         retireHotSwitch()
         serviceCommands.requestConnection(false)
         container.appPlatform.smartAuto.liveSessionStopped(coreOwner)
@@ -533,6 +787,7 @@ class LevikVpnService : VpnService() {
     }
 
     private suspend fun connectAfterStop(required: RequiredConnectionTarget? = null): Unit = connectionMutex.withLock connection@{
+        if (sharingGuest != null) return@connection
         coroutineContext.ensureActive()
         val generation = serviceCommands.connectionGeneration ?: return@connection
         if (destroyed.get()) return@connection
@@ -585,6 +840,13 @@ class LevikVpnService : VpnService() {
                     // Levik Game alone has no ordinary servers: Game is the subscription's only server.
                     ?: profile.servers.singleOrNull { it.engine == TunnelEngineKind.LEVIK_GAME }
                     ?: error("Tunnel profile has no server eligible for automatic selection")
+            }
+            if (sharingHost != null && (selected.engine != TunnelEngineKind.XRAY ||
+                    SystemClock.elapsedRealtime() >= sharingHostDeadlineMs ||
+                    sharingHost?.invitation?.host !in SharingNetworks.localAddresses())) {
+                sharingHost = null
+                SharingStateStore.update { it.copy(host = null, busy = false,
+                    error = "Раздача завершена: изменился режим VPN, адрес точки доступа или истекло время.") }
             }
             progress.reach(AttemptStage.PROFILE, "profile_expired")
             val yandexExpiry = selected.yandexConfig?.let {
@@ -647,7 +909,7 @@ class LevikVpnService : VpnService() {
                 }
             } else null
 
-            if (fallbackAttempt == null && container.settings.automaticServer.value && selected.isSmartAutoCandidate()) {
+            if (sharingHost == null && fallbackAttempt == null && container.settings.automaticServer.value && selected.isSmartAutoCandidate()) {
                 container.appPlatform.refreshNodeLoad(maxAgeMs = 15_000L, waitMs = 1_200L)
                 val probeBootstrapDns = bootstrapDnsServer ?: networkMonitor.awaitBootstrapDnsServer(network)
                 val pool = container.appPlatform.avoidMaintenance(profile.servers.filter(TunnelServer::isSmartAutoCandidate))
@@ -695,7 +957,7 @@ class LevikVpnService : VpnService() {
             telemetry.record { it.attempt(selected.name, selected.telemetryProtocol(), attemptCause) }
 
             var liveProfile = profile
-            val liveOriginals = if (selected.isSmartAutoCandidate() &&
+            val liveOriginals = if (sharingHost == null && selected.isSmartAutoCandidate() &&
                 (selected.engine == TunnelEngineKind.XRAY || container.settings.automaticServer.value))
                 SmartRouteSelection.candidates(listOf(selected) + profile.servers.filter { it.id != selected.id && it.isSmartAutoCandidate() &&
                     (it.engine == TunnelEngineKind.XRAY || container.settings.automaticServer.value) && !container.appPlatform.underMaintenance(it) })
@@ -771,7 +1033,11 @@ class LevikVpnService : VpnService() {
                 xhttpMuxHosts = container.appPlatform.xhttpMuxHosts(),
                 serviceRouteSession = routes,
             )
-                return if (live == null) base else container.json.encodeToString(JsonObject.serializer(), live.apply(container.json.parseToJsonElement(base).jsonObject))
+                val routed = if (live == null) base else container.json.encodeToString(JsonObject.serializer(), live.apply(container.json.parseToJsonElement(base).jsonObject))
+                return sharingHost?.let { host ->
+                    require(selected.engine == TunnelEngineKind.XRAY) { "Выбранный режим VPN пока не поддерживает раздачу" }
+                    SharingConfig.host(routed, host, selected.tag, container.json)
+                } ?: routed
             }
 
             val request = if (live != null) TunnelEngineRequest.Xray(
@@ -904,6 +1170,7 @@ class LevikVpnService : VpnService() {
                     dnsServer = bootstrapDnsServer,
                     unboundSocketProtector = { fd -> protectUnboundTunnelSocket(fd, ::protect) },
                     terminalFailureHandler = { code -> onTunnelEngineTerminalFailure(code, engineAttempt) },
+                    listenerSocketProtector = if (sharingHost != null) ({ fd -> protectUnboundTunnelSocket(fd, ::protect) }) else null,
                 ),
             )
             val acceptedPrepared = lifecycleGate.withLock {
@@ -960,6 +1227,7 @@ class LevikVpnService : VpnService() {
             coroutineContext.ensureActive()
             checkConnectionDeadline(connectionExpiryDeadline)
             coreRunning = true
+            sharingHost?.let { sharingTrafficControl = SharingTrafficControl(it.controlPath) }
             startHotSwitchOwner(network, generation)
             if (routes != null) {
                 val (splitMode, splitPackages) = withAccountDirectApps(
@@ -1029,6 +1297,10 @@ class LevikVpnService : VpnService() {
                 return@connection
             }
             acquireWakeLock()
+            sharingHost?.let { host ->
+                SharingStateStore.update { it.copy(busy = false, error = null, host = host.snapshot(ready = true)) }
+                startHostSharingMonitor(host)
+            }
             // Android has no end-to-end check at startup: "connected" means the core started.
             telemetry.record { it.connected() }
             telemetry.flushSoon()
@@ -1164,6 +1436,7 @@ class LevikVpnService : VpnService() {
         preserveError: Boolean = false,
         stopStartId: Int? = null,
     ) = connectionMutex.withLock {
+        if (stopService) clearSharing()
         lockdownActive = false
         if (!preserveError) {
             VpnStateStore.update(coreOwner) { state ->
@@ -1208,6 +1481,11 @@ class LevikVpnService : VpnService() {
     }
 
     private fun stopCoreAndTun() {
+        sharingTrafficControl?.close()
+        sharingTrafficControl = null
+        sharingMonitorJob?.cancel()
+        sharingMonitorJob = null
+        SharingStateStore.update { state -> state.copy(host = state.host?.copy(ready = false), guest = state.guest?.copy(connected = false)) }
         retireHotSwitch()
         container.appPlatform.smartAuto.liveSessionStopped(coreOwner)
         smartAutoLiveRuntime?.close()
@@ -1440,6 +1718,9 @@ class LevikVpnService : VpnService() {
     }
 
     private fun startSmartAutoLive(network: Network, generation: Long) {
+        // Sharing inbounds bypass the owner's TUN counters. Until per-inbound accounting is
+        // available, suspend optimization for the entire sharing session (failure recovery stays).
+        if (sharingHost != null || sharingGuest != null) return
         val config = smartAutoLiveConfig ?: return
         val lease = coreLease
         container.appPlatform.smartAuto.liveSessionStarted(coreOwner)
@@ -1925,7 +2206,7 @@ class LevikVpnService : VpnService() {
     }
 
     private fun onNetworkAvailable(network: Network) {
-        if (destroyed.get()) return
+        if (destroyed.get() || sharingGuest != null) return
         // Capability updates repeat this callback; only a newly usable network is an event.
         if (telemetryNetworks.add(network)) {
             telemetry.record { it.network(networkType(network), NetworkState.AVAILABLE) }
@@ -1935,7 +2216,7 @@ class LevikVpnService : VpnService() {
     }
 
     private fun onNetworkLost(network: Network) {
-        if (destroyed.get()) return
+        if (destroyed.get() || sharingGuest != null) return
         if (telemetryNetworks.remove(network)) {
             telemetry.record { it.network(NetworkType.UNKNOWN, NetworkState.LOST) }
         }
@@ -1944,9 +2225,10 @@ class LevikVpnService : VpnService() {
     }
 
     private fun handleUnderlyingNetworkChange() {
+        if (sharingGuest != null) return
         val generation = serviceCommands.connectionGeneration ?: return
         serviceScope.launch {
-            if (!serviceCommands.permitsAutomaticConnection(generation)) return@launch
+            if (sharingGuest != null || !serviceCommands.permitsAutomaticConnection(generation)) return@launch
             val requirement = currentServer?.networkRequirement ?: return@launch
             val preferred = networkMonitor.activeNetwork()
             val returningToRegular = preferred != null && shouldReturnToRegularNetwork(preferred)
@@ -2151,17 +2433,19 @@ class LevikVpnService : VpnService() {
     }
 
     private fun scheduleReconnect(cause: AttemptCause) {
+        if (sharingGuest != null) return
         val generation = serviceCommands.connectionGeneration ?: return
         if (destroyed.get()) return
         serviceScope.launch {
             connectionMutex.withLock {
-                if (destroyed.get() || !serviceCommands.permitsAutomaticConnection(generation)) return@withLock
+                if (destroyed.get() || sharingGuest != null || !serviceCommands.permitsAutomaticConnection(generation)) return@withLock
                 scheduleReconnectLocked(cause)
             }
         }
     }
 
     private fun scheduleReconnectLocked(cause: AttemptCause) {
+        if (sharingGuest != null) return
         val generation = serviceCommands.connectionGeneration ?: return
         if (!serviceCommands.permitsAutomaticConnection(generation)) return
         reconnectJob?.cancel()
@@ -3394,8 +3678,13 @@ class LevikVpnService : VpnService() {
         statsJob = serviceScope.launch {
             val uid = Process.myUid()
             val startedAt = SystemClock.elapsedRealtime()
-            val initialRx = supportedTrafficValue(TrafficStats.getUidRxBytes(uid))
-            val initialTx = supportedTrafficValue(TrafficStats.getUidTxBytes(uid))
+            val shared = sharingHost != null
+            fun counters(): Pair<Long, Long>? = if (shared) {
+                sharingTrafficControl?.counters()?.let { it.downlink to it.uplink }
+            } else supportedTrafficValue(TrafficStats.getUidRxBytes(uid)) to supportedTrafficValue(TrafficStats.getUidTxBytes(uid))
+            val initial = counters() ?: (0L to 0L)
+            val initialRx = initial.first
+            val initialTx = initial.second
             var lastRx = initialRx
             var lastTx = initialTx
             var lastSampleAt = startedAt
@@ -3403,8 +3692,11 @@ class LevikVpnService : VpnService() {
             while (true) {
                 delay(STATS_INTERVAL_MS)
                 val now = SystemClock.elapsedRealtime()
-                val rx = supportedTrafficValue(TrafficStats.getUidRxBytes(uid))
-                val tx = supportedTrafficValue(TrafficStats.getUidTxBytes(uid))
+                // Forwarded bytes appear on both LAN and WAN in UID totals. Read each real
+                // inbound exactly once; unavailable stats never fall back to double counting.
+                val sample = counters() ?: continue
+                val rx = sample.first
+                val tx = sample.second
                 val elapsedMs = (now - lastSampleAt).coerceAtLeast(1)
                 val rxRate = ((rx - lastRx).coerceAtLeast(0) * 1000L) / elapsedMs
                 val txRate = ((tx - lastTx).coerceAtLeast(0) * 1000L) / elapsedMs
@@ -3628,6 +3920,8 @@ class LevikVpnService : VpnService() {
     }
 
     companion object {
+        private val SHARING_ACTIONS = setOf(SharingController.START_HOST, SharingController.STOP_HOST,
+            SharingController.CONNECT_GUEST, SharingController.DISCONNECT_GUEST)
         const val ACTION_CONNECT = "com.leviknet.vpn.action.CONNECT"
         const val ACTION_DISCONNECT = "com.leviknet.vpn.action.DISCONNECT"
         const val ACTION_RECONNECT = "com.leviknet.vpn.action.RECONNECT"

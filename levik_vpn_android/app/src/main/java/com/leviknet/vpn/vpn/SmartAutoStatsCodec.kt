@@ -7,13 +7,16 @@ internal data class SmartAutoTrafficCounters(val uplink: Long, val downlink: Lon
 
 internal object SmartAutoStatsCodec {
     private const val PREFIX = "inbound>>>levik-tun-in>>>traffic>>>"
-    fun request(): ByteArray {
-        val value = PREFIX.toByteArray(Charsets.UTF_8)
+    fun request(pattern: String = PREFIX): ByteArray {
+        val value = pattern.toByteArray(Charsets.UTF_8)
+        require(value.size in 1..127)
         val body = byteArrayOf(10, value.size.toByte()) + value
         return ByteBuffer.allocate(body.size + 5).put(0).putInt(body.size).put(body).array()
     }
 
-    fun response(frame: ByteArray): SmartAutoTrafficCounters? = runCatching {
+    fun response(frame: ByteArray, inboundTags: Set<String> = setOf("levik-tun-in")): SmartAutoTrafficCounters? = runCatching {
+        require(inboundTags.isNotEmpty() && inboundTags.size <= 8 && inboundTags.all { it.matches(Regex("[a-z0-9-]{1,64}")) })
+        val prefixes = inboundTags.map { "inbound>>>$it>>>traffic>>>" }
         require(frame.size in 5..4096 && frame[0] == 0.toByte())
         require(ByteBuffer.wrap(frame, 1, 4).int == frame.size - 5)
         val input = Reader(frame.copyOfRange(5, frame.size))
@@ -30,13 +33,19 @@ internal object SmartAutoStatsCodec {
                 16 -> { require(!valueSeen); value = stat.varint(); valueSeen = true }
                 else -> stat.skip(field and 7)
             }
-            if (name == "${PREFIX}uplink" || name == "${PREFIX}downlink") {
+            if (prefixes.any { name == "${it}uplink" || name == "${it}downlink" }) {
                 require(value >= 0 && name !in values)
                 values[requireNotNull(name)] = value
             }
         }
-        val up = values["${PREFIX}uplink"] ?: return@runCatching null
-        val down = values["${PREFIX}downlink"] ?: return@runCatching null
+        var up = 0L
+        var down = 0L
+        for (prefix in prefixes) {
+            val nextUp = values["${prefix}uplink"] ?: return@runCatching null
+            val nextDown = values["${prefix}downlink"] ?: return@runCatching null
+            require(up <= Long.MAX_VALUE - nextUp && down <= Long.MAX_VALUE - nextDown)
+            up += nextUp; down += nextDown
+        }
         require(up <= Long.MAX_VALUE - down)
         SmartAutoTrafficCounters(up, down)
     }.getOrNull()

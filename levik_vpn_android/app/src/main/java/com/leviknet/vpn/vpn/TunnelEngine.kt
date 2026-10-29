@@ -160,6 +160,8 @@ data class TunnelEngineEnvironment(
     val unboundSocketProtector: (Long) -> Boolean,
     /** Stable-code callback for an engine that fails after [TunnelEngineAdapter.start] returns. */
     val terminalFailureHandler: (String) -> Unit = {},
+    /** LAN listeners must not be bound to the cellular network used by outbound sockets. */
+    val listenerSocketProtector: ((Long) -> Boolean)? = null,
 )
 
 /** Opaque engine-owned result of prepare. It may contain a live native handshake/session token. */
@@ -351,6 +353,9 @@ class XrayTunnelEngineAdapter(
             configJson = config,
             controller = controller,
             dnsServer = xray.environment.dnsServer,
+            listenerController = xray.environment.listenerSocketProtector?.let { protect ->
+                object : DialerController { override fun protectFd(fd: Long): Boolean = protect(fd) }
+            } ?: controller,
         )
     }
 

@@ -209,6 +209,7 @@ import com.google.zxing.qrcode.QRCodeWriter
 @Composable
 fun LevikVpnApp(viewModel: AppViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val sharing by com.leviknet.vpn.core.sharing.SharingStateStore.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val problem = state.problem ?: state.message?.asProblem()
     val message = state.message?.takeIf { it.asProblem() == null }?.localized()
@@ -242,6 +243,9 @@ fun LevikVpnApp(viewModel: AppViewModel) {
     var showLogsDialog by remember { mutableStateOf(false) }
     var showDevicesDialog by remember { mutableStateOf(false) }
     var showActivationScanner by remember { mutableStateOf(false) }
+    var showSharing by remember { mutableStateOf(false) }
+    var showSharingScanner by remember { mutableStateOf(false) }
+    var sharingInvitation by remember { mutableStateOf<String?>(null) }
     var selectedSubscriptionForDevices by remember { mutableStateOf<SubscriptionSummary?>(null) }
     var showClearTrafficHistoryDialog by remember { mutableStateOf(false) }
 
@@ -285,6 +289,9 @@ fun LevikVpnApp(viewModel: AppViewModel) {
             LocalContentColor provides MaterialTheme.colorScheme.onBackground,
         ) {
             when {
+                !BuildConfig.IS_PLAY_DISTRIBUTION && sharing.guest != null -> {
+                    com.leviknet.vpn.ui.sharing.SharingGuestScreen(sharing, onManage = { showSharing = true })
+                }
                 state.session == SessionStatus.Loading -> LoadingScreen()
                 state.session == SessionStatus.SignedOut && state.profile == null -> LoginScreen(
                     appIcon = state.appIcon,
@@ -293,6 +300,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     onTelegramLogin = viewModel::beginTelegramLogin,
                     onWebsiteLogin = viewModel::beginWebsiteLogin,
                     onQrLogin = { showActivationScanner = true },
+                    onReceiveInternet = { showSharing = true },
                     onDeviceTrial = viewModel::activateDeviceTrial,
                     onLteTrial = viewModel::activateLteTrial,
                     onFreeProxy = viewModel::openFreeProxyBot,
@@ -406,6 +414,9 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     onSettingsSyncChanged = viewModel::setSettingsSyncEnabled,
                     onSharePresenceChanged = viewModel::setSharePresence,
                     onSleepAtHomeChanged = viewModel::setSleepAtHome,
+                    sharingCard = {
+                        if (!BuildConfig.IS_PLAY_DISTRIBUTION) com.leviknet.vpn.ui.sharing.SharingEntryCard(sharing) { showSharing = true }
+                    },
                     remoteDevices = {
                         if (viewModel.rules.enabled) {
                             com.leviknet.vpn.ui.rules.RulesEntryCard(onClick = viewModel.rules::open)
@@ -433,6 +444,29 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                 )
             }
         }
+    }
+
+    if (showSharing && !BuildConfig.IS_PLAY_DISTRIBUTION && !showSharingScanner) {
+        com.leviknet.vpn.ui.sharing.SharingDialog(
+            snapshot = sharing,
+            ownerConnected = state.vpn.state == VpnConnectionState.CONNECTED && sharing.guest == null,
+            incomingInvitation = sharingInvitation,
+            onReceive = { invitation ->
+                sharingInvitation = null
+                showSharing = false
+                viewModel.connectSharingGuest(invitation)
+            },
+            onScan = { showSharingScanner = true },
+            onDismiss = { showSharing = false; sharingInvitation = null },
+        )
+    }
+    if (showSharingScanner && !BuildConfig.IS_PLAY_DISTRIBUTION) {
+        ActivationScannerDialog(
+            onCodeScanned = { code -> sharingInvitation = code; showSharingScanner = false; showSharing = true },
+            onDismiss = { showSharingScanner = false },
+            title = stringResource(R.string.sharing_scan),
+            parseCode = { raw -> runCatching { com.leviknet.vpn.core.sharing.SharingInvitation.parse(raw); raw.trim() }.getOrNull() },
+        )
     }
 
     ConnectionTelemetryNoticeDialog(
@@ -1106,6 +1140,7 @@ private fun LoginScreen(
     onTelegramLogin: () -> Unit,
     onWebsiteLogin: () -> Unit,
     onQrLogin: () -> Unit,
+    onReceiveInternet: () -> Unit,
     onDeviceTrial: () -> Unit,
     onLteTrial: () -> Unit,
     onFreeProxy: () -> Unit,
@@ -1462,6 +1497,11 @@ private fun LoginScreen(
                 }
             }
             Spacer(Modifier.height(10.dp))
+            if (!BuildConfig.IS_PLAY_DISTRIBUTION) {
+                OutlinedButton(onClick = onReceiveInternet, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.sharing_receive))
+                }
+            }
             TextButton(onClick = onFreeProxy) {
                 Icon(
                     painter = painterResource(R.drawable.ic_servers),
@@ -1555,6 +1595,7 @@ private fun MainContent(
     onSettingsSyncChanged: (Boolean) -> Unit,
     onSharePresenceChanged: (Boolean) -> Unit,
     onSleepAtHomeChanged: (Boolean) -> Unit,
+    sharingCard: @Composable () -> Unit = {},
     remoteDevices: @Composable () -> Unit = {},
     /** LevikDrop above the tab bar, on every tab. */
     dropDock: @Composable () -> Unit = {},
@@ -1599,6 +1640,7 @@ private fun MainContent(
                 onOpenAntiDpi = onOpenAntiDpi,
                 onDismissAnnouncement = onDismissAnnouncement,
                 onOpenAnnouncementLink = onOpenAnnouncementLink,
+                sharingCard = sharingCard,
             )
             AppTab.SERVERS -> ServersScreen(
                 modifier = contentModifier,
@@ -1981,6 +2023,7 @@ private fun HomeScreen(
     onOpenAntiDpi: () -> Unit,
     onDismissAnnouncement: (String) -> Unit,
     onOpenAnnouncementLink: (String) -> Unit,
+    sharingCard: @Composable () -> Unit = {},
 ) {
     val selectedServer = state.profile?.servers?.firstOrNull {
         it.id == displayedServerId(state)
@@ -2026,6 +2069,8 @@ private fun HomeScreen(
                 }
             }
         }
+        Spacer(Modifier.height(12.dp))
+        sharingCard()
         state.announcements.forEach { announcement ->
             Spacer(Modifier.height(12.dp))
             AnnouncementBanner(
@@ -7531,6 +7576,8 @@ private fun SubscriptionDevicesDialog(
 private fun ActivationScannerDialog(
     onCodeScanned: (String) -> Unit,
     onDismiss: () -> Unit,
+    title: String = stringResource(R.string.activation_scan_title),
+    parseCode: (String) -> String? = ActivationCodeParser::parseQr,
 ) {
     val context = LocalContext.current
     var permissionGranted by remember {
@@ -7550,13 +7597,14 @@ private fun ActivationScannerDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.activation_scan_title), fontWeight = FontWeight.Bold) },
+        title = { Text(title, fontWeight = FontWeight.Bold) },
         text = {
             if (cameraUnavailable) {
                 Text(stringResource(R.string.activation_camera_unavailable))
             } else if (permissionGranted) {
                 QrCameraPreview(
                     onCodeScanned = onCodeScanned,
+                    parseCode = parseCode,
                     onCameraError = { cameraUnavailable = true },
                     modifier = Modifier
                         .fillMaxWidth()
@@ -7586,6 +7634,7 @@ private fun QrCameraPreview(
     onCodeScanned: (String) -> Unit,
     onCameraError: () -> Unit,
     modifier: Modifier = Modifier,
+    parseCode: (String) -> String? = ActivationCodeParser::parseQr,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -7613,7 +7662,7 @@ private fun QrCameraPreview(
                         analysis.setAnalyzer(analyzerExecutor) { image ->
                             try {
                                 if (!disposed.get() && !delivered.get()) {
-                                    decodeQrCode(image)?.let(ActivationCodeParser::parseQr)?.let { code ->
+                                    decodeQrCode(image)?.let(parseCode)?.let { code ->
                                         if (delivered.compareAndSet(false, true)) {
                                             ContextCompat.getMainExecutor(context).execute {
                                                 if (!disposed.get()) onCodeScanned(code)

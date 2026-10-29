@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sharing_title">Share VPN</string>
+    <string name="sharing_subtitle">Share your Android phone’s connection with nearby devices. No root required.</string>
+    <string name="sharing_open">Share VPN / connect to a phone</string>
+    <string name="sharing_receive">Get internet from a phone</string>
+    <string name="sharing_receive_short">Receive</string>
+    <string name="sharing_host_short">Share</string>
+    <string name="sharing_help">Step-by-step instructions</string>
+    <string name="sharing_without_app">Without the app</string>
+    <string name="sharing_with_app">With Levik</string>
+    <string name="sharing_hotspot_settings">Open hotspot settings</string>
+    <string name="sharing_host_steps">1. Enable mobile data and connect Levik to a working VPN server.\n2. Turn on your phone’s Wi-Fi hotspot and protect it with a password.\n3. Return here, select the hotspot address and start sharing.\n4. Connect the other device to this Wi-Fi network.</string>
+    <string name="sharing_network_label">Phone address</string>
+    <string name="sharing_network_empty">No local Wi-Fi address found. Enable the hotspot, return here and refresh. Mobile and VPN addresses are not suitable.</string>
+    <string name="sharing_network_note">Choose the address of your hotspot. If several addresses are shown, check the gateway in the receiving device’s Wi-Fi details. Do not choose an unrelated home or work network.</string>
+    <string name="sharing_refresh">Refresh addresses</string>
+    <string name="sharing_trusted">This is my password-protected hotspot. People connected to this Wi-Fi can use the manual proxy while sharing is on.</string>
+    <string name="sharing_start">Start sharing for 1 hour</string>
+    <string name="sharing_stop">Stop sharing</string>
+    <string name="sharing_ready">Sharing is ready</string>
+    <string name="sharing_preparing">Preparing the connection…</string>
+    <string name="sharing_not_ready">Sharing is paused. Wait for the VPN connection.</string>
+    <string name="sharing_until">Access until %1$s</string>
+    <string name="sharing_address">Server</string>
+    <string name="sharing_port">Port</string>
+    <string name="sharing_copy">Copy</string>
+    <string name="sharing_copied">Copied</string>
+    <string name="sharing_proxy_note">Enter the server without http:// and enter only digits in the port field. HTTPS works without installing any certificates.</string>
+    <string name="sharing_proxy_limit">Only browsers and apps that use this proxy go through Levik. Other apps, games and calls may connect directly. This mode does not protect the entire device.</string>
+    <string name="sharing_choose_device">Receiving device</string>
+    <string name="sharing_restore_title">After sharing: restore your settings</string>
+    <string name="sharing_restore_note">Save your previous proxy settings before changing them. If a work proxy or automatic setup was configured, restore it instead of simply turning everything off.</string>
+    <string name="sharing_android">Android / Pixel</string>
+    <string name="sharing_samsung">Samsung Galaxy</string>
+    <string name="sharing_xiaomi">Xiaomi / Redmi / POCO</string>
+    <string name="sharing_ios">iPhone / iPad</string>
+    <string name="sharing_windows">Windows 11</string>
+    <string name="sharing_macos">macOS</string>
+    <string name="sharing_linux">Linux / GNOME</string>
+    <string name="sharing_restore_android">Open this Wi-Fi network’s settings → Proxy → None, or restore the previous value. Menu names vary by Android version.</string>
+    <string name="sharing_restore_ios">Settings → Wi-Fi → ⓘ next to this network → Configure Proxy → Off, or restore your previous settings → Save.</string>
+    <string name="sharing_restore_windows">Settings → Network &amp; internet → Proxy. Restore your previous manual/automatic settings. A manual proxy can remain enabled after you switch Wi-Fi networks.</string>
+    <string name="sharing_restore_macos">System Settings → Network → Wi-Fi → Details → Proxies. Restore your previous HTTP/HTTPS and automatic settings. These settings can remain active on another Wi-Fi network.</string>
+    <string name="sharing_restore_linux">Settings → Network → Network Proxy. Restore your previous mode and values. Check browser-specific proxy settings too, if you changed them.</string>
+    <string name="sharing_guide_version">Menu names vary by OS version. Samsung and Xiaomi may hide Proxy under Advanced / View more. These instructions are also available offline.</string>
+    <string name="sharing_troubleshooting">If a page does not open:\n• Make sure both devices use the phone’s hotspot.\n• Recheck the current server and port above: the phone’s address may change after restarting the hotspot.\n• Make sure Levik on the phone is connected and sharing is ready.\n• If a browser works but another app does not, that app may ignore the proxy. Use the Levik guest mode instead.\n• If another Wi-Fi network stops working, restore your previous proxy settings.</string>
+    <string name="sharing_invite_title">Scan in Levik on the receiving device</string>
+    <string name="sharing_invite_note">Connect to this phone’s Wi-Fi first. In Levik choose “Get internet from a phone”, then scan this code or paste the invitation. This QR does not configure Wi-Fi.</string>
+    <string name="sharing_invite_secret">This invitation is temporary access to your connection. Anyone with it can connect until it expires or you stop sharing. Only give it to people you trust.</string>
+    <string name="sharing_copy_invite">Copy invitation</string>
+    <string name="sharing_invite_qr">Temporary VPN sharing invitation</string>
+    <string name="sharing_guest_steps">1. Connect to the owner’s Wi-Fi hotspot.\n2. Ask the owner to open Share VPN → With Levik.\n3. Scan the QR here or paste the invitation.\n4. Confirm the connection and allow the system VPN request. You do not need your own account or subscription.</string>
+    <string name="sharing_invite_field">Invitation from the owner</string>
+    <string name="sharing_scan">Scan QR</string>
+    <string name="sharing_join">Connect through this phone</string>
+    <string name="sharing_leave">End guest connection</string>
+    <string name="sharing_guest_active">Internet through %1$s</string>
+    <string name="sharing_guest_waiting">Connecting to the phone…</string>
+    <string name="sharing_guest_limit">The owner controls this connection. Access ends when sharing stops or expires. If the connection is lost, Levik blocks the traffic it captures while its VPN service is running. For protection after force-stopping the app, Android’s always-on VPN and “Block connections without VPN” must be enabled.</string>
+    <string name="sharing_guest_replace">Connecting will replace the VPN currently running on this device. Saved account and server settings will be kept.</string>
+    <string name="sharing_confirm_join">Connect to this phone?</string>
+    <string name="sharing_guest_invalid">This invitation is invalid or expired. Ask the owner to start sharing again and send a new code.</string>
+    <string name="sharing_open_settings_failed">Open your phone’s Settings and find Wi-Fi hotspot / Personal hotspot.</string>
+    <string name="sharing_stop_confirm">Stop sharing for everyone?</string>
+    <string name="sharing_stop_body">All proxy and Levik guest connections will stop. On devices using manual proxy, restore their previous settings so that other networks keep working.</string>
+    <string name="sharing_close">Close</string>
+    <string name="sharing_back">Back</string>
+    <string name="sharing_host_requires_vpn">Connect your own Levik VPN first. Then turn on a password-protected hotspot.</string>
+    <string-array name="sharing_steps_android">
+        <item>Connect the receiving device to the phone’s Wi-Fi hotspot.</item>
+        <item>Open Settings → Network &amp; internet → Internet. Tap the connected network’s settings icon, then Edit.</item>
+        <item>Open Advanced options → Proxy → Manual.</item>
+        <item>Copy the Server and Port shown above into Proxy hostname and Proxy port. Leave the bypass list empty.</item>
+        <item>Save the settings. Open a browser and try the page you need.</item>
+        <item>When finished, restore the previous proxy settings using the instructions below.</item>
+    </string-array>
+    <string-array name="sharing_steps_samsung">
+        <item>Connect to the phone’s hotspot.</item>
+        <item>Open Settings → Connections → Wi-Fi. Tap the gear beside the connected network.</item>
+        <item>Open View more / Advanced, then Proxy → Manual. The label depends on your One UI version.</item>
+        <item>Enter the Server above as Proxy host name and the Port above as Proxy port. Leave bypass addresses empty.</item>
+        <item>Save. Open a browser and try the page you need.</item>
+        <item>When finished, set Proxy to None or restore the previous settings.</item>
+    </string-array>
+    <string-array name="sharing_steps_xiaomi">
+        <item>Connect to the phone’s hotspot.</item>
+        <item>Open Settings → Wi-Fi. Tap the arrow or information icon beside the connected network.</item>
+        <item>Find Proxy (sometimes under Advanced settings) → Manual.</item>
+        <item>Enter the Server above as proxy hostname and the Port above as proxy port. Leave bypass addresses empty.</item>
+        <item>Save using the check mark / Save button. Reconnect to this Wi-Fi if necessary, then test in a browser.</item>
+        <item>When finished, set Proxy to None or restore the previous settings.</item>
+    </string-array>
+    <string-array name="sharing_steps_ios">
+        <item>Connect to the phone’s hotspot in Settings → Wi-Fi.</item>
+        <item>Tap ⓘ beside that connected Wi-Fi network.</item>
+        <item>Scroll to Configure Proxy → Manual.</item>
+        <item>Enter the Server and Port shown above. Authentication stays off for this private-hotspot compatibility mode.</item>
+        <item>Tap Save. Open Safari and try the page you need.</item>
+        <item>When finished, return to Configure Proxy and restore the previous setting.</item>
+    </string-array>
+    <string-array name="sharing_steps_windows">
+        <item>Connect the PC to the phone’s Wi-Fi hotspot.</item>
+        <item>Before editing, save a screenshot of your existing proxy settings, especially if you use a work proxy.</item>
+        <item>Open Settings → Network &amp; internet → Proxy.</item>
+        <item>Under Manual proxy setup, select Set up / Edit next to Use a proxy server.</item>
+        <item>Turn it on. Enter the Server above as the IP address and the Port above. Save.</item>
+        <item>Open your browser and try the page you need. An app with its own network settings may ignore this proxy.</item>
+        <item>When finished, restore the previous manual and automatic proxy settings. Switching Wi-Fi does not necessarily turn this proxy off.</item>
+    </string-array>
+    <string-array name="sharing_steps_macos">
+        <item>Connect the Mac to the phone’s hotspot.</item>
+        <item>Open Apple menu → System Settings → Network → Wi-Fi → Details → Proxies. On older macOS: System Preferences → Network → Wi-Fi → Advanced → Proxies.</item>
+        <item>Save your previous proxy settings before changing them.</item>
+        <item>Enable Web Proxy (HTTP) and Secure Web Proxy (HTTPS). Enter the same Server and Port shown above in both entries. Do not install certificates.</item>
+        <item>Confirm with OK / Apply. Open Safari and try the page you need.</item>
+        <item>When finished, restore your previous proxy settings. They can remain active after switching to another Wi-Fi network.</item>
+    </string-array>
+    <string-array name="sharing_steps_linux">
+        <item>Connect to the phone’s hotspot. These steps are for GNOME; other desktops use different menus.</item>
+        <item>Save your previous proxy settings.</item>
+        <item>Open Settings → Network → Network Proxy and choose Manual.</item>
+        <item>Enter the Server and Port shown above for both HTTP and HTTPS. Leave SOCKS blank unless you already used it for another purpose.</item>
+        <item>Apply. In Firefox, choose “Use system proxy settings” if its own settings override the system. Test the page you need.</item>
+        <item>When finished, restore both the system and browser proxy settings you changed.</item>
+    </string-array>
+    <string name="sharing_action_failed">The sharing action failed. Check the VPN and hotspot, then try again.</string>
+    <string name="sharing_guest_connected">Connected through the phone</string>
+    <string name="sharing_check_proxy">Check the phone’s proxy</string>
+    <string name="sharing_checking">Checking…</string>
+    <string name="sharing_check_ok">The phone’s proxy successfully opened an HTTPS test page through its configured VPN route. Now test the browser on the receiving device; this does not verify its other apps.</string>
+    <string name="sharing_check_failed">The proxy did not complete the HTTPS check. Check the VPN and current phone address, then try again.</string>
+    <string name="sharing_restart_notice">Starting and stopping sharing briefly reconnects the owner’s VPN. Automatic route optimization is paused while sharing; connection recovery remains available.</string>
+</resources>
