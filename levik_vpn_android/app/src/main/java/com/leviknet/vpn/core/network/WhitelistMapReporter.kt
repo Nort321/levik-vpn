@@ -9,74 +9,52 @@ import com.leviknet.vpn.data.AppSettings
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.Proxy
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Independent anonymous transport: never MobileApiClient, accounts, signing or disk queues. */
 class WhitelistMapReporter(context: Context, private val settings: AppSettings) {
     private val connectivity = context.applicationContext.getSystemService(ConnectivityManager::class.java)
     private val mutex = Mutex()
-    private val json = Json { ignoreUnknownKeys = false }
-    private var cached: RegionToken? = null
-
-    private data class RegionToken(
-        val network: Network,
-        val token: String,
-        val receivedElapsedMs: Long,
-        val expiresElapsedMs: Long,
+    private val requestScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val requestSlots = Semaphore(2)
+    private val delivery = WhitelistMapDelivery<Network>(
+        enabled = { settings.whitelistMapEnabled.value },
+        elapsedMillis = SystemClock::elapsedRealtime,
+        wallMillis = System::currentTimeMillis,
+        request = ::request,
     )
+    private var currentNetworkCheck: () -> Boolean = { false }
 
-    @Serializable
-    private data class RegionResponse(val token: String, val expiresAt: Long)
-
-    @Serializable
-    private data class Report(val token: String, val signal: String, val transport: String)
-
-    suspend fun clear() = mutex.withLock { cached = null }
+    suspend fun clear() = mutex.withLock { delivery.clear() }
 
     suspend fun collect(detector: WhitelistDetector) = mutex.withLock {
-        if (!settings.whitelistMapEnabled.value) { cached = null; return@withLock }
+        if (!settings.whitelistMapEnabled.value) { delivery.clear(); return@withLock }
         withContext(Dispatchers.IO) {
             try {
-                val network = detector.directNetwork() ?: run { cached = null; return@withContext }
-                if (!isCellularNetwork(network)) { cached = null; return@withContext }
-                val now = SystemClock.elapsedRealtime()
-                cached = cached?.takeIf {
-                    whitelistRegionTokenIsUsable(it.network == network, it.receivedElapsedMs, it.expiresElapsedMs, now)
+                val network = detector.directNetwork()?.takeIf(::isCellularNetwork)
+                currentNetworkCheck = {
+                    network != null && detector.directNetwork() == network && isCellularNetwork(network)
                 }
-                // Region is always obtained through exactly the physical network being measured.
-                // A currently valid in-memory token can survive a temporary block of this endpoint.
-                if (cached == null) {
-                    val response = request("region", network, null) ?: return@withContext
-                    val region = json.decodeFromString<RegionResponse>(response)
-                    val ttl = region.expiresAt - System.currentTimeMillis()
-                    if (region.token.length !in 1..512 || ttl !in 1..WHITELIST_MAP_MAX_TOKEN_AGE_MS) return@withContext
-                    val received = SystemClock.elapsedRealtime()
-                    cached = RegionToken(network, region.token, received, received + ttl)
+                delivery.collect(network, currentNetworkCheck) {
+                    if (network == null) WhitelistMode.UNKNOWN else detector.detect(network, forceRefresh = true)
                 }
-                val region = cached ?: return@withContext
-                val mode = detector.detect(network, forceRefresh = true)
-                val signal = whitelistMapSignal(mode) ?: return@withContext
-                currentCoroutineContext().ensureActive()
-                if (!settings.whitelistMapEnabled.value || detector.directNetwork() != network ||
-                    !isCellularNetwork(network) || !whitelistRegionTokenIsUsable(
-                        region.network == network, region.receivedElapsedMs, region.expiresElapsedMs, SystemClock.elapsedRealtime(),
-                    )
-                ) return@withContext
-                // Default route may be VPN. Geography comes from the signed physical-network token.
-                // No replay later: the report is discarded on failure, not queued as a fresh sample.
-                request("report", null, json.encodeToString(Report(region.token, signal, "cellular")))
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 // Deliberately no request/response, token, IP or exception logging.
+            } finally {
+                currentNetworkCheck = { false }
             }
         }
     }
@@ -93,11 +71,49 @@ class WhitelistMapReporter(context: Context, private val settings: AppSettings) 
         )
     }
 
-    private suspend fun request(path: String, network: Network?, body: String?): String? {
+    private suspend fun request(
+        channel: WhitelistMapChannel,
+        operation: WhitelistMapOperation,
+        network: Network?,
+        body: String?,
+    ): WhitelistMapResponse? {
         currentCoroutineContext().ensureActive()
-        if (!settings.whitelistMapEnabled.value) return null
-        val url = URL(ServiceEndpoints.webUrl("/api/whitelist/$path"))
+        val isCurrent = currentNetworkCheck
+        if (!settings.whitelistMapEnabled.value || !isCurrent()) return null
+        val url = URL(when (channel) {
+            WhitelistMapChannel.WEBSITE -> ServiceEndpoints.webUrl("/api/whitelist/${operation.path}")
+            WhitelistMapChannel.SERVICE -> ServiceEndpoints.ALLOWLIST_API_ORIGIN + "/api/whitelist/service/${operation.path}"
+        })
+        // Service origins are fixed, never a URL supplied in report data or a subscription.
+        if (channel == WhitelistMapChannel.SERVICE && network == null) return null
+        val connection = AtomicReference<HttpURLConnection?>(null)
+        // Android DNS can outlive socket timeouts and ignore interrupts. A timed-out
+        // request is abandoned and cancelled; two slots bound even stuck OS calls.
+        val attempt = requestScope.async {
+            if (!requestSlots.tryAcquire()) return@async null
+            try {
+                executeRequest(url, network, operation, body, isCurrent, connection)
+            } finally { requestSlots.release() }
+        }
+        return try { withTimeoutOrNull(8_000) { attempt.await() } }
+        finally {
+            attempt.cancel()
+            connection.get()?.disconnect()
+        }
+    }
+
+    private suspend fun executeRequest(
+        url: URL,
+        network: Network?,
+        operation: WhitelistMapOperation,
+        body: String?,
+        isCurrent: () -> Boolean,
+        connectionRef: AtomicReference<HttpURLConnection?>,
+    ): WhitelistMapResponse? {
+        currentCoroutineContext().ensureActive()
+        if (!settings.whitelistMapEnabled.value || !isCurrent()) return null
         val connection = (network?.openConnection(url, Proxy.NO_PROXY) ?: url.openConnection(Proxy.NO_PROXY)) as HttpURLConnection
+        connectionRef.set(connection)
         try {
             connection.apply {
                 requestMethod = "POST"
@@ -117,20 +133,29 @@ class WhitelistMapReporter(context: Context, private val settings: AppSettings) 
                 }
             }
             currentCoroutineContext().ensureActive()
-            if (!settings.whitelistMapEnabled.value) return null
-            if (body != null) connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            if (!settings.whitelistMapEnabled.value || !isCurrent()) return null
+            if (body != null) connection.outputStream.use {
+                // Connecting/DNS may have blocked while the worker was cancelled.
+                currentCoroutineContext().ensureActive()
+                if (!settings.whitelistMapEnabled.value || !isCurrent()) return null
+                it.write(body.toByteArray(Charsets.UTF_8))
+            }
             val status = connection.responseCode
-            if (status == 422) cached = null
-            if (status != 200) return null
+            currentCoroutineContext().ensureActive()
+            if (status != 200 || operation == WhitelistMapOperation.REPORT) {
+                return WhitelistMapResponse(status)
+            }
+            if (connection.contentLengthLong > 1024) return null
             return connection.inputStream.use { input ->
                 val bytes = ByteArray(1025)
                 var size = 0
                 while (size < bytes.size) {
+                    currentCoroutineContext().ensureActive()
                     val count = input.read(bytes, size, bytes.size - size)
                     if (count < 0) break
                     size += count
                 }
-                if (size > 1024) null else String(bytes, 0, size, Charsets.UTF_8)
+                if (size > 1024) null else WhitelistMapResponse(status, String(bytes, 0, size, Charsets.UTF_8))
             }
         } finally { connection.disconnect() }
     }
