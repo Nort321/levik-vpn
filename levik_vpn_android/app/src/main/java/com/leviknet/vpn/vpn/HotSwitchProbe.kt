@@ -43,7 +43,8 @@ internal fun probeHotSwitchDns(path: String, resolvers: List<String>, guard: () 
             val id = SecureRandom().nextInt(65536)
             val question = HotSwitchDnsWire.question(id)
             val answer = if (uri.scheme == "https") {
-                val client = OkHttpClient.Builder().socketFactory(PrivateUnixSocketFactory(path))
+                val sockets = PrivateUnixSocketFactory(path)
+                val client = OkHttpClient.Builder().socketFactory(sockets)
                     .proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", 9)))
                     .followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
                     .connectTimeout(2, TimeUnit.SECONDS).readTimeout(3, TimeUnit.SECONDS).callTimeout(4, TimeUnit.SECONDS).build()
@@ -59,6 +60,7 @@ internal fun probeHotSwitchDns(path: String, resolvers: List<String>, guard: () 
                         }
                     }
                 } finally {
+                    sockets.close()
                     client.dispatcher.cancelAll(); client.connectionPool.evictAll(); client.dispatcher.executorService.shutdown()
                 }
             } else PrivateUnixSocketFactory(path).createSocket().use { socket ->
