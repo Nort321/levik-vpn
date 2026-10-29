@@ -71,6 +71,23 @@
     <string name="servers_description">Choose the endpoint Levik VPN will use.</string>
     <string name="servers_empty">No compatible servers are available for this subscription.</string>
     <string name="server_automatic">Automatic</string>
+    <string name="hot_switch_label">HotSwitch</string>
+    <string name="server_switch_reconnect">with reconnection</string>
+    <string name="server_switch_may_reconnect">may reconnect</string>
+    <string name="hot_switch_explainer">HotSwitch keeps existing connections alive. Choices marked “with reconnection” restart the VPN.</string>
+    <string name="hot_switch_target">the selected server</string>
+    <string name="hot_switch_preparing_title">HotSwitch: checking the new server</string>
+    <string name="hot_switch_preparing_desc">Checking %1$s. Your current connection keeps working.</string>
+    <string name="hot_switch_preparing_unknown_desc">Checking the new server. The current route has not been confirmed yet.</string>
+    <string name="hot_switch_preference_not_saved">The server is active, but its selection could not be saved. After restarting, a different server may be selected.</string>
+    <string name="hot_switch_applied_title">Server switched</string>
+    <string name="hot_switch_applied_desc">New connections on the main VPN route use %1$s. Previously opened connections may keep their previous exit.</string>
+    <string name="hot_switch_failed_title">Server switch failed</string>
+    <string name="hot_switch_failed_desc">The previous connection has been retained. Try another server or reconnect.</string>
+    <string name="hot_switch_uncertain_title">Route not confirmed</string>
+    <string name="hot_switch_uncertain_desc">The current route could not be confirmed. Reconnect or repeat your selection.</string>
+    <string name="hot_switch_reconnect_all">Reconnect everything</string>
+    <string name="hot_switch_reconnect_desc">Closes existing connections and starts a fresh VPN connection through the selected server.</string>
     <string name="server_automatic_description">Connect to the lowest-latency server, prioritizing regular servers outside Russia. Allow-list bypass servers without VK sign-in also participate in automatic selection.</string>
     <string name="server_ping_checking">Checking all servers…</string>
     <string name="server_ping_checking_short">…</string>
@@ -1003,6 +1020,4 @@
     <string name="server_country_servers">Servers: %1$s</string>
     <string name="server_country_expanded">Expanded</string>
     <string name="server_country_collapsed">Collapsed</string>
-    <string name="filter_dns_test">DNS · test</string>
-    <string name="servers_category_dns_test_desc">Through Yandex DNS. Limited speed; browsing and messaging. Calls and games are not supported.</string>
 </resources>

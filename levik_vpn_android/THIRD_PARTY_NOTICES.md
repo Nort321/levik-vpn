@@ -1,16 +1,5 @@
 # Уведомления об использовании сторонних библиотек
 
-## DNSTT — DNS-транспорт (только Direct, тест)
-
-- Проект: https://www.bamsoftware.com/software/dnstt/
-- Версия: `v1.20260501.0`, commit `0c5c52a57d899c05428c116898941761a2ed83c2`.
-- Лицензия: CC0-1.0, текст: `native/dnstt/fork/COPYING`.
-- Локальные изменения: защита Android-сокета, ограничение частоты DNS-запросов,
-  таймаут рукопожатия, ограничения числа соединений. Исходники входят в
-  corresponding-source, зависимости зафиксированы в `go.mod`/`go.sum` и native SBOM.
-- Клиент из https://github.com/dnstt-xyz/dnstt_xyz_app изучен как пример интеграции;
-  его Flutter-приложение и бинарные библиотеки в APK не включены.
-
 ## sing-box — TUIC-хелпер (только Direct)
 
 - Проект: <https://github.com/SagerNet/sing-box>

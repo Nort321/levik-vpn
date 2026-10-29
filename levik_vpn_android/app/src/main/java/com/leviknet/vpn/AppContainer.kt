@@ -83,7 +83,6 @@ class AppContainer(application: Application) {
         nativeLibraryDir = application.applicationInfo.nativeLibraryDir.orEmpty(),
         appContext = application,
     )
-    val whitelistDetector = WhitelistDetector(application)
     val whitelistMapReporter = WhitelistMapReporter(application, settings)
     val telemetryTransport = HttpTelemetryTransport()
     val connectionTelemetry = ConnectionTelemetry(
@@ -93,6 +92,9 @@ class AppContainer(application: Application) {
         scope = nativeCleanupScope,
         interruptedEnd = processExitResolver(application),
     )
+    val whitelistDetector = WhitelistDetector(application) { diagnostic ->
+        connectionTelemetry.record { it.whitelistDetection(diagnostic) }
+    }
 
     /** Signed list of Levik hosts; read before the first request. */
     private val serviceEndpoints = ServiceEndpointsStore(File(application.noBackupFilesDir, "service-endpoints.json"))
@@ -142,7 +144,6 @@ class AppContainer(application: Application) {
             xrayRuntime,
             includeTuic = TunnelEngineKind.LEVIK_TUIC in tunnelEngineRegistry.supportedProfileEngines,
             includeGame = TunnelEngineKind.LEVIK_GAME in tunnelEngineRegistry.supportedProfileEngines,
-            includeDnstt = TunnelEngineKind.LEVIK_DNSTT in tunnelEngineRegistry.supportedProfileEngines,
         ),
         supportedTunnelEngines = tunnelEngineRegistry.supportedProfileEngines,
         json = json,

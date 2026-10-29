@@ -61,12 +61,19 @@ class VpnController(
         )
     }
 
-    fun switchServer(serverId: String) {
+    fun switchServer(serverId: String, hotSwitch: Boolean = false, forceReconnect: Boolean = false) {
         context.startService(
             Intent(context, LevikVpnService::class.java)
                 .setAction(LevikVpnService.ACTION_SWITCH_SERVER)
-                .putExtra(LevikVpnService.EXTRA_SERVER_ID, serverId),
+                .putExtra(LevikVpnService.EXTRA_SERVER_ID, serverId)
+                .putExtra(LevikVpnService.EXTRA_HOT_SWITCH, hotSwitch)
+                .putExtra(LevikVpnService.EXTRA_FORCE_RECONNECT, forceReconnect),
         )
+    }
+
+    fun refreshAutomaticSelection() {
+        context.startService(Intent(context, LevikVpnService::class.java)
+            .setAction(LevikVpnService.ACTION_AUTOMATIC_SELECTION))
     }
 
     fun pause(durationMinutes: Int) {

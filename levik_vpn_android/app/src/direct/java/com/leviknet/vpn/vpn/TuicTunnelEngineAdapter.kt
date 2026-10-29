@@ -20,6 +20,8 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
@@ -38,6 +40,7 @@ internal interface TuicNativeSession {
     suspend fun prepare(): LocalProxyEndpoint
 
     fun stop()
+    fun stopProbe() = stop()
 }
 
 /**
@@ -49,6 +52,21 @@ internal class TuicTunnelEngineAdapter(
     private val xrayRuntime: XrayRuntime,
 ) : TunnelEngineAdapter {
     override val kind: TunnelEngineKind = TunnelEngineKind.LEVIK_TUIC
+
+    override suspend fun prepareRouteProbe(server: TunnelServer, environment: TunnelEngineEnvironment): NativeRouteProbe? {
+        val config = server.tuicConfig ?: return null
+        val session = sessionFactory.create(config, environment)
+        return try {
+            val endpoint = session.prepare()
+            object : NativeRouteProbe {
+                override val proxy = endpoint
+                override fun close() = session.stopProbe()
+            }
+        } catch (error: Throwable) {
+            session.stop()
+            throw error
+        }
+    }
     private val lock = Any()
     private val owners = mutableSetOf<Long>()
     private val sessions = mutableMapOf<Long, ActiveTuicSession>()
@@ -218,7 +236,7 @@ private class AndroidTuicNativeSession(
             val port = ServerSocket(0, 1, InetAddress.getByName(LOOPBACK)).use { it.localPort }
             startProtectServer()
             val native = ProcessBuilder(executable.absolutePath, "run", "-c", "stdin", "--disable-color")
-                .also { it.environment().clear() }
+                .also { it.environment().clear(); it.environment()["GOMEMLIMIT"] = "64MiB" }
                 .start()
             process = native
             // The configuration carries credentials; it is passed on stdin, never written to disk.
@@ -235,16 +253,17 @@ private class AndroidTuicNativeSession(
             }
             val deadline = SystemClock.elapsedRealtime() + STARTUP_TIMEOUT_MS
             while (SystemClock.elapsedRealtime() < deadline) {
+                coroutineContext.ensureActive()
                 if (!native.isAlive) tuicEngineFailure("tuic_process_exited")
                 if (loopbackAccepts(port)) {
                     running.set(true)
                     return@withContext LocalProxyEndpoint(LOOPBACK, port, username, password)
                 }
-                Thread.sleep(50)
+                delay(50)
             }
             tuicEngineFailure("tuic_start_timeout")
         } catch (error: CancellationException) {
-            stop(); throw error
+            stopProbe(); throw error
         } catch (error: TunnelEngineFailureException) {
             stop(); throw error
         } catch (_: Throwable) {
@@ -252,11 +271,15 @@ private class AndroidTuicNativeSession(
         }
     }
 
-    override fun stop() {
+    override fun stop() = stopWithGrace(1_500L)
+
+    override fun stopProbe() = stopWithGrace(100L)
+
+    private fun stopWithGrace(graceMs: Long) {
         if (!stopping.compareAndSet(false, true)) return
         process?.let { native ->
             native.destroy()
-            if (!native.waitFor(1_500, TimeUnit.MILLISECONDS)) {
+            if (!native.waitFor(graceMs, TimeUnit.MILLISECONDS)) {
                 native.destroyForcibly()
                 native.waitFor(500, TimeUnit.MILLISECONDS)
             }

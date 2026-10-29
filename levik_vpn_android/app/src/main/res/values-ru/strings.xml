@@ -71,6 +71,23 @@
     <string name="servers_description">Выберите точку подключения Levik VPN.</string>
     <string name="servers_empty">Для этой подписки нет совместимых серверов.</string>
     <string name="server_automatic">Автоматически</string>
+    <string name="hot_switch_label">HotSwitch</string>
+    <string name="server_switch_reconnect">с переподключением</string>
+    <string name="server_switch_may_reconnect">возможно переподключение</string>
+    <string name="hot_switch_explainer">HotSwitch сохраняет открытые соединения. Переходы с пометкой «с переподключением» перезапускают VPN.</string>
+    <string name="hot_switch_target">выбранный сервер</string>
+    <string name="hot_switch_preparing_title">HotSwitch: проверяем новый сервер</string>
+    <string name="hot_switch_preparing_desc">Проверяем %1$s. Текущее подключение продолжает работать.</string>
+    <string name="hot_switch_preparing_unknown_desc">Проверяем новый сервер. Текущий маршрут пока не подтверждён.</string>
+    <string name="hot_switch_preference_not_saved">Сервер работает, но сохранить выбор не удалось. После перезапуска может быть выбран другой сервер.</string>
+    <string name="hot_switch_applied_title">Сервер переключён</string>
+    <string name="hot_switch_applied_desc">Новые соединения основного VPN идут через %1$s. Ранее открытые могут сохранять прежний выход.</string>
+    <string name="hot_switch_failed_title">Смена сервера не выполнена</string>
+    <string name="hot_switch_failed_desc">Предыдущее подключение сохранено. Выберите другой сервер или переподключитесь.</string>
+    <string name="hot_switch_uncertain_title">Маршрут не подтверждён</string>
+    <string name="hot_switch_uncertain_desc">Не удалось подтвердить текущий маршрут. Переподключитесь или повторите выбор.</string>
+    <string name="hot_switch_reconnect_all">Переподключить всё</string>
+    <string name="hot_switch_reconnect_desc">Завершает текущие соединения и заново подключает VPN через выбранный сервер.</string>
     <string name="server_automatic_description">Подключиться к серверу с минимальным пингом, отдавая приоритет обычным серверам вне России. Серверы обхода белых списков без входа через ВКонтакте также участвуют в выборе.</string>
     <string name="server_ping_checking">Проверяем все серверы…</string>
     <string name="server_ping_checking_short">…</string>
@@ -1007,6 +1024,4 @@
     <string name="server_country_servers">Серверы: %1$s</string>
     <string name="server_country_expanded">Развёрнуто</string>
     <string name="server_country_collapsed">Свёрнуто</string>
-    <string name="filter_dns_test">DNS · тест</string>
-    <string name="servers_category_dns_test_desc">Через Яндекс DNS. Ограниченная скорость: сайты и переписка. Звонки и игры не поддерживаются.</string>
 </resources>

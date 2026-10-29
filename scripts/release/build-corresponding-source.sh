@@ -394,22 +394,6 @@ for tuic_abi in arm64-v8a armeabi-v7a x86_64; do
       >"${EVIDENCE_DIRECTORY}/libleviktuic-${tuic_abi}-build-info.txt"
 done
 
-capture_go_module_graph \
-  dnstt-android-client \
-  "${APPLICATION_SOURCE}/levik_vpn_android/native/dnstt/fork" \
-  "${MODULE_CACHE}/dnstt-android-client" \
-  "${VENDOR_SOURCE}/dnstt-android-client" \
-  "${EVIDENCE_DIRECTORY}/go-modules-dnstt-android-client.json" \
-  "$(command -v go)"
-
-for dnstt_abi in arm64-v8a armeabi-v7a x86_64; do
-  dnstt_library="${REPOSITORY_ROOT}/levik_vpn_android/native/dnstt/build/android/jniLibs/${dnstt_abi}/liblevikdnstt.so"
-  [[ -f "${dnstt_library}" && ! -L "${dnstt_library}" ]]
-  go version -m "${dnstt_library}" |
-    sed -E "1s#^.*: (go[0-9]+(\\.[0-9]+)+)\$#liblevikdnstt-${dnstt_abi}.so: \\1#" \
-      >"${EVIDENCE_DIRECTORY}/liblevikdnstt-${dnstt_abi}-build-info.txt"
-done
-
 unzip -p "${NATIVE_AAR}" jni/arm64-v8a/libgojni.so \
   >"${TEMPORARY_DIRECTORY}/libgojni.so"
 go version -m "${TEMPORARY_DIRECTORY}/libgojni.so" |

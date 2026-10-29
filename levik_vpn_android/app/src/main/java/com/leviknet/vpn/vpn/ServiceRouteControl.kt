@@ -23,12 +23,14 @@ import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
 
 /** Only app-private filesystem sockets are accepted; no routing-control TCP port is exposed. */
-internal class ServiceRouteControl(private val config: ServiceRouteConfig) : AutoCloseable {
+internal class ServiceRouteControl private constructor(controlPath: String, private val targets: Set<String>) : AutoCloseable {
+    constructor(config: ServiceRouteConfig, additionalTargets: Set<String> = emptySet()) : this(config.controlPath, config.candidates.map { it.outboundTag }.toSet() + additionalTargets)
+    constructor(config: SmartAutoLiveConfig) : this(config.controlPath, config.candidates.map { it.tag }.toSet())
     private val gate = Any()
     private var closed = false
     private val calls = mutableSetOf<Call>()
     private val client = OkHttpClient.Builder()
-        .socketFactory(PrivateUnixSocketFactory(config.controlPath))
+        .socketFactory(PrivateUnixSocketFactory(controlPath))
         .proxy(Proxy.NO_PROXY)
         .dns { hostname -> require(hostname == "localhost"); listOf(InetAddress.getLoopbackAddress()) }
         .protocols(listOf(Protocol.H2_PRIOR_KNOWLEDGE))
@@ -42,26 +44,34 @@ internal class ServiceRouteControl(private val config: ServiceRouteConfig) : Aut
     fun override(balancer: String, target: String) {
         require(balancer == ServiceRouteConfig.MAIN || balancer.matches(Regex("^levik-sr-route-[0-9]{1,3}$")))
         require(target == ServiceRouteConfig.BLOCK || target == ServiceRouteConfig.DIRECT ||
-            target == "levik-sr-base-out" || config.candidates.any { it.outboundTag == target })
+            target == "levik-sr-base-out" || target in targets)
+        check(rpc("/xray.app.router.command.RoutingService/OverrideBalancerTarget", ServiceRouteGrpc.overrideRequest(balancer, target))
+            .contentEquals(byteArrayOf(0, 0, 0, 0, 0))) { "Service route control did not confirm the target" }
+    }
+
+    fun tunTrafficCounters(): SmartAutoTrafficCounters? = SmartAutoStatsCodec.response(rpc("/xray.app.stats.command.StatsService/QueryStats", SmartAutoStatsCodec.request()))
+
+    private fun rpc(method: String, payload: ByteArray): ByteArray {
         val request = Request.Builder()
-            .url("http://localhost/xray.app.router.command.RoutingService/OverrideBalancerTarget")
+            .url("http://localhost$method")
             .header("TE", "trailers")
             .header("grpc-timeout", "3S")
-            .post(ServiceRouteGrpc.overrideRequest(balancer, target).toRequestBody("application/grpc".toMediaType()))
+            .post(payload.toRequestBody("application/grpc".toMediaType()))
             .build()
         val call = synchronized(gate) {
             check(!closed) { "Service route controller is closed" }
             client.newCall(request).also(calls::add)
         }
-        try { call.execute().use { response ->
+        return try { call.execute().use { response ->
             check(response.code == 200 && response.header("content-type")?.startsWith("application/grpc") == true) {
                 "Service route control rejected the request"
             }
             val body = response.body.byteStream().use { input -> input.readBounded(4096) }
             val status = response.trailers()["grpc-status"] ?: response.header("grpc-status")
-            check(status == "0" && body.contentEquals(byteArrayOf(0, 0, 0, 0, 0))) {
+            check(status == "0") {
                 "Service route control did not confirm the target"
             }
+            body
         } } finally { synchronized(gate) { calls.remove(call) } }
     }
 
@@ -129,7 +139,7 @@ internal fun probeServiceExit(candidate: ServiceRouteConfig.Candidate): Boolean 
     return false
 }
 
-private class PrivateUnixSocketFactory(private val path: String) : SocketFactory() {
+internal class PrivateUnixSocketFactory(private val path: String) : SocketFactory() {
     init { require(path.startsWith('/') && path.toByteArray().size < 100 && !path.contains('\u0000')) }
     override fun createSocket(): Socket = PrivateUnixSocket(path)
     override fun createSocket(host: String?, port: Int): Socket = throw UnsupportedOperationException()

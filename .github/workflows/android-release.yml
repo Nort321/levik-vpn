@@ -337,7 +337,6 @@ jobs:
             --relay-jni-directory levik_whitelist_relay/build/android/jniLibs \
             --yandex-jni-directory levik_vpn_android/native/yandex/build/android/jniLibs \
             --tuic-jni-directory levik_vpn_android/native/tuic/build/android/jniLibs \
-            --dnstt-jni-directory levik_vpn_android/native/dnstt/build/android/jniLibs \
             --source-lock release/native-sources.lock.json \
             --output-directory "${RUNNER_TEMP}/levik-native-sbom"
 

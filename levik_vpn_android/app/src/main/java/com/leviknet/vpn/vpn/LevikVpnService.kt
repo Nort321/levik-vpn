@@ -83,6 +83,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 
 class LevikVpnService : VpnService() {
     private val coreOwner = NEXT_CORE_OWNER.incrementAndGet()
@@ -119,17 +121,17 @@ class LevikVpnService : VpnService() {
     private var currentPreparedSession: PreparedTunnelEngineSession? = null
     private var currentEngineAttempt: Any? = null
     private var currentEngine: TunnelEngineAdapter? = null
-    private var currentServer: TunnelServer? = null
+    @Volatile private var currentServer: TunnelServer? = null
     private var currentSubscriptionId: String? = null
     @Volatile
     private var currentServerName: String? = null
-    private var currentNetwork: Network? = null
+    @Volatile private var currentNetwork: Network? = null
     private var currentBootstrapDnsServer: String? = null
     @Volatile
     private var coreRunning = false
     @Volatile
     private var lockdownActive = false
-    private var coreLease: Long? = null
+    @Volatile private var coreLease: Long? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var reconnectJob: Job? = null
     private var statsJob: Job? = null
@@ -140,6 +142,16 @@ class LevikVpnService : VpnService() {
     private var serviceRouteConfig: ServiceRouteConfig? = null
     private var serviceRouteRuntime: ServiceRouteRuntime? = null
     private var serviceRouteReporter: (suspend (ServiceRouteReport) -> Unit)? = null
+    @Volatile private var smartAutoLiveConfig: SmartAutoLiveConfig? = null
+    private var smartAutoLiveRuntime: SmartAutoLiveRuntime? = null
+    @Volatile private var hotSwitchOwner: HotSwitchMainOwner? = null
+    private var hotSwitchControl: ServiceRouteControl? = null
+    private var hotSwitchProfile: PreparedTunnelProfile? = null
+    private var hotSwitchContexts: Map<String, String> = emptyMap()
+    private var hotSwitchJob: Job? = null
+    private val hotSwitchIntent = AtomicLong()
+    private data class RequiredConnectionTarget(val subscriptionId: String, val serverId: String)
+    @Volatile private var smartAutoNativeProbes: List<NativeRouteProbe> = emptyList()
     private var relayEntitlementWatchdogJob: Job? = null
     private var yandexRefreshJob: Job? = null
     private var connectionJob: Job? = null
@@ -257,12 +269,15 @@ class LevikVpnService : VpnService() {
         val action = intent?.action ?: ACTION_CONNECT
         when (action) {
             ACTION_DISCONNECT -> serviceCommands.requestConnection(false)
-            ACTION_CONNECT, ACTION_RESUME, ACTION_RECONFIGURE, ACTION_SWITCH_SERVER ->
+            ACTION_CONNECT, ACTION_RESUME, ACTION_RECONFIGURE ->
                 serviceCommands.requestConnection(true)
+            ACTION_SWITCH_SERVER -> if (intent?.getBooleanExtra(EXTRA_HOT_SWITCH, false) != true &&
+                intent?.getBooleanExtra(EXTRA_FORCE_RECONNECT, false) != true) serviceCommands.requestConnection(true)
         }
         AppLogger.d(LOG_TAG, "onStartCommand action: $action")
         when (action) {
             ACTION_DISCONNECT -> {
+                retireHotSwitch()
                 val endBy = EndBy.entries.firstOrNull { it.wire == intent?.getStringExtra(EXTRA_END_BY) }
                 if (endBy == null) {
                     telemetry.finish(EndBy.USER, "user")
@@ -288,6 +303,10 @@ class LevikVpnService : VpnService() {
                 mobileAutomationJob?.cancel()
                 autoHealingJob?.cancel()
                 trafficCheckJob?.cancel()
+                smartAutoLiveRuntime?.close()
+                smartAutoLiveRuntime = null
+                serviceRouteRuntime?.close()
+                serviceRouteRuntime = null
                 VpnStateStore.update(coreOwner) { it.copy(state = VpnConnectionState.STOPPING, failure = null) }
                 container.settings.setPausedUntilMs(0L)
                 serviceCommands.enqueueStop {
@@ -307,7 +326,33 @@ class LevikVpnService : VpnService() {
                 }
             }
             ACTION_RECONNECT -> scheduleReconnect(AttemptCause.RECONNECT)
+            ACTION_AUTOMATIC_SELECTION -> requestAutomaticSelection()
             ACTION_RECONFIGURE, ACTION_SWITCH_SERVER -> {
+                val requestedServer = intent?.getStringExtra(EXTRA_SERVER_ID)
+                val forceReconnect = intent?.getBooleanExtra(EXTRA_FORCE_RECONNECT, false) == true
+                val forceProfile = if (forceReconnect) container.repository.tunnelProfile.value else null
+                if (forceReconnect &&
+                    (!coreRunning || serviceCommands.isStopping || serviceCommands.connectionGeneration == null ||
+                        !hotSwitchReconnectTargetExists(forceProfile, currentSubscriptionId, requestedServer))) {
+                    VpnStateStore.update(coreOwner) { state ->
+                        if (state.state == VpnConnectionState.CONNECTED && requestedServer != null)
+                            state.copy(hotSwitch = HotSwitchSnapshot(HotSwitchPhase.FAILED, requestedServer), hotSwitchServerIds = availableHotSwitchIds())
+                        else state
+                    }
+                    return START_STICKY
+                }
+                val required = if (forceReconnect) RequiredConnectionTarget(requireNotNull(forceProfile).subscriptionId, requireNotNull(requestedServer)) else null
+                if (forceReconnect) container.settings.setAutomaticServer(false)
+                if (action == ACTION_SWITCH_SERVER && intent?.getBooleanExtra(EXTRA_HOT_SWITCH, false) == true &&
+                    !intent.getBooleanExtra(EXTRA_FORCE_RECONNECT, false)) {
+                    if (requestedServer != null) requestManualHotSwitch(requestedServer)
+                    return START_STICKY
+                }
+                retireHotSwitch()
+                smartAutoLiveRuntime?.close()
+                smartAutoLiveRuntime = null
+                serviceRouteRuntime?.close()
+                serviceRouteRuntime = null
                 if (pauseJob != null) telemetry.record { it.unpause() }
                 beginOrContinueTelemetry(SessionTrigger.USER, AttemptCause.SERVER_SWITCH)
                 pauseJob?.cancel()
@@ -331,7 +376,7 @@ class LevikVpnService : VpnService() {
                 connectionJob?.cancel()
                 connectionJob = serviceScope.launch {
                     stopConnection(stopService = false)
-                    connect()
+                    connect(required)
                 }
             }
             else -> {
@@ -376,6 +421,7 @@ class LevikVpnService : VpnService() {
     }
 
     override fun onRevoke() {
+        retireHotSwitch()
         serviceCommands.requestConnection(false)
         connectionJob?.cancel()
         reconnectJob?.cancel()
@@ -402,7 +448,14 @@ class LevikVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        retireHotSwitch()
         serviceCommands.requestConnection(false)
+        container.appPlatform.smartAuto.liveSessionStopped(coreOwner)
+        smartAutoLiveRuntime?.close()
+        smartAutoLiveRuntime = null
+        container.appPlatform.smartAuto.liveSessionStopped(coreOwner)
+        smartAutoLiveConfig?.close()
+        smartAutoLiveConfig = null
         serviceRouteRuntime?.close()
         serviceRouteRuntime = null
         serviceRouteReporter = null
@@ -437,6 +490,8 @@ class LevikVpnService : VpnService() {
             val capturedEngine = currentEngine
             val capturedPrepared = currentPreparedSession
             val capturedTun = tunInterface
+            val capturedProbes = smartAutoNativeProbes
+            smartAutoNativeProbes = emptyList()
             coreRunning = false
             coreLease = null
             tunInterface = null
@@ -449,7 +504,7 @@ class LevikVpnService : VpnService() {
             currentServerName = null
             currentNetwork = null
             currentBootstrapDnsServer = null
-            NativeCleanup(capturedEngine, capturedPrepared, capturedLease, capturedTun)
+            NativeCleanup(capturedEngine, capturedPrepared, capturedLease, capturedTun, capturedProbes)
         }
         serviceScope.cancel()
         container.nativeCleanupScope.launch {
@@ -458,6 +513,7 @@ class LevikVpnService : VpnService() {
                     cleanup.engine?.stop(coreOwner, cleanup.prepared, cleanup.lease)
                 }
             } finally {
+                cleanup.probes.forEach { runCatching { it.close() } }
                 runCatching { cleanup.tunInterface?.close() }
                 networkMonitor.releaseCellularNetwork()
                 container.tunnelEngineRegistry.retireOwner(coreOwner)
@@ -467,16 +523,16 @@ class LevikVpnService : VpnService() {
         super.onDestroy()
     }
 
-    private suspend fun connect() {
+    private suspend fun connect(required: RequiredConnectionTarget? = null) {
         // A quick OFF/ON must wait for the old core and TUN to finish closing. The stop job
         // belongs to the service, so cancelling this connection cannot cancel that cleanup.
         serviceCommands.awaitPendingStop()
         coroutineContext.ensureActive()
         if (serviceCommands.connectionGeneration == null) return
-        connectAfterStop()
+        connectAfterStop(required)
     }
 
-    private suspend fun connectAfterStop(): Unit = connectionMutex.withLock connection@{
+    private suspend fun connectAfterStop(required: RequiredConnectionTarget? = null): Unit = connectionMutex.withLock connection@{
         coroutineContext.ensureActive()
         val generation = serviceCommands.connectionGeneration ?: return@connection
         if (destroyed.get()) return@connection
@@ -500,7 +556,7 @@ class LevikVpnService : VpnService() {
         try {
             checkDisclosureConsent()
             var profile = readPreparedProfile()
-            val selectedId = fallbackAttempt?.targetServerId ?: readSelectedServerId()
+            val selectedId = required?.serverId ?: fallbackAttempt?.targetServerId ?: readSelectedServerId()
             val cachedSelected = profile.servers.firstOrNull { it.id == selectedId }
             if (cachedSelected?.engine == TunnelEngineKind.LEVIK_RELAY) {
                 progress.reach(AttemptStage.PROFILE, "relay_access_refresh")
@@ -516,8 +572,11 @@ class LevikVpnService : VpnService() {
                 }
             }
             progress.reach(AttemptStage.PROFILE, "config_invalid")
+            if (required != null) require(hotSwitchReconnectTargetExists(profile, required.subscriptionId, required.serverId)) {
+                "Selected HotSwitch server is no longer available"
+            }
             attemptedServerId = selectedId
-            val selected = if (fallbackAttempt != null) {
+            var selected = if (fallbackAttempt != null || required != null) {
                 profile.servers.firstOrNull { it.id == selectedId }
                     ?: error("Auto-failover server is no longer present in the tunnel profile")
             } else {
@@ -527,11 +586,6 @@ class LevikVpnService : VpnService() {
                     ?: profile.servers.singleOrNull { it.engine == TunnelEngineKind.LEVIK_GAME }
                     ?: error("Tunnel profile has no server eligible for automatic selection")
             }
-            // This separate request is gated and endpoint-specific; LTE and relay profiles are untouched.
-            profile = container.repository.prepareServiceRoutes(profile, selected, container.appPlatform.flagEnabled("service_routes"))
-            val routes = ServiceRouteConfig.prepare(profile, selected, filesDir, container.settings.autoFallbackServer.value)
-            serviceRouteConfig = routes
-            telemetry.record { it.attempt(selected.name, selected.telemetryProtocol(), attemptCause) }
             progress.reach(AttemptStage.PROFILE, "profile_expired")
             val yandexExpiry = selected.yandexConfig?.let {
                 Instant.ofEpochSecond(it.expiresAt).toString()
@@ -570,7 +624,7 @@ class LevikVpnService : VpnService() {
             enforceNetworkRequirement(selected, network)
             underlyingNetwork.set(network)
             prepareTelemetryNetwork(network)
-            val bootstrapDnsServer = resolveBootstrapDnsServer(selected, network)
+            var bootstrapDnsServer = resolveBootstrapDnsServer(selected, network)
             currentBootstrapDnsServer = bootstrapDnsServer
             progress.reach(AttemptStage.CORE, "config_invalid")
             val dnsProvider = container.settings.dnsProvider.value
@@ -593,12 +647,101 @@ class LevikVpnService : VpnService() {
                 }
             } else null
 
+            if (fallbackAttempt == null && container.settings.automaticServer.value && selected.isSmartAutoCandidate()) {
+                container.appPlatform.refreshNodeLoad(maxAgeMs = 15_000L, waitMs = 1_200L)
+                val probeBootstrapDns = bootstrapDnsServer ?: networkMonitor.awaitBootstrapDnsServer(network)
+                val pool = container.appPlatform.avoidMaintenance(profile.servers.filter(TunnelServer::isSmartAutoCandidate))
+                val chosen = SmartRoutePreflight(container.xrayRuntime, container.tunnelEngineRegistry, container.json, filesDir).select(
+                    owner = coreOwner,
+                    profile = profile,
+                    servers = pool,
+                    network = network,
+                    smartAuto = container.appPlatform.smartAuto,
+                    fallbackServerId = selected.id,
+                    environment = { candidate -> TunnelEngineEnvironment(
+                        network = network,
+                        protector = fileDescriptorProtector(network, candidate),
+                        dnsServer = probeBootstrapDns,
+                        unboundSocketProtector = { fd -> protectUnboundTunnelSocket(fd, ::protect) },
+                    ) },
+                    baseConfig = { probeProfile, id -> XrayConfigBuilder(container.json).build(
+                        profile = probeProfile, selectedServerId = id, tunFileDescriptor = 0,
+                        primaryDnsIp = primaryDns, secondaryDnsIp = secondaryDns,
+                        dohEndpoint = dohUrl,
+                        antiDpiEnabled = antiDpi,
+                        antiDpiPackets = container.settings.antiDpiPackets.value,
+                        antiDpiLength = container.settings.antiDpiLength.value,
+                        antiDpiInterval = container.settings.antiDpiInterval.value,
+                        xhttpMuxHosts = container.appPlatform.xhttpMuxHosts(),
+                    ) },
+                )
+                coroutineContext.ensureActive()
+                if (!serviceCommands.permitsConnection(generation)) return@connection
+                if (networkMonitor.activeNetwork(selected.networkRequirement) != network) {
+                    throw NetworkSetupException("Underlying network changed during route selection")
+                }
+                if (container.settings.automaticServer.value && chosen != null) {
+                    selected = pool.first { it.id == chosen }
+                    attemptedServerId = selected.id
+                    bootstrapDnsServer = resolveBootstrapDnsServer(selected, network)
+                    currentBootstrapDnsServer = bootstrapDnsServer
+                    container.repository.selectServer(selected.id)
+                }
+            }
+            // Load endpoint-specific routing only after the actual complete route has been chosen.
+            profile = container.repository.prepareServiceRoutes(profile, selected, container.appPlatform.flagEnabled("service_routes"))
+            val routes = ServiceRouteConfig.prepare(profile, selected, filesDir, container.settings.autoFallbackServer.value)
+            serviceRouteConfig = routes
+            telemetry.record { it.attempt(selected.name, selected.telemetryProtocol(), attemptCause) }
+
+            var liveProfile = profile
+            val liveOriginals = if (selected.isSmartAutoCandidate() &&
+                (selected.engine == TunnelEngineKind.XRAY || container.settings.automaticServer.value))
+                SmartRouteSelection.candidates(listOf(selected) + profile.servers.filter { it.id != selected.id && it.isSmartAutoCandidate() &&
+                    (it.engine == TunnelEngineKind.XRAY || container.settings.automaticServer.value) && !container.appPlatform.underMaintenance(it) })
+            else emptyList()
+            if (liveOriginals.isNotEmpty()) {
+                val converted = mutableListOf<TunnelServer>()
+                val lowRam = getSystemService(android.app.ActivityManager::class.java)?.isLowRamDevice == true
+                withTimeoutOrNull(4_000L) {
+                    for (candidate in liveOriginals.filter { it.engine == TunnelEngineKind.LEVIK_TUIC }.take(if (lowRam) 1 else 2)) {
+                        val prepared = try { container.tunnelEngineRegistry.require(candidate.engine).prepareRouteProbe(candidate, TunnelEngineEnvironment(
+                            network = network, protector = fileDescriptorProtector(network, candidate), dnsServer = bootstrapDnsServer,
+                            unboundSocketProtector = { fd -> protectUnboundTunnelSocket(fd, ::protect) },
+                        )) } catch (error: CancellationException) { throw error } catch (_: Exception) { null }
+                        if (prepared != null) {
+                            val accepted = lifecycleGate.withLock {
+                                if (destroyed.get() || !serviceCommands.permitsConnection(generation)) false
+                                else { smartAutoNativeProbes = smartAutoNativeProbes + prepared; true }
+                            }
+                            if (!accepted) { prepared.close(); throw CancellationException("Connection was superseded during probe setup") }
+                            converted += XrayConfigBuilder(container.json).withTuicProxy(profile, candidate.id, prepared.proxy).servers.first()
+                        }
+                    }
+                }
+                val coreServers = profile.servers.filter { it.engine == TunnelEngineKind.XRAY } + converted
+                val pool = liveOriginals.filter { source -> coreServers.any { it.id == source.id } }
+                if (pool.any { it.id == selected.id }) {
+                    liveProfile = profile.copy(servers = coreServers)
+                    smartAutoLiveConfig = SmartAutoLiveConfig(pool.map { source -> coreServers.first { it.id == source.id } }, selected.id, filesDir, routes, pool)
+                    hotSwitchProfile = profile
+                    hotSwitchContexts = pool.associate { it.id to container.appPlatform.smartAuto.measurementContext(it) }
+                    bootstrapDnsServer = networkMonitor.awaitBootstrapDnsServer(network)
+                    currentBootstrapDnsServer = bootstrapDnsServer
+                } else {
+                    smartAutoNativeProbes.forEach { runCatching { it.close() } }
+                    smartAutoNativeProbes = emptyList()
+                }
+            }
+            val live = smartAutoLiveConfig
+
             // Regular servers and the TUIC sidecar share one Xray configuration path.
             fun regularXrayConfig(
                 buildProfile: PreparedTunnelProfile,
                 tunFileDescriptor: Int,
                 antiDpiEnabled: Boolean,
-            ): String = XrayConfigBuilder(container.json).build(
+            ): String {
+                val base = XrayConfigBuilder(container.json).build(
                 profile = buildProfile,
                 selectedServerId = selected.id,
                 tunFileDescriptor = tunFileDescriptor,
@@ -628,24 +771,13 @@ class LevikVpnService : VpnService() {
                 xhttpMuxHosts = container.appPlatform.xhttpMuxHosts(),
                 serviceRouteSession = routes,
             )
+                return if (live == null) base else container.json.encodeToString(JsonObject.serializer(), live.apply(container.json.parseToJsonElement(base).jsonObject))
+            }
 
-            val request = when (selected.engine) {
-                TunnelEngineKind.LEVIK_DNSTT -> TunnelEngineRequest.Dnstt(
-                    config = requireNotNull(selected.dnsttConfig),
-                    configFactory = RelayXrayConfigFactory { tunFileDescriptor, proxy ->
-                        dnsttTcpConfig(XrayConfigBuilder(container.json).buildRelayProxy(
-                            profile = profile, tunFileDescriptor = tunFileDescriptor, proxy = proxy,
-                            primaryDnsIp = "77.88.8.8", secondaryDnsIp = "77.88.8.1",
-                            routingPreset = routingPreset,
-                            customDirectDomains = container.settings.customDirectDomains.value,
-                            customProxyDomains = container.settings.customProxyDomains.value,
-                            lteDirectCidrs = if (routingPreset == RoutingPreset.BYPASS_RU) container.lteRoutingData.cidrs else emptyList(),
-                            lteDirectDomains = if (routingPreset == RoutingPreset.BYPASS_RU) container.lteRoutingData.domains else emptyList(),
-                        ))
-                    },
-                    tunPlan = xrayTunPlan(primaryDns = "77.88.8.8", secondaryDns = "77.88.8.1")
-                        .copy(extraIpv4Routes = listOf(DNSTT_FAKE_IP_POOL)),
-                )
+            val request = if (live != null) TunnelEngineRequest.Xray(
+                configFactory = XrayConfigFactory { fd -> regularXrayConfig(liveProfile, fd, antiDpi) },
+                tunPlan = xrayTunPlan(primaryDns = primaryDns, secondaryDns = secondaryDns),
+            ) else when (selected.engine) {
                 TunnelEngineKind.XRAY -> TunnelEngineRequest.Xray(
                     configFactory = XrayConfigFactory { tunFileDescriptor ->
                         regularXrayConfig(profile, tunFileDescriptor, antiDpi)
@@ -759,7 +891,7 @@ class LevikVpnService : VpnService() {
                     ),
                 )
             }
-            val engine = container.tunnelEngineRegistry.require(selected.engine)
+            val engine = container.tunnelEngineRegistry.require(if (request is TunnelEngineRequest.Xray) TunnelEngineKind.XRAY else selected.engine)
             val engineAttempt = Any()
             check(!destroyed.get()) { "VPN service was destroyed during startup" }
             progress.reach(startStage(selected), "core_start_failed")
@@ -828,6 +960,7 @@ class LevikVpnService : VpnService() {
             coroutineContext.ensureActive()
             checkConnectionDeadline(connectionExpiryDeadline)
             coreRunning = true
+            startHotSwitchOwner(network, generation)
             if (routes != null) {
                 val (splitMode, splitPackages) = withAccountDirectApps(
                     container.settings.splitTunnelMode.value, container.settings.splitTunnelPackages.value,
@@ -869,6 +1002,7 @@ class LevikVpnService : VpnService() {
                 startStats()
                 startAutoHealing()
                 startTrafficCheck(selected, network)
+                startSmartAutoLive(network, generation)
                 startMobileServerAutomation()
                 startRelayEntitlementWatchdog(selected, prepared)
                 connectionExpiryDeadline?.let(::scheduleProfileExpiry)
@@ -884,6 +1018,7 @@ class LevikVpnService : VpnService() {
                         serverName = selected.name,
                         serverCountryCode = selected.countryCode,
                         effectiveRoutingProfile = routingProfile,
+                        hotSwitchServerIds = availableHotSwitchIds(),
                     ),
                 )
                 showForeground(VpnConnectionState.CONNECTED, selected.name)
@@ -1073,6 +1208,12 @@ class LevikVpnService : VpnService() {
     }
 
     private fun stopCoreAndTun() {
+        retireHotSwitch()
+        container.appPlatform.smartAuto.liveSessionStopped(coreOwner)
+        smartAutoLiveRuntime?.close()
+        smartAutoLiveRuntime = null
+        smartAutoLiveConfig?.close()
+        smartAutoLiveConfig = null
         serviceRouteRuntime?.close()
         serviceRouteRuntime = null
         serviceRouteReporter = null
@@ -1086,6 +1227,8 @@ class LevikVpnService : VpnService() {
             }
         }
         networkMonitor.releaseCellularNetwork()
+        smartAutoNativeProbes.forEach { runCatching { it.close() } }
+        smartAutoNativeProbes = emptyList()
         coreRunning = false
         coreLease = null
         runCatching { tunInterface?.close() }
@@ -1102,13 +1245,248 @@ class LevikVpnService : VpnService() {
         underlyingNetwork.set(null)
     }
 
+    private fun cancelManualHotSwitch() {
+        hotSwitchIntent.incrementAndGet()
+        hotSwitchOwner?.invalidate()
+        hotSwitchJob?.cancel()
+        hotSwitchJob = null
+        VpnStateStore.update(coreOwner) { it.copy(hotSwitch = null) }
+    }
+
+    private fun retireHotSwitch() {
+        hotSwitchIntent.incrementAndGet()
+        hotSwitchOwner?.close()
+        hotSwitchOwner = null
+        hotSwitchJob?.cancel()
+        hotSwitchJob = null
+        hotSwitchControl?.close()
+        hotSwitchControl = null
+        hotSwitchProfile = null
+        hotSwitchContexts = emptyMap()
+        VpnStateStore.update(coreOwner) { it.copy(hotSwitch = null, hotSwitchServerIds = emptySet()) }
+    }
+
+    private fun availableHotSwitchIds(): Set<String> {
+        val live = smartAutoLiveConfig ?: return emptySet()
+        val installed = hotSwitchProfile ?: return emptySet()
+        val latest = container.repository.tunnelProfile.value ?: return emptySet()
+        if (!coreRunning || lockdownActive || activeProfileDeadline?.isExpired(SystemClock.elapsedRealtime()) == true) return emptySet()
+        val service = serviceRouteConfig
+        if (service != null && container.repository.activeServiceRoutes.value?.fingerprint != service.policy.fingerprint) return emptySet()
+        return hotSwitchEligibleServers(live.originals, installed, latest).filter { source ->
+            !container.appPlatform.underMaintenance(source) &&
+                hotSwitchContexts[source.id] == container.appPlatform.smartAuto.measurementContext(source) &&
+                (service == null || service.policy.exitFor(source)?.state == "enabled")
+        }.mapTo(linkedSetOf()) { it.id }
+    }
+
+    private fun startHotSwitchOwner(network: Network, generation: Long) {
+        val config = smartAutoLiveConfig ?: return
+        cancelManualHotSwitch()
+        hotSwitchOwner?.close()
+        hotSwitchControl?.close()
+        val control = ServiceRouteControl(config).also { hotSwitchControl = it }
+        val lease = coreLease
+        fun alive() = coreRunning && coreLease == lease && smartAutoLiveConfig === config && currentNetwork == network &&
+            !destroyed.get() && serviceCommands.permitsAutomaticConnection(generation) &&
+            activeProfileDeadline?.isExpired(SystemClock.elapsedRealtime()) != true
+        hotSwitchOwner = HotSwitchMainOwner(
+            initialId = config.initial.id,
+            candidateIds = config.candidates.mapTo(linkedSetOf()) { it.id },
+            preflight = { id -> probeHotSwitchMain(config, id) },
+            install = { id, guard -> connectionMutex.withLock {
+                check(alive() && guard()) { "Live main selection changed" }
+                val candidate = config.candidates.first { it.id == id }
+                val source = config.originals.first { it.id == id }
+                val routes = serviceRouteRuntime
+                val exit = serviceRouteConfig?.policy?.exitFor(source)
+                if (serviceRouteConfig != null) {
+                    check(exit?.state == "enabled" && routes != null) { "Ordinary main route unavailable" }
+                    check(routes.awaitReady()) { "Main route control unavailable" }
+                }
+                check(alive() && guard()) { "Live main selection changed" }
+                check(sourceMatchesLiveProfile(source)) { "Installed main source changed" }
+                control.override(ServiceRouteConfig.MAIN, candidate.tag)
+                // Remember an acknowledged MAIN even if intent is cancelled during
+                // the RPC. The runtime then suppresses further stale policy writes.
+                if (routes != null && exit != null) routes.commitExternalMain(exit.exitId, candidate.tag) { alive() && guard() }
+                check(alive() && guard()) { "Live main selection changed" }
+            } },
+            confirmed = { id ->
+                if (alive()) {
+                    val source = config.originals.first { it.id == id }
+                    config.installed(id)
+                    currentServer = source
+                    currentServerName = source.name
+                    VpnStateStore.update(coreOwner) { snapshot ->
+                        if (snapshot.state == VpnConnectionState.CONNECTED) snapshot.copy(serverId = id,
+                            serverName = source.name, serverCountryCode = source.countryCode, engine = source.engine,
+                            mainSelectionCertain = true) else snapshot
+                    }
+                    serviceScope.launch(Dispatchers.Main.immediate) {
+                        if (alive() && VpnStateStore.state.value.state == VpnConnectionState.CONNECTED)
+                            showForeground(VpnConnectionState.CONNECTED, currentServerName)
+                    }
+                }
+            },
+        )
+    }
+
+    private suspend fun persistLiveMain(owner: HotSwitchMainOwner, id: String): Boolean = connectionMutex.withLock {
+        if (hotSwitchOwner === owner && owner.certain && owner.currentId == id && coreRunning && currentServer?.id == id) {
+            try { container.repository.selectServer(id); true }
+            catch (error: CancellationException) { throw error }
+            catch (_: Exception) { AppLogger.w(LOG_TAG, "HotSwitch selection could not be saved"); false }
+        } else false
+    }
+
+    private fun sourceMatchesLiveProfile(source: TunnelServer): Boolean {
+        val installed = hotSwitchProfile ?: return false
+        val latest = container.repository.tunnelProfile.value ?: return false
+        return hotSwitchReconnectTargetExists(latest, installed.subscriptionId, source.id) && latest.profileId == installed.profileId &&
+            latest.servers.firstOrNull { it.id == source.id } == source &&
+            hotSwitchContexts[source.id] == container.appPlatform.smartAuto.measurementContext(source) &&
+            !container.appPlatform.underMaintenance(source)
+    }
+
+    private fun requestManualHotSwitch(serverId: String) {
+        cancelManualHotSwitch()
+        if (!coreRunning || lockdownActive || VpnStateStore.state.value.state != VpnConnectionState.CONNECTED) return
+        val owner = hotSwitchOwner
+        val source = smartAutoLiveConfig?.originals?.firstOrNull { it.id == serverId }
+        val intent = hotSwitchIntent.get()
+        val lease = coreLease
+        if (owner == null || serverId !in availableHotSwitchIds()) {
+            VpnStateStore.update(coreOwner) { it.copy(hotSwitch = HotSwitchSnapshot(HotSwitchPhase.FAILED, serverId, source?.name),
+                hotSwitchServerIds = availableHotSwitchIds()) }
+            return
+        }
+        container.settings.setAutomaticServer(false)
+        smartAutoLiveRuntime?.close()
+        smartAutoLiveRuntime = null
+        trafficCheckJob?.cancel()
+        startAutoHealing()
+        VpnStateStore.update(coreOwner) { it.copy(hotSwitch = HotSwitchSnapshot(HotSwitchPhase.PREPARING, serverId, source?.name),
+            mainSelectionCertain = owner.certain, hotSwitchServerIds = availableHotSwitchIds()) }
+        hotSwitchJob = serviceScope.launch {
+            val result = owner.select(serverId, canCommit = {
+                intent == hotSwitchIntent.get() && hotSwitchOwner === owner && coreLease == lease &&
+                    !container.settings.automaticServer.value && serverId in availableHotSwitchIds()
+            })
+            if (intent != hotSwitchIntent.get() || hotSwitchOwner !== owner || coreLease != lease ||
+                VpnStateStore.state.value.state != VpnConnectionState.CONNECTED) return@launch
+            val saved = result.outcome != HotSwitchMainOwner.Outcome.APPLIED || persistLiveMain(owner, serverId)
+            val phase = when (result.outcome) {
+                HotSwitchMainOwner.Outcome.APPLIED -> HotSwitchPhase.APPLIED
+                HotSwitchMainOwner.Outcome.UNCERTAIN -> HotSwitchPhase.UNCERTAIN
+                HotSwitchMainOwner.Outcome.CANCELLED -> null
+                else -> HotSwitchPhase.FAILED
+            }
+            if (intent != hotSwitchIntent.get() || hotSwitchOwner !== owner) return@launch
+            VpnStateStore.update(coreOwner) { it.copy(hotSwitch = phase?.let { value -> HotSwitchSnapshot(value, serverId, source?.name, saved) },
+                mainSelectionCertain = owner.certain, hotSwitchServerIds = availableHotSwitchIds()) }
+            if (!owner.certain) showForeground(VpnConnectionState.CONNECTED, null, serverCountryCode = null)
+        }
+    }
+
+    private fun requestAutomaticSelection() {
+        cancelManualHotSwitch()
+        container.settings.setAutomaticServer(true)
+        smartAutoLiveRuntime?.close()
+        smartAutoLiveRuntime = null
+        val owner = hotSwitchOwner ?: return
+        val network = currentNetwork ?: return
+        val generation = serviceCommands.connectionGeneration ?: return
+        val lease = coreLease
+        val intent = hotSwitchIntent.get()
+        val live = smartAutoLiveConfig ?: return
+        val smartAuto = container.appPlatform.smartAuto
+        val candidates = live.originals.filter { source -> source.isSmartAutoCandidate() && sourceMatchesLiveProfile(source) &&
+            (serviceRouteConfig == null || serviceRouteConfig?.policy?.exitFor(source)?.state == "enabled") }
+        val target = smartAuto.rank(candidates, emptyMap(), network).firstOrNull()?.id ?: owner.currentId
+        val targetName = live.originals.firstOrNull { it.id == target }?.name
+        VpnStateStore.update(coreOwner) { it.copy(mainSelectionCertain = owner.certain,
+            hotSwitch = HotSwitchSnapshot(HotSwitchPhase.PREPARING, target, targetName)) }
+        hotSwitchJob = serviceScope.launch {
+            // Serialize with a cancelled manual RPC and its compensation before
+            // the automatic policy can make a fresh decision.
+            val result = owner.select(target, canCommit = {
+                coreRunning && coreLease == lease && hotSwitchOwner === owner && currentNetwork == network &&
+                    intent == hotSwitchIntent.get() && container.settings.automaticServer.value &&
+                    serviceCommands.permitsAutomaticConnection(generation) &&
+                    candidates.firstOrNull { it.id == target }?.let(::sourceMatchesLiveProfile) == true
+            })
+            if (intent != hotSwitchIntent.get() || hotSwitchOwner !== owner || coreLease != lease) return@launch
+            val saved = result.outcome != HotSwitchMainOwner.Outcome.APPLIED || persistLiveMain(owner, result.serverId)
+            if (intent != hotSwitchIntent.get() || hotSwitchOwner !== owner || coreLease != lease) return@launch
+            VpnStateStore.update(coreOwner) { it.copy(mainSelectionCertain = owner.certain,
+                hotSwitch = when (result.outcome) {
+                    HotSwitchMainOwner.Outcome.UNCERTAIN -> HotSwitchSnapshot(HotSwitchPhase.UNCERTAIN, target, targetName)
+                    HotSwitchMainOwner.Outcome.APPLIED -> HotSwitchSnapshot(HotSwitchPhase.APPLIED, result.serverId, currentServerName, saved)
+                    HotSwitchMainOwner.Outcome.FAILED -> HotSwitchSnapshot(HotSwitchPhase.FAILED, target, targetName)
+                    else -> null
+                }) }
+            startSmartAutoLive(network, generation)
+        }
+    }
+
     private fun startServiceRouteRuntime() {
         val config = serviceRouteConfig ?: return
         val reporter = serviceRouteReporter ?: return
         val lease = coreLease
-        serviceRouteRuntime = ServiceRouteRuntime(config, serviceScope) { report ->
+        serviceRouteRuntime = ServiceRouteRuntime(config, serviceScope, smartAutoLiveConfig) { report ->
             if (coreRunning && coreLease == lease && serviceRouteConfig === config) reporter(report)
         }.also { it.start() }
+    }
+
+    private fun startSmartAutoLive(network: Network, generation: Long) {
+        val config = smartAutoLiveConfig ?: return
+        val lease = coreLease
+        container.appPlatform.smartAuto.liveSessionStarted(coreOwner)
+        fun enabled() = coreRunning && coreLease == lease && smartAutoLiveConfig === config && currentNetwork == network &&
+            !destroyed.get() && container.settings.automaticServer.value && serviceCommands.permitsAutomaticConnection(generation)
+        smartAutoLiveRuntime?.close()
+        smartAutoLiveRuntime = null
+        if (!container.settings.automaticServer.value) {
+            startAutoHealing()
+            return
+        }
+        autoHealingJob?.cancel()
+        autoHealingJob = null
+        smartAutoLiveRuntime = SmartAutoLiveRuntime(config, serviceScope, network, container.appPlatform.smartAuto,
+            enabled = ::enabled,
+            currentId = { currentServer?.id },
+            heavyTraffic = { VpnStateStore.state.value.let { it.downloadBytesPerSecond + it.uploadBytesPerSecond > 512 * 1024 } },
+            refreshLoad = { container.appPlatform.refreshNodeLoad(maxAgeMs = 15_000L, waitMs = 1_200L) },
+            readTraffic = { control -> if (serviceRouteConfig != null) serviceRouteRuntime?.tunTrafficCounters() else control?.tunTrafficCounters() },
+            mainHealth = { healthy -> if (enabled()) serviceRouteRuntime?.automaticMainHealth(healthy) },
+            install = install@ { candidate, _, canSwitch ->
+                val source = config.originals.firstOrNull { it.id == candidate.id }
+                val previous = currentServer
+                val owner = hotSwitchOwner
+                if (source == null || previous == null || owner == null || !enabled()) false else {
+                    val intent = hotSwitchIntent.get()
+                    VpnStateStore.update(coreOwner) { it.copy(hotSwitch = HotSwitchSnapshot(HotSwitchPhase.PREPARING, source.id, source.name)) }
+                    val result = owner.select(candidate.id, canCommit = {
+                        enabled() && !container.appPlatform.underMaintenance(source) && canSwitch()
+                    }, proven = true)
+                    if (!enabled() || intent != hotSwitchIntent.get() || hotSwitchOwner !== owner) return@install false
+                    if (result.outcome == HotSwitchMainOwner.Outcome.APPLIED) {
+                        container.appPlatform.smartAuto.reportSwitch(SmartSwitch(previous.id, previous.smartProtocol(), source.id, source.smartProtocol(), SmartSwitchReason.PATH_QUALITY))
+                        val saved = persistLiveMain(owner, source.id)
+                        if (enabled() && intent == hotSwitchIntent.get() && hotSwitchOwner === owner) VpnStateStore.update(coreOwner) {
+                            it.copy(mainSelectionCertain = owner.certain, hotSwitch = if (saved) null
+                                else HotSwitchSnapshot(HotSwitchPhase.APPLIED, source.id, source.name, false))
+                        }
+                        true
+                    } else {
+                        VpnStateStore.update(coreOwner) { it.copy(mainSelectionCertain = owner.certain, hotSwitch =
+                            if (!owner.certain) HotSwitchSnapshot(HotSwitchPhase.UNCERTAIN, source.id, source.name) else null) }
+                        false
+                    }
+                }
+            },
+        ).also { it.start() }
     }
 
     /** Levik Game carries only the selected games; null for every other server. */
@@ -1181,11 +1559,6 @@ class LevikVpnService : VpnService() {
                 // before accepting a connection. Do not call allowFamily:
                 // that would permit fallback to the physical network.
                 VpnRoutes.apply(this, useNativeExclusions, includeIpv6 = tunPlan.ipv6Enabled)
-                // More specific than the 198.18.0.0/15 exclusion, so it wins on lookup.
-                tunPlan.extraIpv4Routes.forEach { cidr ->
-                    val (address, prefix) = VpnRoutes.splitCidr(cidr)
-                    addRoute(address, prefix)
-                }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     setMetered(false)
                 }
@@ -1238,9 +1611,11 @@ class LevikVpnService : VpnService() {
     }
 
     private suspend fun resolveBootstrapDnsServer(server: TunnelServer, network: Network): String? {
-        if (server.engine != TunnelEngineKind.XRAY) return null
+        if (server.engine != TunnelEngineKind.XRAY && server.engine != TunnelEngineKind.LEVIK_RELAY && smartAutoLiveConfig == null) return null
         val dnsServer = networkMonitor.awaitBootstrapDnsServer(network)
-        if (dnsServer == null && requiresBootstrapDns(ServerPinger.extractEndpoint(server.outbound)?.first)) {
+        if (dnsServer == null && server.engine != TunnelEngineKind.LEVIK_RELAY &&
+            requiresBootstrapDns(ServerPinger.extractEndpoint(server.outbound)?.first)
+        ) {
             // An unprotected/system fallback can resolve through our own TUN after startup.
             // Wait for the physical network to supply a resolver instead of looping or using
             // a public DNS endpoint that may be blocked by the mobile allow-list.
@@ -1501,6 +1876,7 @@ class LevikVpnService : VpnService() {
 
     /** The next mobile server after [failed] carried nothing under allowlists; null when none is left. */
     private suspend fun advanceAllowlist(failed: TunnelServer, network: Network?, requireRunning: Boolean): TunnelServer? {
+        val generation = if (requireRunning) serviceCommands.connectionGeneration ?: return null else null
         allowlistLadder.tried(failed.id, failed.smartProtocol())
         if (allowlistLadder.exhausted()) {
             AppLogger.w(LOG_TAG, "Allowlists: no mobile server carried traffic; giving up for now")
@@ -1512,7 +1888,8 @@ class LevikVpnService : VpnService() {
             return null
         }
         val accepted = !requireRunning || connectionMutex.withLock {
-            coreRunning && currentServer?.id == failed.id
+            generation != null && serviceCommands.permitsAutomaticConnection(generation) &&
+                coreRunning && currentServer?.id == failed.id && currentNetwork == network
         }
         if (!accepted) return null
         allowlistLadder.climbed()
@@ -1575,7 +1952,7 @@ class LevikVpnService : VpnService() {
             val returningToRegular = preferred != null && shouldReturnToRegularNetwork(preferred)
             if (returningToRegular && pendingRegularNetwork == preferred && connectionJob?.isActive == true) return@launch
             val selected = networkMonitor.activeNetwork(requirement)
-            val selectedDns = selected?.takeIf { currentServer?.engine == TunnelEngineKind.XRAY }
+            val selectedDns = selected?.takeIf { currentServer?.engine == TunnelEngineKind.XRAY || smartAutoLiveConfig != null }
                 ?.let(networkMonitor::bootstrapDnsServer)
             if (!returningToRegular && selected == currentNetwork && selectedDns == currentBootstrapDnsServer &&
                 (coreRunning || reconnectJob?.isActive == true)
@@ -1585,6 +1962,11 @@ class LevikVpnService : VpnService() {
             // Interrupt an in-flight handshake before waiting for the connection lock. Otherwise
             // a lost Wi-Fi network can leave the old handshake blocking the LTE callback.
             serviceCommands.interruptReconnect(generation)
+            cancelManualHotSwitch()
+            smartAutoLiveRuntime?.close()
+            smartAutoLiveRuntime = null
+            serviceRouteRuntime?.close()
+            serviceRouteRuntime = null
             connectionMutex.withLock {
                 if (destroyed.get() || !serviceCommands.permitsAutomaticConnection(generation)) return@withLock
                 val server = currentServer ?: return@withLock
@@ -1610,7 +1992,7 @@ class LevikVpnService : VpnService() {
                     return@withLock
                 }
                 val replacement = networkMonitor.activeNetwork(server.networkRequirement)
-                val replacementDns = replacement?.takeIf { server.engine == TunnelEngineKind.XRAY }
+                val replacementDns = replacement?.takeIf { server.engine == TunnelEngineKind.XRAY || smartAutoLiveConfig != null }
                     ?.let(networkMonitor::bootstrapDnsServer)
                 if (replacement == currentNetwork && replacementDns == currentBootstrapDnsServer && coreRunning) {
                     return@withLock
@@ -1631,6 +2013,10 @@ class LevikVpnService : VpnService() {
                 if (replacement != null) {
                     AppLogger.i(LOG_TAG, "Underlying network changed, triggering reconnect")
                     telemetry.record { it.network(networkType(replacement), NetworkState.CHANGED) }
+                    if (container.settings.automaticServer.value && server.isSmartAutoCandidate()) {
+                        reconnectMeasuredNetwork(generation)
+                        return@withLock
+                    }
                     if (moveToNetworkWinner(server, replacement)) return@withLock
                     scheduleReconnectLocked(AttemptCause.NETWORK_CHANGE)
                     return@withLock
@@ -1650,6 +2036,24 @@ class LevikVpnService : VpnService() {
                 }
                 showForeground(VpnConnectionState.RECONNECTING, currentServerName)
             }
+        }
+    }
+
+    /** Retain the old TUN as a traffic barrier while the new physical network is measured. */
+    private fun reconnectMeasuredNetwork(generation: Long) {
+        nextAttemptCause = AttemptCause.NETWORK_CHANGE
+        pendingAutoFallback = null
+        reconnectJob?.cancel()
+        connectionJob?.cancel()
+        connectionJob = serviceScope.launch {
+            val retainedTun = connectionMutex.withLock {
+                if (!serviceCommands.permitsAutomaticConnection(generation)) return@launch
+                tunInterface.also { tunInterface = null }
+            }
+            try {
+                stopConnection(stopService = false)
+                connect()
+            } finally { runCatching { retainedTun?.close() } }
         }
     }
 
@@ -1816,6 +2220,8 @@ class LevikVpnService : VpnService() {
                     autoHealingJob = null
                     serviceRouteRuntime?.close()
                     serviceRouteRuntime = null
+                    smartAutoLiveRuntime?.close()
+                    smartAutoLiveRuntime = null
                     engine.stop(coreOwner, previousPrepared, coreLease)
                     coreRunning = false
                     coreLease = null
@@ -1870,7 +2276,6 @@ class LevikVpnService : VpnService() {
                         is TunnelEngineRequest.Yandex -> request.tunPlan
                         is TunnelEngineRequest.Tuic -> request.tunPlan
                         is TunnelEngineRequest.Game -> request.tunPlan
-                        is TunnelEngineRequest.Dnstt -> request.tunPlan
                     }
                     val activeTun = if (prepared.tunPlan == previousTunPlan) {
                         previousTun
@@ -1909,7 +2314,9 @@ class LevikVpnService : VpnService() {
                     coroutineContext.ensureActive()
                     if (request is TunnelEngineRequest.Relay) checkConnectionDeadline(relayDeadline)
                     coreRunning = true
+                    startHotSwitchOwner(network, generation)
                     startServiceRouteRuntime()
+                    startSmartAutoLive(network, generation)
                     tunnelHealthPolicy.onTunnelStarted(SystemClock.elapsedRealtime())
                     relayDeadline?.let(::scheduleProfileExpiry)
                     if (request is TunnelEngineRequest.Yandex) {
@@ -2264,7 +2671,7 @@ class LevikVpnService : VpnService() {
             connectionMutex.withLock {
                 if (!serviceCommands.permitsAutomaticConnection(generation) ||
                     (expectedEngineAttempt != null && currentEngineAttempt !== expectedEngineAttempt) ||
-                    !coreRunning || (currentEngine?.kind !in DOCUMENT_RELAY_ENGINES && currentEngine?.kind != TunnelEngineKind.LEVIK_DNSTT)
+                    !coreRunning || currentEngine?.kind !in DOCUMENT_RELAY_ENGINES
                 ) {
                     return@withLock
                 }
@@ -2425,6 +2832,8 @@ class LevikVpnService : VpnService() {
 
     private fun startAutoHealing() {
         autoHealingJob?.cancel()
+        autoHealingJob = null
+        if (smartAutoLiveConfig != null && container.settings.automaticServer.value) return
         // Ordinary service routes own their exit health without restarting unrelated routes.
         if (serviceRouteConfig != null) return
         if (!container.settings.autoHealingEnabled.value) return
@@ -2433,10 +2842,9 @@ class LevikVpnService : VpnService() {
         autoHealingJob = serviceScope.launch {
             var failedRounds = 0
             while (coreRunning) {
-                delay(if (currentServer?.engine == TunnelEngineKind.LEVIK_DNSTT) {
-                    maxOf(60_000L, autoHealingDelayMs(failedRounds))
-                } else autoHealingDelayMs(failedRounds))
+                delay(autoHealingDelayMs(failedRounds))
                 if (!coreRunning) break
+                if (VpnStateStore.state.value.hotSwitch?.phase == HotSwitchPhase.PREPARING || hotSwitchOwner?.certain == false) continue
                 val probe = checkConnectivity()
                 val nowMs = SystemClock.elapsedRealtime()
                 val decision = tunnelHealthPolicy.evaluateProbe(probe.isAlive, nowMs)
@@ -2512,7 +2920,7 @@ class LevikVpnService : VpnService() {
     }
 
     private fun launchTrafficCheck(server: TunnelServer, network: Network, initialDelayMs: Long) {
-        val allowlist = server.isMobileServer() && allowlistSessionActive()
+        val allowlist = server.isMobileServer()
         if (!allowlist && (!container.settings.automaticServer.value || !server.isSmartAutoCandidate())) return
         // Anti-Block sends unlisted sites around the tunnel: the check would pass without it.
         if (container.settings.routingPreset.value == RoutingPreset.BLOCKED_ONLY) return
@@ -2529,6 +2937,7 @@ class LevikVpnService : VpnService() {
                 telemetry.record { it.trafficCheck(checkedNode, elapsedMs, ok = true) }
             }
             if (allowlist) {
+                telemetry.record { it.mobileTrafficCheck(checkedNode, server.telemetryProtocol(), elapsedMs) }
                 onAllowlistTrafficChecked(server, network, passed)
                 return@launch
             }
@@ -2556,6 +2965,7 @@ class LevikVpnService : VpnService() {
             }
             smartAuto.recordFailure(server, network)
             tunnelHealthPolicy.markCandidateFailed(server.id, SystemClock.elapsedRealtime())
+            if (smartAutoLiveRuntime != null) { smartAutoLiveRuntime?.trafficFailed(server.id); return@launch }
             climbProtocolLadder(server, network)
         }
     }
@@ -2578,19 +2988,20 @@ class LevikVpnService : VpnService() {
             AppLogger.i(LOG_TAG, "Allowlists: traffic passes on ${server.smartProtocol()}")
             return
         }
-        // Only with allowlists on does a failure say something about this server under them.
-        val mode = try {
-            container.whitelistDetector.detect(network, forceRefresh = true)
-        } catch (error: CancellationException) {
-            throw error
-        } catch (_: Throwable) {
-            WhitelistMode.UNKNOWN
-        }
-        if (mode != WhitelistMode.ACTIVE) {
-            AppLogger.w(LOG_TAG, "Allowlists: traffic check failed while allowlists are not on; ignored")
+        // A manually pinned mobile server is checked for diagnostics, but keeps the user's selection.
+        if (!allowlistSessionActive()) return
+        val generation = serviceCommands.connectionGeneration ?: return
+        if (!smartAuto.mobilePhysicalWorks(network)) {
+            telemetry.record { it.mobileNetworkOffline() }
+            AppLogger.w(LOG_TAG, "Allowlists: traffic check failed while the physical network is offline; waiting")
             return
         }
-        lastWhitelistMode = mode
+        if (!serviceCommands.permitsAutomaticConnection(generation) || !coreRunning ||
+            currentServer?.id != server.id || currentNetwork != network
+        ) return
+        // The actual download is stronger evidence than the detector's site heuristic.
+        // INACTIVE/UNKNOWN must not leave a dead mobile tunnel selected.
+        wakeAllowlistProbe()
         smartAuto.recordAllowlistFailure(server, network)
         tunnelHealthPolicy.markCandidateFailed(server.id, SystemClock.elapsedRealtime())
         advanceAllowlist(server, network, requireRunning = true) ?: return
@@ -2884,12 +3295,11 @@ class LevikVpnService : VpnService() {
             TunnelProbeObservation("vpn", success = false, failure = "network_unavailable"),
         ))
         val observations = mutableListOf<TunnelProbeObservation>()
-        val dnsTunnel = currentServer?.engine == TunnelEngineKind.LEVIK_DNSTT
-        val relay = dnsTunnel || currentServer?.engine in DOCUMENT_RELAY_ENGINES
+        val relay = currentServer?.engine in DOCUMENT_RELAY_ENGINES
         // Probe the IP endpoint first on relay, avoiding a DNS lookup on the
         // common path while still retaining independent endpoint fallbacks.
         val endpoints = if (relay) HEALTH_CHECK_ENDPOINTS else HEALTH_CHECK_ENDPOINTS.shuffled()
-        val timeoutMs = if (dnsTunnel) 20_000 else if (relay) RELAY_HEALTH_CHECK_TIMEOUT_MS else HEALTH_CHECK_TIMEOUT_MS
+        val timeoutMs = if (relay) RELAY_HEALTH_CHECK_TIMEOUT_MS else HEALTH_CHECK_TIMEOUT_MS
         for (endpoint in endpoints) {
             coroutineContext.ensureActive()
             val observation = probeEndpoint(vpnNetwork, endpoint, timeoutMs)
@@ -3011,6 +3421,8 @@ class LevikVpnService : VpnService() {
                         downloadBytesPerSecond = rxRate,
                         uploadBytesPerSecond = txRate,
                         connectedDurationSeconds = (now - startedAt) / 1000L,
+                        hotSwitchServerIds = if ((now - startedAt) / 1000L % 5L == 0L) availableHotSwitchIds() else state.hotSwitchServerIds,
+                        mainSelectionCertain = hotSwitchOwner?.certain ?: state.mainSelectionCertain,
                     )
                 }
                 lastRx = rx
@@ -3071,11 +3483,12 @@ class LevikVpnService : VpnService() {
         serverCountryCode: String? = currentServer?.countryCode,
         home: String? = null,
     ) {
+        val confirmed = state != VpnConnectionState.CONNECTED || VpnStateStore.state.value.mainSelectionCertain
         val notification = buildNotification(
             state,
-            serverName,
+            serverName.takeIf { confirmed },
             remainingSeconds,
-            serverCountryCode,
+            serverCountryCode.takeIf { confirmed },
             home,
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -3220,6 +3633,9 @@ class LevikVpnService : VpnService() {
         const val ACTION_RECONNECT = "com.leviknet.vpn.action.RECONNECT"
         const val ACTION_RECONFIGURE = "com.leviknet.vpn.action.RECONFIGURE"
         const val ACTION_SWITCH_SERVER = "com.leviknet.vpn.action.SWITCH_SERVER"
+        const val ACTION_AUTOMATIC_SELECTION = "com.leviknet.vpn.action.AUTOMATIC_SELECTION"
+        const val EXTRA_HOT_SWITCH = "hot_switch"
+        const val EXTRA_FORCE_RECONNECT = "force_reconnect"
         const val ACTION_PAUSE = "com.leviknet.vpn.action.PAUSE"
         const val ACTION_RESUME = "com.leviknet.vpn.action.RESUME"
         const val EXTRA_SERVER_ID = "com.leviknet.vpn.extra.SERVER_ID"
@@ -3276,6 +3692,7 @@ private data class NativeCleanup(
     val prepared: PreparedTunnelEngineSession?,
     val lease: Long?,
     val tunInterface: ParcelFileDescriptor?,
+    val probes: List<NativeRouteProbe>,
 )
 
 private class NetworkSetupException(

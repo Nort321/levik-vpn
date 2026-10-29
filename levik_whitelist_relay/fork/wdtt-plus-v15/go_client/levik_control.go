@@ -27,29 +27,30 @@ var levikMode atomic.Bool
 var errLevikServerKeyMismatch = errors.New("pinned server WireGuard key mismatch")
 
 type levikControlInit struct {
-	Version          int             `json:"version"`
-	Type             string          `json:"type"`
-	Peer             string          `json:"peer"`
-	TurnHost         string          `json:"turnHost,omitempty"`
-	TurnPort         string          `json:"turnPort,omitempty"`
-	VKHashes         []string        `json:"vkHashes"`
-	Password         string          `json:"password"`
-	DeviceID         string          `json:"deviceId"`
-	DeviceInfo       json.RawMessage `json:"deviceInfo,omitempty"`
-	TransportSession string          `json:"transportSession,omitempty"`
-	Workers          int             `json:"workers,omitempty"`
-	CaptchaMode      string          `json:"captchaMode,omitempty"`
-	TurnStreamFirst  bool            `json:"turnStreamFirst,omitempty"`
-	TurnSNI          string          `json:"turnSni,omitempty"`
-	Fingerprint      string          `json:"fingerprint,omitempty"`
-	ClientIDs        string          `json:"clientIds,omitempty"`
-	VKClientID       string          `json:"vkClientId,omitempty"`
-	VKClientSecret   string          `json:"vkClientSecret,omitempty"`
-	VKAuthMode       string          `json:"vkAuthMode,omitempty"`
-	ProtectFDSocket  string          `json:"protectFdSocket"`
-	ServerPublicKey  string          `json:"serverPublicKey"`
-	ProxyUsername    string          `json:"proxyUsername"`
-	ProxyPassword    string          `json:"proxyPassword"`
+	Version            int             `json:"version"`
+	Type               string          `json:"type"`
+	Peer               string          `json:"peer"`
+	TurnHost           string          `json:"turnHost,omitempty"`
+	TurnPort           string          `json:"turnPort,omitempty"`
+	VKHashes           []string        `json:"vkHashes"`
+	Password           string          `json:"password"`
+	DeviceID           string          `json:"deviceId"`
+	DeviceInfo         json.RawMessage `json:"deviceInfo,omitempty"`
+	TransportSession   string          `json:"transportSession,omitempty"`
+	Workers            int             `json:"workers,omitempty"`
+	CaptchaMode        string          `json:"captchaMode,omitempty"`
+	TurnStreamFirst    bool            `json:"turnStreamFirst,omitempty"`
+	TurnSNI            string          `json:"turnSni,omitempty"`
+	Fingerprint        string          `json:"fingerprint,omitempty"`
+	ClientIDs          string          `json:"clientIds,omitempty"`
+	VKClientID         string          `json:"vkClientId,omitempty"`
+	VKClientSecret     string          `json:"vkClientSecret,omitempty"`
+	VKAuthMode         string          `json:"vkAuthMode,omitempty"`
+	ProtectFDSocket    string          `json:"protectFdSocket"`
+	ServerPublicKey    string          `json:"serverPublicKey"`
+	ProxyUsername      string          `json:"proxyUsername"`
+	ProxyPassword      string          `json:"proxyPassword"`
+	BootstrapDNSServer string          `json:"bootstrapDnsServer,omitempty"`
 }
 
 type levikControlCommand struct {
@@ -172,6 +173,9 @@ func validateLevikInit(init levikControlInit) error {
 	if !validProxyCredential(init.ProxyUsername, 16, 64) ||
 		!validProxyCredential(init.ProxyPassword, 32, 128) {
 		return errors.New("invalid proxy credentials")
+	}
+	if err := validateBootstrapDNSServer(init.BootstrapDNSServer); err != nil {
+		return err
 	}
 	return validateLevikSocketName(init.ProtectFDSocket)
 }

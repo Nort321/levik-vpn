@@ -39,15 +39,8 @@ data class TunPlan(
     val addresses: List<TunAddress>,
     val dnsServers: List<String>,
     val ipv6Enabled: Boolean = true,
-    /** Routed into the TUN despite the local-network exclusions (a fake-IP pool). */
-    val extraIpv4Routes: List<String> = emptyList(),
 ) {
     init {
-        require(extraIpv4Routes.size <= 4) { "Too many extra TUN routes" }
-        extraIpv4Routes.forEach { cidr ->
-            val (address, prefix) = VpnRoutes.splitCidr(cidr)
-            require(numericIpAddressBits(address) == 32 && prefix in 8..32) { "Invalid extra TUN route" }
-        }
         require(mtu in 576..9_000) { "Invalid TUN MTU" }
         require(addresses.isNotEmpty()) { "TUN plan must contain an address" }
         require(addresses.size <= 8) { "Too many TUN addresses" }
@@ -120,12 +113,6 @@ fun interface GameXrayConfigFactory {
 }
 
 sealed interface TunnelEngineRequest {
-    data class Dnstt(
-        val config: DnsttServerConfig,
-        val configFactory: RelayXrayConfigFactory,
-        val tunPlan: TunPlan,
-    ) : TunnelEngineRequest
-
     data class Xray(
         val configFactory: XrayConfigFactory,
         val tunPlan: TunPlan,
@@ -257,6 +244,9 @@ interface TunnelEngineAdapter {
 
     fun retireOwner(owner: Long)
 
+    /** An isolated native proxy used before the TUN exists; never takes over the active core. */
+    suspend fun prepareRouteProbe(server: TunnelServer, environment: TunnelEngineEnvironment): NativeRouteProbe? = null
+
     /** May perform an upstream handshake; Android has not established the TUN yet. */
     suspend fun prepare(
         owner: Long,
@@ -277,6 +267,10 @@ interface TunnelEngineAdapter {
         prepared: PreparedTunnelEngineSession?,
         lease: Long? = null,
     )
+}
+
+interface NativeRouteProbe : AutoCloseable {
+    val proxy: LocalProxyEndpoint
 }
 
 class TunnelEngineRegistry(

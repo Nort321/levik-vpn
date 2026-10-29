@@ -123,6 +123,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -177,6 +179,7 @@ import com.leviknet.vpn.vpn.TunnelServerCategory
 import com.leviknet.vpn.vpn.VpnConnectionState
 import com.leviknet.vpn.vpn.VpnFailure
 import com.leviknet.vpn.vpn.VpnSnapshot
+import com.leviknet.vpn.vpn.HotSwitchPhase
 import com.leviknet.vpn.vpn.countryFlag
 import com.leviknet.vpn.vpn.SmartSwitchReason
 import com.leviknet.vpn.vpn.smartProtocolLabel
@@ -303,6 +306,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     snackbarHostState = snackbarHostState,
                     onTabSelected = viewModel::selectTab,
                     onConnect = viewModel::connectOrDisconnect,
+                    onReconnectAll = viewModel::reconnectAllVpn,
                     onTrial = viewModel::activateLteTrial,
                     onOpenPauseVpn = { showPauseDialog = true },
                     onResumeVpn = viewModel::resumeVpn,
@@ -1489,6 +1493,7 @@ private fun MainContent(
     snackbarHostState: SnackbarHostState,
     onTabSelected: (AppTab) -> Unit,
     onConnect: () -> Unit,
+    onReconnectAll: () -> Unit,
     onTrial: () -> Unit,
     onOpenPauseVpn: () -> Unit,
     onResumeVpn: () -> Unit,
@@ -1584,6 +1589,7 @@ private fun MainContent(
                 modifier = contentModifier,
                 state = state,
                 onConnect = onConnect,
+                onReconnectAll = onReconnectAll,
                 onTrial = onTrial,
                 onOpenPauseVpn = onOpenPauseVpn,
                 onResumeVpn = onResumeVpn,
@@ -1598,7 +1604,8 @@ private fun MainContent(
                 modifier = contentModifier,
                 profile = state.profile,
                 selectedServerId = displayedServerId(state),
-                connectionState = state.vpn.state,
+                vpn = state.vpn,
+                onReconnectAll = onReconnectAll,
                 loading = state.refreshing,
                 canRefresh = state.session == SessionStatus.Authenticated,
                 onRefresh = onRefresh,
@@ -1964,6 +1971,7 @@ private fun HomeScreen(
     modifier: Modifier,
     state: AppUiState,
     onConnect: () -> Unit,
+    onReconnectAll: () -> Unit,
     onTrial: () -> Unit,
     onOpenPauseVpn: () -> Unit,
     onResumeVpn: () -> Unit,
@@ -2346,6 +2354,7 @@ private fun HomeScreen(
             automaticServer = state.automaticServer,
             onClick = onServers,
         )
+        HotSwitchNotice(state.vpn, onReconnectAll, Modifier.padding(top = 14.dp))
 
         state.vpn.failure?.let { failure ->
             Spacer(Modifier.height(14.dp))
@@ -2628,6 +2637,9 @@ private fun PowerButton(
             else -> MaterialTheme.colorScheme.onSurface
         }
         val statusSubtitle = when {
+            isConnected && !vpn.mainSelectionCertain && vpn.hotSwitch?.phase == HotSwitchPhase.PREPARING ->
+                stringResource(R.string.hot_switch_preparing_unknown_desc)
+            isConnected && !vpn.mainSelectionCertain -> stringResource(R.string.hot_switch_uncertain_desc)
             isConnected -> stringResource(R.string.status_connected_desc)
             isTransitioning -> stringResource(
                 if (vpn.state == VpnConnectionState.STOPPING) R.string.status_connecting_desc else R.string.status_connecting_cancel_desc,
@@ -2651,6 +2663,55 @@ private fun PowerButton(
             fontSize = 14.sp,
             textAlign = TextAlign.Center,
         )
+    }
+}
+
+@Composable
+internal fun HotSwitchNotice(vpn: VpnSnapshot, onReconnectAll: () -> Unit, modifier: Modifier = Modifier) {
+    if (vpn.state != VpnConnectionState.CONNECTED) return
+    val change = vpn.hotSwitch
+    val phase = displayedHotSwitchPhase(vpn) ?: return
+    val target = change?.targetServerName?.displayName() ?: stringResource(R.string.hot_switch_target)
+    val preferenceSaved = change?.preferenceSaved != false
+    val warning = phase == HotSwitchPhase.FAILED || phase == HotSwitchPhase.UNCERTAIN ||
+        phase == HotSwitchPhase.APPLIED && !preferenceSaved
+    val title = when (phase) {
+        HotSwitchPhase.PREPARING -> R.string.hot_switch_preparing_title
+        HotSwitchPhase.APPLIED -> R.string.hot_switch_applied_title
+        HotSwitchPhase.FAILED -> R.string.hot_switch_failed_title
+        HotSwitchPhase.UNCERTAIN -> R.string.hot_switch_uncertain_title
+    }
+    val description = when (phase) {
+        HotSwitchPhase.PREPARING -> if (vpn.mainSelectionCertain) stringResource(R.string.hot_switch_preparing_desc, target)
+            else stringResource(R.string.hot_switch_preparing_unknown_desc)
+        HotSwitchPhase.APPLIED -> stringResource(R.string.hot_switch_applied_desc, target)
+        HotSwitchPhase.FAILED -> stringResource(R.string.hot_switch_failed_desc)
+        HotSwitchPhase.UNCERTAIN -> stringResource(R.string.hot_switch_uncertain_desc)
+    }
+    Surface(
+        modifier = modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite },
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = androidx.compose.foundation.BorderStroke(1.dp,
+            if (warning) MaterialTheme.colorScheme.error.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outline),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(title), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (phase == HotSwitchPhase.APPLIED && !preferenceSaved) {
+                Text(stringResource(R.string.hot_switch_preference_not_saved), style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error)
+            }
+            if (phase != HotSwitchPhase.PREPARING) {
+                Text(stringResource(R.string.hot_switch_reconnect_desc), style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                OutlinedButton(onClick = onReconnectAll, enabled = change?.phase != HotSwitchPhase.PREPARING) {
+                    Icon(painterResource(R.drawable.ic_refresh), contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.hot_switch_reconnect_all))
+                }
+            }
+        }
     }
 }
 
@@ -2709,7 +2770,8 @@ private fun ServerSummaryCard(
                     Spacer(Modifier.height(2.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = server?.name?.displayName() ?: stringResource(R.string.select_server),
+                            text = if (!vpn.mainSelectionCertain) stringResource(R.string.hot_switch_uncertain_title)
+                                else server?.name?.displayName() ?: stringResource(R.string.select_server),
                             fontSize = 19.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface,
@@ -2760,7 +2822,7 @@ private fun ServerSummaryCard(
                     Spacer(Modifier.height(3.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = pingMs?.let { stringResource(R.string.ping_ms, it.toInt()) }
+                            text = pingMs?.takeIf { vpn.mainSelectionCertain }?.let { stringResource(R.string.ping_ms, it.toInt()) }
                                 ?: stringResource(R.string.not_available),
                             fontSize = 18.sp,
                             fontWeight = FontWeight.Bold,
@@ -2981,7 +3043,8 @@ private fun ServersScreen(
     modifier: Modifier,
     profile: PreparedTunnelProfile?,
     selectedServerId: String?,
-    connectionState: VpnConnectionState,
+    vpn: VpnSnapshot,
+    onReconnectAll: () -> Unit,
     loading: Boolean,
     canRefresh: Boolean,
     onRefresh: () -> Unit,
@@ -3003,6 +3066,7 @@ private fun ServersScreen(
     onFilterChanged: (ServerFilterType) -> Unit,
     levikStatus: LevikStatusSnapshot? = null,
 ) {
+    val connectionState = vpn.state
     val yandexName = stringResource(R.string.yandex_title)
     // Setup is a server choice even before its first encrypted profile exists.
     // This placeholder stays in the UI and is never persisted or connected.
@@ -3048,6 +3112,16 @@ private fun ServersScreen(
                 }
             },
         )
+
+        if (connectionState == VpnConnectionState.CONNECTED) {
+            Text(
+                stringResource(R.string.hot_switch_explainer),
+                Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        HotSwitchNotice(vpn, onReconnectAll, Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
 
         levikStatus?.let { status ->
             val incidents = status.servers.count { it.state != "online" }
@@ -3139,7 +3213,6 @@ private fun ServersScreen(
                     add(ServerFilterType.ALL to stringResource(R.string.filter_all))
                     add(ServerFilterType.REGULAR to stringResource(R.string.filter_regular))
                     add(ServerFilterType.MOBILE_ALLOWLIST to stringResource(R.string.filter_mobile_allowlist))
-                    if (servers.any { it.dnsttConfig != null }) add(ServerFilterType.DNS_TEST to stringResource(R.string.filter_dns_test))
                     add(ServerFilterType.FAVORITES to stringResource(R.string.filter_favorites))
                     add(ServerFilterType.FASTEST to stringResource(R.string.filter_fastest))
                 }.forEach { (type, label) ->
@@ -3287,11 +3360,9 @@ private fun ServersScreen(
                         val allowlistServers = filtered.filter {
                             it.isMobileServer()
                         }
-                        val dnsServers = filtered.filter { it.dnsttConfig != null }
                         val categoryCount = listOf(
                             regularServers,
                             allowlistServers,
-                            dnsServers,
                         ).count(List<TunnelServer>::isNotEmpty)
 
                         if (categoryCount > 1) {
@@ -3306,6 +3377,7 @@ private fun ServersScreen(
                                 items(groupByCountry(regularServers), key = CountryServerGroup::id) { country ->
                                     CountryServerCard(
                                         country = country,
+                                        switchSnapshot = vpn,
                                         onCountrySelected = onCountrySelected,
                                         automaticServer = automaticServer,
                                         selectedServerId = selectedServerId,
@@ -3333,6 +3405,7 @@ private fun ServersScreen(
                                 items(allowlistServers, key = TunnelServer::id) { server ->
                                     ServerItemCard(
                                         server = server,
+                                        switchSnapshot = vpn,
                                         selected = !automaticServer && server.id == selectedServerId,
                                         isFav = favoriteServerIds.contains(server.id),
                                         pingValue = serverPings[server.id],
@@ -3345,32 +3418,11 @@ private fun ServersScreen(
                                     )
                                 }
                             }
-                            if (dnsServers.isNotEmpty()) {
-                                item(key = "section_dns_test_header") {
-                                    ServerCategoryHeader(
-                                        title = R.string.filter_dns_test,
-                                        description = R.string.servers_category_dns_test_desc,
-                                    )
-                                }
-                                items(dnsServers, key = TunnelServer::id) { server ->
-                                    ServerItemCard(
-                                        server = server,
-                                        selected = !automaticServer && server.id == selectedServerId,
-                                        isFav = favoriteServerIds.contains(server.id),
-                                        pingValue = serverPings[server.id],
-                                        maintenanceEndsAt = serverMaintenance[server.id],
-                                        pingingServers = pingingServers,
-                                        isDark = isDark,
-                                        onServerSelected = onServerSelection,
-                                        onYandexSetup = null,
-                                        onToggleFavorite = onToggleFavorite,
-                                    )
-                                }
-                            }
                         } else {
                             items(groupByCountry(filtered), key = CountryServerGroup::id) { country ->
                                 CountryServerCard(
                                     country = country,
+                                    switchSnapshot = vpn,
                                     onCountrySelected = onCountrySelected,
                                     automaticServer = automaticServer,
                                     selectedServerId = selectedServerId,
@@ -3390,6 +3442,7 @@ private fun ServersScreen(
                         items(groupByCountry(filtered), key = CountryServerGroup::id) { country ->
                             CountryServerCard(
                                 country = country,
+                                switchSnapshot = vpn,
                                 onCountrySelected = onCountrySelected,
                                 automaticServer = automaticServer,
                                 selectedServerId = selectedServerId,
@@ -3481,6 +3534,14 @@ private fun ServerLoadBadge(load: Double, isDark: Boolean) {
 private const val SERVER_LOAD_BUSY = 0.4
 private const val SERVER_LOAD_FULL = 0.75
 
+@Composable
+private fun serverSwitchHintText(hint: ServerSwitchHint?): String? = when (hint) {
+    ServerSwitchHint.HOT_SWITCH -> stringResource(R.string.hot_switch_label)
+    ServerSwitchHint.RECONNECT -> stringResource(R.string.server_switch_reconnect)
+    ServerSwitchHint.MAY_RECONNECT -> stringResource(R.string.server_switch_may_reconnect)
+    null -> null
+}
+
 /**
  * docs/app-platform.md "Server list": a country with several servers opens into
  * them; choosing the country takes its best server.
@@ -3500,6 +3561,7 @@ private fun CountryServerCard(
     onServerSelected: (String) -> Unit,
     onToggleFavorite: (String) -> Unit,
     onYandexSetup: ((Boolean) -> Unit)?,
+    switchSnapshot: VpnSnapshot? = null,
 ) {
     val code = country.countryCode
     val countryName = code?.let(::localizedCountryName)
@@ -3508,6 +3570,7 @@ private fun CountryServerCard(
         val node = single ?: country.nodes.first()
         ServerGroupCard(
             group = node.group,
+            switchSnapshot = switchSnapshot,
             automaticServer = automaticServer,
             selectedServerId = selectedServerId,
             favoriteServerIds = favoriteServerIds,
@@ -3540,6 +3603,9 @@ private fun CountryServerCard(
             fastestPing != null -> stringResource(R.string.server_country_from_ping, fastestPing.toInt())
             else -> null
         },
+        serverSwitchHintText(switchSnapshot?.let { snapshot ->
+            countrySwitchHint(snapshot, country.nodes.flatMap { it.group.variants }.map(TunnelServer::id))
+        }),
     ).joinToString(" · ")
     val flagDescriptionText = flagDescription(code)
     val toggleDescription = stringResource(R.string.server_country_servers, countryName)
@@ -3625,6 +3691,7 @@ private fun CountryServerCard(
                     country.nodes.forEach { node ->
                         ServerGroupCard(
                             group = node.group,
+                            switchSnapshot = switchSnapshot,
                             automaticServer = automaticServer,
                             selectedServerId = selectedServerId,
                             favoriteServerIds = favoriteServerIds,
@@ -3669,11 +3736,13 @@ private fun ServerGroupCard(
     title: String? = null,
     subtitle: String? = null,
     showFlag: Boolean = true,
+    switchSnapshot: VpnSnapshot? = null,
 ) {
     val server = group.active(selectedServerId)
     val favoriteIds = group.variants.map(TunnelServer::id).filter(favoriteServerIds::contains)
     ServerItemCard(
         server = server,
+        switchSnapshot = switchSnapshot,
         selected = !automaticServer && group.variants.any { it.id == selectedServerId },
         isFav = favoriteIds.isNotEmpty(),
         pingValue = serverPings[server.id],
@@ -3716,6 +3785,7 @@ private fun ServerItemCard(
     subtitle: String? = null,
     /** False inside a country card, whose header carries the flag. */
     showFlag: Boolean = true,
+    switchSnapshot: VpnSnapshot? = null,
 ) {
     var showGuide by remember(server.id) { mutableStateOf(false) }
     if (showGuide) {
@@ -3831,6 +3901,10 @@ private fun ServerItemCard(
                 }
                 RadioButton(selected = selected, onClick = null)
             }
+            serverSwitchHintText(switchSnapshot?.let { serverSwitchHint(it, server.id) })?.let { hint ->
+                Text(hint, Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             if (protocolVariants.isNotEmpty()) {
                 Spacer(Modifier.height(10.dp))
                 Row(
@@ -3855,13 +3929,18 @@ private fun ServerItemCard(
                                 if (active) LevikBlue else MaterialTheme.colorScheme.outline,
                             ),
                         ) {
-                            Text(
-                                text = variant.protocol().label,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                fontSize = 13.sp,
-                                fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
-                                color = if (active) Color.White else MaterialTheme.colorScheme.onSurface,
-                            )
+                            Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                                Text(
+                                    text = variant.protocol().label,
+                                    fontSize = 13.sp,
+                                    fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (active) Color.White else MaterialTheme.colorScheme.onSurface,
+                                )
+                                serverSwitchHintText(switchSnapshot?.let { serverSwitchHint(it, variant.id) })?.let { hint ->
+                                    Text(hint, fontSize = 10.sp,
+                                        color = if (active) Color.White else MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
                         }
                     }
                 }

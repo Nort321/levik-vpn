@@ -72,15 +72,19 @@ identifier. Only the client header is sent.
 
 ### Live node load
 
-`GET /api/app/v1/load`, anonymous like the configuration, about a kilobyte:
+`GET /api/app/v1/load`, anonymous like the configuration. Version 2 keeps the
+legacy fields and adds opaque route topology and resource observations:
 
 ```json
 {
   "ok": true,
+  "v": 2,
   "freshSeconds": 120,
+  "producedAt": 1793180000000,
   "load": { "n1…": 0.42 },
   "full": ["n1…"],
-  "quality": { "n1…": 0.85 }
+  "quality": { "n1…": 0.85 },
+  "routes": {}
 }
 ```
 
@@ -99,11 +103,30 @@ identifier. Only the client header is sent.
   rounded to steps of 0.05 and limited to 0.7–1.6. It is `null` when the
   request came through a Levik server, since the website then cannot see the
   operator.
+- **routes** maps endpoint ids, or an unambiguous host id, to one complete
+  physical route. It contains a stable `r1…` identity, ordered opaque node ids
+  in `path`, `entryId`, `exitId`, and `relay`. A shared relay host with several
+  exits has no host-only route entry: clients resolve the endpoint id first.
+  Each observation carries `measuredAt`, `ageSeconds`, `source`, `complete`,
+  `state`, `resourceLoad`, `resourceHeadroom`, `networkUtilization`,
+  `configuredCapacityMbps`, and the bottleneck node/resource. A missing or
+  stale hop makes the route incomplete and unknown; known overload elsewhere
+  on that route still counts. `producedAt` is the response time and must not
+  renew old measurements. Configured capacity is an administrative limit,
+  never measured bandwidth available to a user.
+
+The v2 agent adds short-window CPU/network observations alongside the minute
+average, busiest-core utilization, optional Linux pressure/cgroup readings,
+network drops and TCP retransmission ratios. Unavailable optional readings
+are omitted. A hot core alone is a degraded observation, not proof that an
+entire machine is full. VPN service cgroups are read through a bounded known
+service list or explicit root-owned configuration; the agent keeps its
+unprivileged systemd sandbox.
 
 The answer carries an `ETag`; an app sends it back in `If-None-Match` and gets
 an empty 304 while nothing changed. An app asks only before an automatic
 connection (unless its answer is younger than a minute, waiting 1.5 seconds at
-most), when the server list is measured, every 10 minutes while an automatic
+most), when the server list is measured, every 30 seconds while an automatic
 connection runs (on Android only while the screen is on) and every 2 minutes
 while its current node is full. It never asks in the background otherwise.
 Quality is kept for two hours and only from answers outside the tunnel.
@@ -136,8 +159,87 @@ Android does this in the Direct build only; iOS does not take part.
 
 ### Smart Auto
 
-The automatic server on Android picks among regular servers (VLESS, Hysteria 2
-and TUIC; mobile, relay and home-road servers stay separate choices) by
+Android and Windows/macOS/Linux compare regular candidates through their
+actual VPN outbounds before starting the system TUN. A temporary core exposes
+private candidate-specific proxies; the probes have no direct fallback and do
+not inherit split routing. Android also prepares the native TUIC proxy before
+TUN. Desktop TUIC remains a manual choice. Mobile/allowlist and home-road
+choices keep their existing policies; regular cascades are measured through
+their entry, intermediate hops and exit.
+
+The bounded preflight measures warmed HTTPS response delay against independent
+external providers, observed delay variation and request failures. Download
+and upload samples run sequentially for a small set of finalists so they do
+not compete for the user's access link. These are short transfer observations,
+not sustained capacity or packet-loss guarantees. Endpoint ping remains a
+bootstrap diagnostic and is never compared numerically with measured HTTPS
+delay.
+
+Confirmed overloaded paths are left out while alternatives remain. Among
+fully measured finalists, define balanced bandwidth as
+`min(download / bestDownload, upload / bestUpload)`. Keep candidates within
+90% of the best balanced value, then prefer the lowest measured median delay
+plus observed variation and request-failure penalty. Unknown transfer rates
+remain explicit; if none are complete, actual route-delay evidence is used.
+Confirmed measurements require successful observations from two independent
+providers, expire after two minutes and are scoped to the route/protocol and
+physical network. Single-provider observations remain an explicit partial
+fallback for at most ten seconds; transfer samples cannot manufacture a
+second provider. Missing backend telemetry does not disable working
+routes: client measurements and the bootstrap fallback remain available.
+
+Preflight never starts a competing unbound core inside an active system TUN.
+While ordinary Auto is active, private candidate proxies live inside the same
+core and force their own outbounds. Roughly every 30 seconds the client checks
+the incumbent and up to two rotating alternatives. Successful 64 KB body
+verification is reused for at most five minutes within that core lease;
+ordinary rounds use small latency requests. Bounded sequential speed samples
+run at most once every five minutes and only in a quiet window.
+
+A single coordinator owns the ordinary main balancer. Service-specific rules
+retain their own routing and follow the acknowledged main choice where their
+policy says `main`. Selecting a better default changes only the balancer
+target through Xray's RoutingService; it does not replace outbounds, restart
+the core, recreate TUN or release protected-mode settings. Existing TCP,
+UDP/QUIC associations and multiplexed streams keep their old outbound; new
+flows take the new one. An old flow cannot be migrated off a failed exit by
+this mechanism. An application may also open several connections during one
+session, so retaining old flows alone is not a universal IP-affinity promise.
+
+Optimization requires two consecutive confirmed wins. A normal improvement is
+at least 20% and 10 ms in stable delay, or 25% in balanced bidirectional
+throughput without a substantial delay regression. Near-equivalent routes
+retain the incumbent, and a successful move starts a five-minute cooldown.
+Confirmed path failure or fresh overload may bypass this cooldown, but never
+the user-activity guard. Partial/unknown challenger evidence does not displace
+a working route. Failed control requests retain the acknowledged target.
+
+The activity guard uses only uplink plus downlink counters of the user TUN
+inbound, excluding Smart Auto's private probes. At 16 KiB/s, or a 64 KiB burst
+within five seconds, it blocks optimization. Rates at or above 4 KiB/s prevent
+the quiet timer from completing; a move or a speed sample is permitted only
+after 60 continuous seconds below 4 KiB/s. Keepalives below that threshold are
+allowed. Both exact counters must exist, samples must be fresh within five
+seconds, and missing/reset/backwards or invalid counters disarm the guard.
+The coordinator checks fresh activity again immediately before installing a
+target. Manual selection remains pinned; no application/process inspection is
+needed to recognize ordinary foreground transfer activity.
+Desktop ordinary manual sessions preload the private control channel but do
+not run the Auto owner or its probes. Enabling/disabling Auto on such a
+running session starts/stops that owner without replacing the core; disabling
+it freezes the last acknowledged main target. Protected/Home/TUIC modes retain
+their existing lifecycle.
+
+Reconnects and network changes can obtain new preflight observations after
+teardown. A failed core, physical network or TUN cannot be repaired through a
+balancer override; connection recovery remains a distinct lifecycle operation.
+Planned maintenance and explicit profile/network changes retain their separate
+lifecycle rules and may require a reconnect; they are not fatigue-based Auto
+optimization. On Android a wedged TUN/control path can require manual recovery
+when no trustworthy in-place decision can be made.
+
+Without usable full-route observations, Android's bootstrap order among
+regular servers (VLESS, Hysteria 2 and TUIC) uses
 
     score = latency × 1 / (1 − load) × history × advice × quality      (lower is better)
 
@@ -177,7 +279,7 @@ Before connecting, the app asks for the [live node load](#live-node-load). The
 server list moves the automatic choice only to a server scoring at least 25%
 better, and failover uses the same order.
 
-Servers within 15 % of the best share new connections: the app picks among up
+In the bootstrap order, servers within 15 % of the best share new connections: the app picks among up
 to three of them, the better ones more often, by a number that stays the same
 for ten minutes on one device and differs between devices (a hash of a random
 salt that never leaves the device and the current ten minutes). So the devices

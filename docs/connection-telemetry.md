@@ -151,7 +151,8 @@ every platform.
 ## Platform notes
 
 - Android runs the VPN core in-process and keeps its log disabled, so it
-  sends no `core_log` events. `connected` there means the core started and
+  sends no raw core errors. Fixed application diagnostics use the existing
+  `core_log` event with `count: 1` (see below). `connected` there means the core started and
   the tunnel interface is up; the end-to-end check is reported by the
   following `probe_ok` or `probe_fail`.
 - On Android, `attempt.cause = server_switch` also covers a restart after the
@@ -164,6 +165,39 @@ every platform.
   start carries the helper's category as the `attempt_failed` code, for
   example `handshake` / `reality_auth` or `auth_failed`. macOS restarts the
   same server after a failure; it does not fail over automatically.
+
+### Android allowlist diagnostics
+
+With connection statistics enabled, a fresh detector scan can record only
+fixed probe names, outcome categories and numeric buckets. It never records
+addresses, URLs, exception messages, network names or account identifiers:
+
+- `wl.mode.<active|inactive|unknown>.t<N>` is the result and total scan time.
+- `wl.<probe>.<outcome>[.h<status>].t<N>.b<N>` describes a probe. Probe names
+  are `ozon`, `yandex`, `avito`, `vk`, `cloudflare`, `mozilla`, `ovh`, `github`
+  and `wikipedia`, the fixed built-in diagnostic endpoints. Outcomes are
+  `ok`, `dns`, `connect`, `read`, `tls`, `http`, `short_body`, `deadline`, `other`.
+  HTTP status is included only when a response was received.
+- Time buckets `t0`–`t4`: below 100 ms, 100–499 ms, 500–1999 ms,
+  2000–5999 ms, and at least 6000 ms.
+- Body buckets `b0`–`b4`: no bytes, 1–1023 bytes, 1–less than 16 KiB,
+  16–less than 32 KiB, and at least 32 KiB.
+
+Only changed probe outcomes, HTTP status or body buckets are repeated.
+Unchanged scans record a mode summary at most once every five minutes;
+timing jitter does not fill the session timeline. Local support logs retain
+the exact timings and byte counts for each fresh scan. A scan before the
+first connection result is buffered until `connected` or `attempt_failed`,
+so cancelling an attempt cannot turn an informational diagnostic into its
+failure reason on an older server.
+
+Mobile tunnel checks use `mobile_check.<nid|proto>.ok.t<N>` or
+`mobile_check.<nid|proto>.timeout`; `nid` is the existing anonymous node ID,
+with the protocol used when a node ID is unavailable. These 32 KiB checks
+do not enter the ordinary 64 KiB `check` ranking. A failed mobile check is
+followed by `mobile_check.network_offline` if domestic endpoints on the
+selected physical network also fail. A manually selected mobile server is
+checked for diagnostics but retains the existing manual selection behavior.
 
 ## Retention
 

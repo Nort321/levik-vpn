@@ -161,8 +161,10 @@ class XrayRuntime(
         configJson: String,
         controller: DialerController,
         dnsServer: String?,
+        replaceActive: Boolean = true,
     ): Long = lifecycleLock.withLock {
         check(ownership.isCurrent(owner)) { "VPN core owner is stale" }
+        check(replaceActive || activeLease == null) { "A probe cannot replace an active VPN core" }
         if (activeLease != null) {
             stopActiveCore()
         }

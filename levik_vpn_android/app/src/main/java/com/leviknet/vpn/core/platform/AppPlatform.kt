@@ -31,6 +31,7 @@ import com.leviknet.vpn.vpn.ServerPinger
 import com.leviknet.vpn.vpn.SmartAuto
 import com.leviknet.vpn.vpn.SmartServerRanking
 import com.leviknet.vpn.vpn.TunnelServer
+import com.leviknet.vpn.vpn.relayHosts
 import com.leviknet.vpn.vpn.VpnConnectionState
 import com.leviknet.vpn.vpn.VpnController
 import com.leviknet.vpn.vpn.countryServers
@@ -279,6 +280,16 @@ class AppPlatform(
                 HomeWatcher(context, settings, repository, vpnController, directNetwork, foreground.asStateFlow()).run()
             }
         }
+        scope.launch {
+            while (true) {
+                delay(15_000L)
+                val snapshot = vpnController.state.value
+                if (snapshot.state == VpnConnectionState.CONNECTED && settings.automaticServer.value &&
+                    repository.tunnelProfile.value?.servers?.any { it.id == snapshot.serverId && it.isSmartAutoCandidate() } == true) {
+                    refreshNodeLoad(maxAgeMs = LiveLoadPolicy.CONNECTED_EVERY_MS, waitMs = 0L)
+                }
+            }
+        }
         if (MAINTENANCE_ENABLED) {
             scope.launch {
                 vpnController.state.collect { snapshot ->
@@ -365,6 +376,13 @@ class AppPlatform(
         spreadSalt = { salt },
         advice = ::protocolAdvice,
         physicalNetwork = directNetwork,
+        probeSettings = { listOf(
+            settings.antiDpiEnabled.value.toString(), settings.antiDpiPackets.value,
+            settings.antiDpiLength.value, settings.antiDpiInterval.value,
+            settings.dnsProvider.value.name, settings.customDnsIpv4.value,
+            settings.useDoh.value.toString(), settings.customDohUrl.value,
+            xhttpMuxHosts().sorted().joinToString(","),
+        ) },
     )
 
     /**
@@ -536,6 +554,7 @@ class AppPlatform(
      * full, and never otherwise.
      */
     private suspend fun checkOverload(current: TunnelServer, servers: List<TunnelServer>, now: Long) {
+        if (smartAuto.liveMainManaged) return
         if (!settings.automaticServer.value || !current.isSmartAutoCandidate()) return
         val every = when {
             fullSince.containsKey(current.id) -> LiveLoadPolicy.FULL_RECHECK_MS
@@ -562,12 +581,13 @@ class AppPlatform(
             pool.map { server -> async(Dispatchers.IO) { server.id to runCatching { ServerPinger.measure(server) }.getOrNull() } }
                 .awaitAll()
         }.toMap()
-        val target = smartAuto.rank(pool, measured).firstNotNullOfOrNull { ranked ->
+        val relays = relayHosts(servers)
+        val target = smartAuto.rank(pool, measured, relays = relays).firstNotNullOfOrNull { ranked ->
             pool.firstOrNull { it.id == ranked.id && it.id != current.id }
                 ?.takeIf { measured[it.id] != null || !ServerPinger.silenceMeansDown(it) }
                 ?.let { it to ranked.score }
         } ?: return
-        if (fullSince.containsKey(target.first.id) || !due(smartAuto.score(current, measured), target.second)) return
+        if (fullSince.containsKey(target.first.id) || !due(smartAuto.score(current, measured, relays), target.second)) return
         val snapshot = vpnController.state.value
         if (snapshot.state != VpnConnectionState.CONNECTED || snapshot.serverId != current.id) return
         AppLogger.i(TAG, "Smart Auto: moving off a full node")
@@ -1245,7 +1265,7 @@ class RemoteConfigClient(private val version: String) {
     suspend fun load(network: Network?, etag: String?): LiveLoadAnswer? = withContext(Dispatchers.IO) {
         for (origin in ServiceEndpoints.current().apiOrigins) {
             val headers = etag?.takeIf(LiveLoadPolicy.ETAG::matches)?.let { mapOf("If-None-Match" to it) }.orEmpty()
-            val reply = runCatching { request(URL("$origin/api/app/v1/load"), network, headers, LOAD_TIMEOUT_MS) }.getOrNull()
+            val reply = runCatching { request(URL("$origin/api/app/v1/load"), network, headers, LOAD_TIMEOUT_MS, 128 * 1024) }.getOrNull()
                 ?: continue
             val (status, text) = reply
             if (status == 304) return@withContext LiveLoadAnswer.Same
@@ -1279,6 +1299,7 @@ class RemoteConfigClient(private val version: String) {
         network: Network?,
         headers: Map<String, String> = emptyMap(),
         timeoutMs: Int = TIMEOUT_MS,
+        maxResponseBytes: Int = MAX_RESPONSE_BYTES,
     ): Reply {
         val connection = (network?.openConnection(url, Proxy.NO_PROXY) ?: url.openConnection(Proxy.NO_PROXY))
             as HttpURLConnection
@@ -1297,14 +1318,14 @@ class RemoteConfigClient(private val version: String) {
             val status = connection.responseCode
             if (status != 200) return Reply(status, null)
             val text = connection.inputStream.use { input ->
-                val buffer = ByteArray(MAX_RESPONSE_BYTES + 1)
+                val buffer = ByteArray(maxResponseBytes + 1)
                 var size = 0
                 while (size < buffer.size) {
                     val count = input.read(buffer, size, buffer.size - size)
                     if (count < 0) break
                     size += count
                 }
-                if (size > MAX_RESPONSE_BYTES) null else String(buffer, 0, size, Charsets.UTF_8)
+                if (size > maxResponseBytes) null else String(buffer, 0, size, Charsets.UTF_8)
             }
             return Reply(status, text, connection.getHeaderField("ETag"))
         } finally {

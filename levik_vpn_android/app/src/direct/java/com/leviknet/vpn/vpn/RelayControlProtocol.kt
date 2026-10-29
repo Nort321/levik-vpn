@@ -1,5 +1,6 @@
 package com.leviknet.vpn.vpn
 
+import java.net.InetAddress
 import java.time.Instant
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
@@ -28,6 +29,7 @@ internal data class RelayNativeInit(
     val vkAuthMode: String,
     val proxyUsername: String,
     val proxyPassword: String,
+    val bootstrapDnsServer: String? = null,
 )
 
 internal data class RelayControlEvent(
@@ -101,6 +103,7 @@ internal class RelayControlCodec {
                 vkAuthMode = init.vkAuthMode,
                 proxyUsername = init.proxyUsername,
                 proxyPassword = init.proxyPassword,
+                bootstrapDnsServer = init.bootstrapDnsServer,
             ),
         )
     }
@@ -225,6 +228,25 @@ internal class RelayControlCodec {
         ) {
             protocolFailure("relay_init_proxy_auth")
         }
+        init.bootstrapDnsServer?.let { endpoint ->
+            if (!validBootstrapDnsServer(endpoint)) protocolFailure("relay_init_bootstrap_dns")
+        }
+    }
+
+    private fun validBootstrapDnsServer(endpoint: String): Boolean {
+        if (endpoint.length > 128 || !endpoint.endsWith(":53") || endpoint.any(Char::isWhitespace)) return false
+        val host = if (endpoint.startsWith("[") && endpoint.endsWith("]:53")) {
+            endpoint.substring(1, endpoint.length - 4)
+        } else {
+            endpoint.removeSuffix(":53").takeIf { ':' !in it } ?: return false
+        }
+        val numericHost = host.substringBefore('%')
+        if ('%' in host &&
+            (':' !in numericHost || !host.substringAfter('%').matches(Regex("[A-Za-z0-9_.-]{1,64}")))
+        ) return false
+        if (requiresBootstrapDns(numericHost)) return false
+        val address = runCatching { InetAddress.getByName(numericHost) }.getOrNull() ?: return false
+        return !address.isAnyLocalAddress && !address.isLoopbackAddress && !address.isMulticastAddress
     }
 
     private fun validateReady(wire: RelayControlEventWire) {
@@ -505,6 +527,7 @@ private data class RelayControlInitWire(
     val vkAuthMode: String,
     val proxyUsername: String,
     val proxyPassword: String,
+    val bootstrapDnsServer: String? = null,
 )
 
 @Serializable

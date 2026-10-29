@@ -9,11 +9,15 @@ import android.telephony.TelephonyManager
 import com.leviknet.vpn.core.platform.FavoriteNodes
 import com.leviknet.vpn.core.platform.NodeLoadView
 import com.leviknet.vpn.core.platform.ProtocolAdvice
+import com.leviknet.vpn.core.platform.SmartRouteResource
 import com.leviknet.vpn.data.hasUsableYandexAuth
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 import java.time.Instant
+import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -24,6 +28,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Smart Auto on the device, docs/app-platform.md "Smart Auto": ranks servers
@@ -39,7 +44,53 @@ class SmartAuto(
     private val advice: () -> ProtocolAdvice?,
     private val physicalNetwork: () -> Network?,
     private val clock: () -> Long = System::currentTimeMillis,
+    private val probeSettings: () -> List<String> = { emptyList() },
 ) {
+    private val liveOwner = AtomicLong(0L)
+    val liveMainManaged: Boolean get() = liveOwner.get() != 0L
+    fun liveSessionStarted(owner: Long) { liveOwner.set(owner) }
+    fun liveSessionStopped(owner: Long) { liveOwner.compareAndSet(owner, 0L) }
+    private data class MeasuredRoute(val network: String, val routeId: String?, val transport: String, val atMs: Long, val value: SmartRouteMeasurement)
+    private val measuredRoutes = ConcurrentHashMap<String, MeasuredRoute>()
+
+    private fun measurementNetwork(network: Network?): String? = network?.let { "${it.networkHandle}|${networkKey(it).orEmpty()}" }
+
+    fun routeResources(servers: List<TunnelServer>): Map<String, SmartRouteResource> {
+        val routes = loadView().routes
+        return servers.mapNotNull { server ->
+            val host = server.syncHost() ?: return@mapNotNull null
+            val route = server.syncPort()?.let { FavoriteNodes.endpointId(host, it) }?.let(routes::get)
+                ?: FavoriteNodes.nodeId(host)?.let(routes::get)
+            route?.let { server.id to it }
+        }.toMap()
+    }
+
+    fun measurementContext(server: TunnelServer): String = SmartRouteCacheContext.fingerprint(server, probeSettings())
+
+    fun eligibleRoutes(servers: List<TunnelServer>): List<TunnelServer> {
+        val view = loadView()
+        val full = servers.filter { FavoriteNodes.load(view.full.associateWith { 1.0 }, it) != null }.mapTo(mutableSetOf(), TunnelServer::id)
+        val eligible = SmartRouteSelection.eligibleIds(servers.map(TunnelServer::id), routeResources(servers), full)
+        return servers.filter { it.id in eligible }
+    }
+
+    fun recordRouteMeasurement(server: TunnelServer, network: Network, measurement: SmartRouteMeasurement, transport: String = measurementContext(server), routeId: String? = routeResources(listOf(server))[server.id]?.id) {
+        val key = measurementNetwork(network) ?: return
+        val now = clock()
+        measuredRoutes.entries.removeIf { now - it.value.atMs >= it.value.value.cacheMs }
+        if (measuredRoutes.size >= 256) measuredRoutes.clear()
+        measuredRoutes[server.id] = MeasuredRoute(key, routeId, transport, now, measurement)
+    }
+
+    fun routeMeasurements(servers: List<TunnelServer>, network: Network? = null): Map<String, SmartRouteMeasurement> {
+        val key = measurementNetwork(network ?: physicalNetwork()) ?: return emptyMap()
+        val resources = routeResources(servers)
+        val now = clock()
+        return servers.mapNotNull { server -> measuredRoutes[server.id]?.takeIf {
+            it.network == key && now - it.atMs in 0 until it.value.cacheMs && it.routeId == resources[server.id]?.id && it.transport == measurementContext(server)
+        }?.let { server.id to it.value } }.toMap()
+    }
+
     /** Checks outlive the caller when it moves on; each one ends by its own deadline. */
     private val checkScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -103,24 +154,35 @@ class SmartAuto(
         history.update { it.recordFailure(key, allowlistRecord(server), server.id, clock(), failedServerId = server.id) }
     }
 
-    /** Best first. [latencies] come from [ServerPinger]; [network] is the physical network, by default the current one. */
+    /**
+     * Best first. [latencies] come from [ServerPinger]; [network] is the physical network, by default the current one.
+     * [relays] are the relay entries among all the profile's servers, see [relayHosts]; a subset such as one
+     * country cannot tell them.
+     */
     fun rank(
         servers: List<TunnelServer>,
         latencies: Map<String, Long?>,
         network: Network? = null,
+        relays: Set<String> = relayHosts(servers),
     ): List<RankedServer> {
         val key = networkKey(network ?: physicalNetwork())
         val view = loadView()
         val snapshot = history.current()
         val now = clock()
-        val candidates = servers.map { server -> candidate(server, latencies, view, snapshot, key, now) }
-        return SmartServerRanking.rank(candidates, advice(), SmartServerRanking.spreadSeed(spreadSalt(), now))
+        val eligible = eligibleRoutes(servers)
+        val candidates = eligible.map { server -> candidate(server, latencies, view, snapshot, key, now, relays) }
+        val fallback = SmartServerRanking.rank(candidates, advice(), SmartServerRanking.spreadSeed(spreadSalt(), now))
+        val measurements = routeMeasurements(eligible, network)
+        val measured = SmartRouteSelection.order(measurements, routeResources(eligible), eligible.map(TunnelServer::id))
+            .map { id -> RankedServer(id, servers.first { it.id == id }.smartProtocol(), measurements.getValue(id).delayCost) }
+        return measured + fallback.filterNot { item -> measured.any { it.id == item.id } }
     }
 
     /** [server]'s score as [rank] computes it, without the spread. */
-    fun score(server: TunnelServer, latencies: Map<String, Long?>, network: Network? = null): Double {
+    fun score(server: TunnelServer, latencies: Map<String, Long?>, relays: Set<String>, network: Network? = null): Double {
+        routeMeasurements(listOf(server), network)[server.id]?.delayCost?.takeIf(Double::isFinite)?.let { return it }
         val now = clock()
-        val candidate = candidate(server, latencies, loadView(), history.current(), networkKey(network ?: physicalNetwork()), now)
+        val candidate = candidate(server, latencies, loadView(), history.current(), networkKey(network ?: physicalNetwork()), now, relays)
         return SmartServerRanking.score(candidate, advice())
     }
 
@@ -131,17 +193,18 @@ class SmartAuto(
         snapshot: ProtocolHistory,
         key: String?,
         now: Long,
+        relays: Set<String>,
     ): SmartCandidate {
         val protocol = server.smartProtocol()
         return SmartCandidate(
             id = server.id,
             protocol = protocol,
-            latencyMs = latencies[server.id],
+            latencyMs = SmartServerRanking.rankingLatency(latencies[server.id], server.endpointHost() in relays),
             silenceMeansDown = ServerPinger.silenceMeansDown(server),
             load = SmartServerRanking.agedLoad(FavoriteNodes.load(view.load, server), view.ageMs),
             verdict = snapshot.verdict(key, protocol, now),
             quality = FavoriteNodes.nodeId(server)?.let(view.quality::get),
-            full = FavoriteNodes.load(view.full.associateWith { 1.0 }, server) != null,
+            full = FavoriteNodes.load(view.full.associateWith { 1.0 }, server) != null || routeResources(listOf(server))[server.id]?.overloaded == true,
         )
     }
 
@@ -173,6 +236,11 @@ class SmartAuto(
     /** Whether the phone's own network reaches foreign sites; without that a failed check says nothing about the protocol. */
     suspend fun physicalWorks(network: Network): Boolean =
         firstAnswer(PHYSICAL_CHECK_URLS) { url -> 0L.takeIf { reaches(network, url) } } != null
+
+    /** Mobile recovery checks domestic sites: foreign sites may be blocked by the allowlist itself. */
+    suspend fun mobilePhysicalWorks(network: Network): Boolean = withTimeoutOrNull(CHECK_TIMEOUT_MS.toLong()) {
+        firstAnswer(ALLOWLIST_PHYSICAL_CHECK_URLS) { url -> 0L.takeIf { reaches(network, url) } }
+    } != null
 
     /**
      * A salted hash naming the network without its name or addresses: the
@@ -279,6 +347,12 @@ class SmartAuto(
             "https://www.gstatic.com/generate_204",
             "https://1.1.1.1/cdn-cgi/trace",
         )
+        val ALLOWLIST_PHYSICAL_CHECK_URLS = listOf(
+            "https://www.ozon.ru/",
+            "https://ya.ru/",
+            "https://www.avito.ru/",
+            "https://vk.com/",
+        )
     }
 }
 
@@ -304,6 +378,9 @@ enum class SmartSwitchReason(
     /** The network's last winner was closer at hand. */
     NETWORK_WINNER(noticed = false),
 
+    /** New core flows use a confirmed better path; established flows keep draining. */
+    PATH_QUALITY(noticed = false),
+
     /** The operator turned allowlists on: a mobile server carries traffic then. */
     ALLOWLIST_ON(noticed = true),
 
@@ -321,6 +398,12 @@ enum class TrafficCheckSize(val bytes: Int, val deadlineMs: Long) {
     /** Relays under allowlists are slow by design; they only need to carry traffic at all. */
     ALLOWLIST(bytes = 32 * 1024, deadlineMs = 12_000L),
 }
+
+/** The relay entries among [servers]: hosts that servers of different countries share. */
+fun relayHosts(servers: List<TunnelServer>): Set<String> =
+    SmartServerRanking.relayHosts(servers.map { it.endpointHost() to it.countryCode })
+
+private fun TunnelServer.endpointHost(): String? = ServerPinger.extractEndpoint(outbound)?.first?.lowercase(Locale.ROOT)
 
 /** Under allowlists the record is per server: the operator lets some addresses through. */
 private fun allowlistRecord(server: TunnelServer): String = "server:${server.id}"

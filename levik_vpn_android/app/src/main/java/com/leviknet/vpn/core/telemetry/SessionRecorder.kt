@@ -1,5 +1,8 @@
 package com.leviknet.vpn.core.telemetry
 
+import com.leviknet.vpn.core.network.WhitelistDetectionDiagnostic
+import com.leviknet.vpn.core.network.WhitelistMode
+import com.leviknet.vpn.core.network.WhitelistProbeDiagnostic
 import java.util.UUID
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
@@ -121,6 +124,8 @@ private val NODE_ID = Regex("^n1[0-9a-f]{20}$")
 
 /** The website accepts check times up to a minute. */
 private const val MAX_CHECK_MS = 60_000L
+private const val WHITELIST_SUMMARY_INTERVAL_MS = 5 * 60_000L
+private val WHITELIST_PROBES = setOf("ozon", "yandex", "avito", "vk", "cloudflare", "mozilla", "ovh", "github", "wikipedia")
 
 fun safeTelemetryCode(code: String): String = if (CODE.matches(code)) code else "other"
 
@@ -152,6 +157,11 @@ class SessionRecorder(
     private var probeFailures = 0
     private var ended: SessionEnd? = null
     private var endedDurationS = 0L
+    private var lastWhitelistMode: WhitelistMode? = null
+    private var lastWhitelistSummaryMs: Long? = null
+    private val lastWhitelistProbes = mutableMapOf<String, String>()
+    private var attemptResultRecorded = false
+    private var pendingWhitelistDiagnostic: WhitelistDetectionDiagnostic? = null
 
     @get:Synchronized
     val finished: Boolean get() = ended != null
@@ -184,11 +194,16 @@ class SessionRecorder(
     fun connected() {
         probeFailures = 0
         push("connected") {}
+        publishPendingWhitelistDiagnostic()
     }
 
-    fun attemptFailed(stage: AttemptStage, code: String) = push("attempt_failed") {
-        put("stage", stage.wire)
-        put("code", safeTelemetryCode(code))
+    @Synchronized
+    fun attemptFailed(stage: AttemptStage, code: String) {
+        push("attempt_failed") {
+            put("stage", stage.wire)
+            put("code", safeTelemetryCode(code))
+        }
+        publishPendingWhitelistDiagnostic()
     }
 
     @Synchronized
@@ -236,6 +251,58 @@ class SessionRecorder(
         }
     }
 
+    /** Fixed diagnostic codes reuse the existing wire contract, without addresses or raw logs. */
+    @Synchronized
+    fun whitelistDetection(diagnostic: WhitelistDetectionDiagnostic) {
+        if (ended != null) return
+        // The deployed server uses a core_log code to explain a never-connected
+        // session. A cancelled attempt must not acquire a diagnostic as its error.
+        if (!attemptResultRecorded) {
+            pendingWhitelistDiagnostic = diagnostic
+            return
+        }
+        val probes = diagnostic.probes.filter { it.id in WHITELIST_PROBES }.distinctBy { it.id }
+        // Time jitter alone must not fill the bounded timeline with repeated scans.
+        val changed = probes.filter { lastWhitelistProbes[it.id] != whitelistProbeState(it) }
+        val elapsed = elapsedMs()
+        val lastSummary = lastWhitelistSummaryMs
+        if (diagnostic.mode == lastWhitelistMode && changed.isEmpty() &&
+            lastSummary != null && elapsed - lastSummary < WHITELIST_SUMMARY_INTERVAL_MS
+        ) return
+        diagnosticCode("wl.mode.${diagnostic.mode.name.lowercase(java.util.Locale.ROOT)}.t${diagnosticTimeBucket(diagnostic.elapsedMs)}")
+        changed.forEach { probe ->
+            val status = probe.httpStatus?.takeIf { it in 100..599 }?.let { ".h$it" }.orEmpty()
+            diagnosticCode(
+                "wl.${probe.id}.${probe.outcome.wire}$status" +
+                    ".t${diagnosticTimeBucket(probe.elapsedMs)}.b${diagnosticByteBucket(probe.receivedBytes)}",
+            )
+        }
+        probes.forEach { lastWhitelistProbes[it.id] = whitelistProbeState(it) }
+        lastWhitelistMode = diagnostic.mode
+        lastWhitelistSummaryMs = elapsed
+    }
+
+    private fun publishPendingWhitelistDiagnostic() {
+        attemptResultRecorded = true
+        val diagnostic = pendingWhitelistDiagnostic ?: return
+        pendingWhitelistDiagnostic = null
+        whitelistDetection(diagnostic)
+    }
+
+    /** Mobile checks download 32 KiB, so they must not affect the regular 64 KiB node ranking. */
+    fun mobileTrafficCheck(nodeId: String?, protocol: TelemetryProtocol, ms: Long?) {
+        val node = nodeId?.takeIf(NODE_ID::matches) ?: protocol.wire
+        val result = ms?.let { "ok.t${diagnosticTimeBucket(it)}" } ?: "timeout"
+        diagnosticCode("mobile_check.$node.$result")
+    }
+
+    fun mobileNetworkOffline() = diagnosticCode("mobile_check.network_offline")
+
+    private fun diagnosticCode(code: String) = push("core_log") {
+        put("code", safeTelemetryCode(code))
+        put("count", 1)
+    }
+
     fun pause() = push("pause") {}
 
     fun unpause() = push("unpause") {}
@@ -244,6 +311,7 @@ class SessionRecorder(
     fun end(by: EndBy, code: String?) {
         if (ended != null) return
         ended = SessionEnd(by, code?.let(::safeTelemetryCode))
+        pendingWhitelistDiagnostic = null
         endedDurationS = elapsedSeconds()
     }
 
@@ -294,6 +362,25 @@ class SessionRecorder(
             fields()
         }
     }
+}
+
+private fun whitelistProbeState(probe: WhitelistProbeDiagnostic): String =
+    "${probe.outcome.wire}:${probe.httpStatus?.takeIf { it in 100..599 }}:${diagnosticByteBucket(probe.receivedBytes)}"
+
+private fun diagnosticTimeBucket(ms: Long): Int = when {
+    ms < 100L -> 0
+    ms < 500L -> 1
+    ms < 2_000L -> 2
+    ms < 6_000L -> 3
+    else -> 4
+}
+
+private fun diagnosticByteBucket(bytes: Int): Int = when {
+    bytes <= 0 -> 0
+    bytes < 1_024 -> 1
+    bytes < 16 * 1_024 -> 2
+    bytes < 32 * 1_024 -> 3
+    else -> 4
 }
 
 internal fun endObject(end: SessionEnd, durationS: Long): JsonObject = buildJsonObject {

@@ -5,15 +5,25 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.SystemClock
+import com.leviknet.vpn.core.logger.AppLogger
+import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.SocketException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.net.URL
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import javax.net.ssl.SSLException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
@@ -24,11 +34,65 @@ enum class WhitelistMode {
     ACTIVE,
 }
 
+enum class WhitelistProbeOutcome(val wire: String) {
+    OK("ok"),
+    DNS("dns"),
+    CONNECT("connect"),
+    READ("read"),
+    TLS("tls"),
+    HTTP("http"),
+    SHORT_BODY("short_body"),
+    DEADLINE("deadline"),
+    OTHER("other"),
+}
+
+/** Fixed probe IDs and numeric measurements only; never contains addresses or exception messages. */
+data class WhitelistProbeDiagnostic(
+    val id: String,
+    val domestic: Boolean,
+    val outcome: WhitelistProbeOutcome,
+    val elapsedMs: Long,
+    val receivedBytes: Int,
+    val httpStatus: Int?,
+) {
+    val reachable: Boolean get() = outcome == WhitelistProbeOutcome.OK
+}
+
+data class WhitelistDetectionDiagnostic(
+    val mode: WhitelistMode,
+    val elapsedMs: Long,
+    val probes: List<WhitelistProbeDiagnostic>,
+)
+
 internal data class WhitelistProbeResult(
     val id: String,
     val domestic: Boolean,
     val reachable: Boolean,
 )
+
+internal fun whitelistProbeFailureOutcome(error: Exception, readingBody: Boolean): WhitelistProbeOutcome {
+    if (error is CancellationException) throw error
+    val causes = generateSequence<Throwable>(error) { it.cause }.take(8).toList()
+    return when {
+        causes.any { it is UnknownHostException } -> WhitelistProbeOutcome.DNS
+        causes.any { it is SSLException } -> WhitelistProbeOutcome.TLS
+        causes.any { it is SocketTimeoutException || it is SocketException } ->
+            if (readingBody) WhitelistProbeOutcome.READ else WhitelistProbeOutcome.CONNECT
+        readingBody && causes.any { it is IOException } -> WhitelistProbeOutcome.READ
+        else -> WhitelistProbeOutcome.OTHER
+    }
+}
+
+internal fun whitelistProbeResponseOutcome(
+    httpStatus: Int,
+    receivedBytes: Int,
+    requiredBytes: Int,
+): WhitelistProbeOutcome = when {
+    requiredBytes == 0 -> if (httpStatus in 200..599) WhitelistProbeOutcome.OK else WhitelistProbeOutcome.HTTP
+    httpStatus != HttpURLConnection.HTTP_OK -> WhitelistProbeOutcome.HTTP
+    receivedBytes < requiredBytes -> WhitelistProbeOutcome.SHORT_BODY
+    else -> WhitelistProbeOutcome.OK
+}
 
 /**
  * Allowlists: domestic sites answer, foreign ones do not deliver a real download.
@@ -52,7 +116,10 @@ internal fun classifyWhitelistMode(results: List<WhitelistProbeResult>): Whiteli
 }
 
 /** Detects provider allow-list mode on the physical network without routing probes through VPN. */
-class WhitelistDetector(context: Context) {
+class WhitelistDetector(
+    context: Context,
+    private val onDiagnostic: (WhitelistDetectionDiagnostic) -> Unit = {},
+) {
     private val connectivityManager =
         context.applicationContext.getSystemService(ConnectivityManager::class.java)
     private val detectionMutex = Mutex()
@@ -76,17 +143,13 @@ class WhitelistDetector(context: Context) {
         }
 
         // Every probe has its own deadline, so a slow one never discards the others' answers.
-        val mode = coroutineScope {
+        val probes = coroutineScope {
             PROBES.map { probe ->
-                async {
-                    WhitelistProbeResult(
-                        id = probe.id,
-                        domestic = probe.domestic,
-                        reachable = reachable(network, probe),
-                    )
-                }
+                async { reachable(network, probe) }
             }.awaitAll()
-        }.let(::classifyWhitelistMode)
+        }
+        val mode = classifyWhitelistMode(probes.map { WhitelistProbeResult(it.id, it.domestic, it.reachable) })
+        currentCoroutineContext().ensureActive()
 
         cachedNetwork = network
         if (mode != WhitelistMode.UNKNOWN) {
@@ -95,6 +158,25 @@ class WhitelistDetector(context: Context) {
         } else {
             cachedAtElapsedMs = 0L
             cachedMode = WhitelistMode.UNKNOWN
+        }
+        val diagnostic = WhitelistDetectionDiagnostic(
+            mode = mode,
+            elapsedMs = (SystemClock.elapsedRealtime() - now).coerceAtLeast(0L),
+            probes = probes,
+        )
+        AppLogger.i(
+            "WhitelistDetector",
+            "Allowlists: mode=${mode.name} ms=${diagnostic.elapsedMs}; " + probes.joinToString("; ") {
+                "${it.id}=${it.outcome.wire},ms=${it.elapsedMs},bytes=${it.receivedBytes},http=${it.httpStatus ?: 0}"
+            },
+        )
+        try {
+            onDiagnostic(diagnostic)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            // A diagnostic consumer must not change a completed network decision.
+            AppLogger.w("WhitelistDetector", "Allowlists: diagnostic consumer unavailable")
         }
         mode
     }
@@ -139,15 +221,16 @@ class WhitelistDetector(context: Context) {
      * timeouts, and a blocking call ignores coroutine cancellation. The probe runs on its
      * own and is abandoned at the deadline instead of holding up the answer.
      */
-    private suspend fun reachable(network: Network, probe: Probe): Boolean {
-        val connection = AtomicReference<HttpURLConnection?>()
-        val attempt = probeScope.async { probe(network, probe, connection) }
+    private suspend fun reachable(network: Network, probe: Probe): WhitelistProbeDiagnostic {
+        val progress = ProbeProgress()
+        val attempt = probeScope.async { probe(network, probe, progress) }
         return try {
-            withTimeoutOrNull(PROBE_DEADLINE_MS) { attempt.await() } ?: false
+            withTimeoutOrNull(PROBE_DEADLINE_MS) { attempt.await() }
+                ?: progress.result(probe, WhitelistProbeOutcome.DEADLINE)
         } finally {
             if (!attempt.isCompleted) {
                 attempt.cancel()
-                connection.get()?.let { runCatching { it.disconnect() } }
+                progress.connection.get()?.let { runCatching { it.disconnect() } }
             }
         }
     }
@@ -155,8 +238,8 @@ class WhitelistDetector(context: Context) {
     private fun probe(
         network: Network,
         probe: Probe,
-        connection: AtomicReference<HttpURLConnection?>,
-    ): Boolean {
+        progress: ProbeProgress,
+    ): WhitelistProbeDiagnostic {
         var conn: HttpURLConnection? = null
         return try {
             conn = (network.openConnection(URL(probe.url)) as HttpURLConnection).apply {
@@ -174,24 +257,45 @@ class WhitelistDetector(context: Context) {
                 // Compression would let a large page cross a byte cutoff as a few kilobytes.
                 if (probe.minBytes > 0) setRequestProperty("Accept-Encoding", "identity")
             }
-            connection.set(conn)
+            progress.connection.set(conn)
             val code = conn.responseCode
-            if (probe.minBytes == 0) return code in 200..599
-            code == HttpURLConnection.HTTP_OK && conn.inputStream.use { input ->
+            progress.httpStatus.set(code)
+            if (probe.minBytes == 0) {
+                return progress.result(probe, whitelistProbeResponseOutcome(code, 0, 0))
+            }
+            if (code != HttpURLConnection.HTTP_OK) return progress.result(probe, WhitelistProbeOutcome.HTTP)
+            conn.inputStream.use { input ->
                 val buffer = ByteArray(8 * 1024)
                 var total = 0
                 while (total < probe.minBytes) {
                     val count = input.read(buffer)
                     if (count < 0) break
                     total += count
+                    progress.receivedBytes.set(total)
                 }
-                total >= probe.minBytes
+                progress.result(probe, whitelistProbeResponseOutcome(code, total, probe.minBytes))
             }
-        } catch (_: Exception) {
-            false
+        } catch (error: Exception) {
+            progress.result(probe, whitelistProbeFailureOutcome(error, readingBody = progress.httpStatus.get() >= 0))
         } finally {
             runCatching { conn?.disconnect() }
         }
+    }
+
+    private class ProbeProgress {
+        private val startedAtElapsedMs = SystemClock.elapsedRealtime()
+        val connection = AtomicReference<HttpURLConnection?>()
+        val receivedBytes = AtomicInteger(0)
+        val httpStatus = AtomicInteger(-1)
+
+        fun result(probe: Probe, outcome: WhitelistProbeOutcome) = WhitelistProbeDiagnostic(
+            id = probe.id,
+            domestic = probe.domestic,
+            outcome = outcome,
+            elapsedMs = (SystemClock.elapsedRealtime() - startedAtElapsedMs).coerceAtLeast(0L),
+            receivedBytes = receivedBytes.get(),
+            httpStatus = httpStatus.get().takeIf { it >= 0 },
+        )
     }
 
     private fun transportPriority(capabilities: NetworkCapabilities): Int = when {

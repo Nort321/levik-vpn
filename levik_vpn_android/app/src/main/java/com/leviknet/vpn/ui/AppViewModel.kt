@@ -57,6 +57,7 @@ import com.leviknet.vpn.data.hasUsableYandexAuth
 import com.leviknet.vpn.data.relayProfileRefreshDue
 import com.leviknet.vpn.vpn.YandexProviderAuth
 import com.leviknet.vpn.vpn.refreshYandexGuest
+import com.leviknet.vpn.vpn.relayHosts
 import com.leviknet.vpn.vpn.selectYandexGuestNetwork
 import com.leviknet.vpn.vpn.GameApps
 import com.leviknet.vpn.vpn.GameRuntimeStatus
@@ -68,6 +69,7 @@ import com.leviknet.vpn.vpn.TunnelEngineKind
 import com.leviknet.vpn.vpn.VpnConnectionState
 import com.leviknet.vpn.vpn.VpnController
 import com.leviknet.vpn.vpn.VpnSnapshot
+import com.leviknet.vpn.vpn.HotSwitchPhase
 import com.leviknet.vpn.core.platform.AppAnnouncement
 import com.leviknet.vpn.core.platform.AppCatalog
 import com.leviknet.vpn.core.platform.AppCatalogPolicy
@@ -194,6 +196,7 @@ class AppViewModel(
     private var whitelistDetectionJob: Job? = null
     private var connectionPreparationJob: Job? = null
     private var connectionStartJob: Job? = null
+    private var manualSelectionJob: Job? = null
     private var pendingLteAction: PendingLteAction? = null
     private var pendingAllowlistAction: PendingAllowlistAction? = null
     private var pendingRelayIntroduction: PendingRelayIntroduction? = null
@@ -258,6 +261,10 @@ class AppViewModel(
                 }
                 previousState = vpn.state
                 mutableState.update { current ->
+                    val selected = confirmedServerSelection(
+                        current.selectedServerId, vpn, current.profile?.subscriptionId,
+                        current.profile?.servers.orEmpty().mapTo(mutableSetOf(), TunnelServer::id),
+                    )
                     val newHistory = (current.liveSpeedHistory + SpeedSample(
                         downloadBps = vpn.downloadBytesPerSecond,
                         uploadBps = vpn.uploadBytesPerSecond,
@@ -267,6 +274,8 @@ class AppViewModel(
                             (current.vpn.failure != vpn.failure || current.vpn.state != vpn.state)
                         ) vpn.failure.asProblem() else current.problem,
                         vpn = vpn,
+                        selectedServerId = selected,
+                        pingMs = selected?.let(current.serverPings::get),
                         liveSpeedHistory = newHistory,
                         whitelistMode = vpn.whitelistMode.takeUnless {
                             it == WhitelistMode.UNKNOWN
@@ -492,13 +501,18 @@ class AppViewModel(
             viewModelScope.launch {
                 platform.serverSwitches.collect { switch ->
                     mutableState.update { current ->
-                        current.copy(selectedServerId = switch.toServerId, pingMs = current.serverPings[switch.toServerId])
+                        if (current.vpn.state == VpnConnectionState.CONNECTED &&
+                            (!current.vpn.mainSelectionCertain || current.vpn.serverId != switch.toServerId)
+                        ) current else current.copy(selectedServerId = switch.toServerId, pingMs = current.serverPings[switch.toServerId])
                     }
                 }
             }
             viewModelScope.launch {
                 platform.smartAuto.switches.collect { switch ->
                     mutableState.update { current ->
+                        if (current.vpn.state == VpnConnectionState.CONNECTED &&
+                            (!current.vpn.mainSelectionCertain || current.vpn.serverId != switch.toServerId)
+                        ) return@update current
                         current.copy(
                             selectedServerId = switch.toServerId,
                             pingMs = current.serverPings[switch.toServerId],
@@ -1283,6 +1297,7 @@ class AppViewModel(
     }
 
     private fun cancelPendingConnection() {
+        manualSelectionJob?.cancel()
         connectionPreparationJob?.cancel()
         connectionStartJob?.cancel()
         connectionPending = false
@@ -1649,6 +1664,7 @@ class AppViewModel(
     }
 
     fun selectServer(serverId: String) {
+        manualSelectionJob?.cancel()
         if (serverId == "yandex:telemost" || serverId == "yandex:document") selectYandexTransport(serverId == "yandex:telemost")
         else selectServer(serverId, showIntroduction = true)
     }
@@ -1661,8 +1677,12 @@ class AppViewModel(
         val profile = mutableState.value.profile ?: return
         val servers = countryServers(profile.servers, countryCode)
         if (servers.isEmpty()) return
-        if (!settings.automaticServer.value && servers.any { it.id == mutableState.value.selectedServerId }) return
-        viewModelScope.launch {
+        val vpn = vpnController.state.value
+        if (!settings.automaticServer.value && vpn.mainSelectionCertain && vpn.hotSwitch?.phase != HotSwitchPhase.PREPARING &&
+            servers.any { it.id == displayedServerId(mutableState.value) }
+        ) return
+        manualSelectionJob?.cancel()
+        manualSelectionJob = viewModelScope.launch {
             val known = mutableState.value.serverPings
             val measured = if (servers.all { it.id in known }) known else {
                 measureServers(servers).also { fresh ->
@@ -1672,6 +1692,8 @@ class AppViewModel(
             val candidates = withoutMaintenance(profile, servers.mapTo(mutableSetOf(), TunnelServer::id))
             val best = rankAutomatic(profile, candidates, measured).firstOrNull()?.id
                 ?: servers.first { it.id in candidates }.id
+            ensureActive()
+            if (mutableState.value.profile !== profile) return@launch
             selectServer(best)
         }
     }
@@ -1720,8 +1742,9 @@ class AppViewModel(
     }
 
     private fun selectServerNow(serverId: String) {
-        viewModelScope.launch {
-            runCatching {
+        manualSelectionJob?.cancel()
+        manualSelectionJob = viewModelScope.launch {
+            try {
                 val profile = mutableState.value.profile
                 if (mutableState.value.vpn.state in ACTIVE_TUNNEL_STATES &&
                     profile?.servers?.firstOrNull { it.id == serverId }?.engine == TunnelEngineKind.LEVIK_RELAY
@@ -1731,25 +1754,30 @@ class AppViewModel(
                     mutableState.update { it.copy(profile = refreshed) }
                 }
                 settings.setAutomaticServer(false)
+                ensureActive()
+                if (manualServerSelection(vpnController.state.value, serverId) == ManualServerSelection.HOT_SWITCH) {
+                    // The service persists and publishes the selected server only after its full ACK.
+                    vpnController.switchServer(serverId, hotSwitch = true)
+                    return@launch
+                }
                 repository.selectServer(serverId)
+                ensureActive()
+                mutableState.update { current ->
+                    current.copy(
+                        selectedServerId = serverId,
+                        pingMs = current.serverPings[serverId],
+                    )
+                }
+                if (mutableState.value.vpn.state in ACTIVE_TUNNEL_STATES) {
+                    AppLogger.i("AppViewModel", "Switching VPN server with reconnection")
+                    vpnController.switchServer(serverId)
+                }
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                mutableState.update {
+                    it.copy(problem = error.toAppProblem(ProblemOperation.CONNECT, it.profile?.subscriptionId))
+                }
             }
-                .onSuccess {
-                    mutableState.update { current ->
-                        current.copy(
-                            selectedServerId = serverId,
-                            pingMs = current.serverPings[serverId],
-                        )
-                    }
-                    if (mutableState.value.vpn.state in ACTIVE_TUNNEL_STATES) {
-                        AppLogger.i("AppViewModel", "Seamlessly switching VPN server")
-                        vpnController.switchServer(serverId)
-                    }
-                }
-                .onFailure { error ->
-                    mutableState.update {
-                        it.copy(problem = error.toAppProblem(ProblemOperation.CONNECT, it.profile?.subscriptionId))
-                    }
-                }
         }
     }
 
@@ -1787,7 +1815,19 @@ class AppViewModel(
     fun selectAutomaticServer() {
         val profile = mutableState.value.profile ?: return
         if (mutableState.value.refreshing) return
-        viewModelScope.launch {
+        manualSelectionJob?.cancel()
+        manualSelectionJob = viewModelScope.launch {
+            if (vpnController.state.value.let { it.state == VpnConnectionState.CONNECTED && it.hotSwitchServerIds.isNotEmpty() }) {
+                try {
+                    settings.setAutomaticServer(true)
+                    ensureActive()
+                    vpnController.refreshAutomaticSelection()
+                } catch (error: Throwable) {
+                    if (error is CancellationException) throw error
+                    mutableState.update { it.copy(problem = error.toAppProblem()) }
+                }
+                return@launch
+            }
             mutableState.update { it.copy(refreshing = true, message = null) }
             try {
                 settings.setAutomaticServer(true)
@@ -1801,6 +1841,22 @@ class AppViewModel(
                 mutableState.update { it.copy(problem = error.toAppProblem()) }
             } finally {
                 mutableState.update { it.copy(refreshing = false) }
+            }
+        }
+    }
+
+    fun reconnectAllVpn() {
+        val vpn = vpnController.state.value
+        val target = reconnectAllTarget(vpn) ?: return
+        manualSelectionJob?.cancel()
+        manualSelectionJob = viewModelScope.launch {
+            try {
+                settings.setAutomaticServer(false)
+                ensureActive()
+                vpnController.switchServer(target, forceReconnect = true)
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                mutableState.update { it.copy(problem = error.toAppProblem(ProblemOperation.CONNECT, it.profile?.subscriptionId)) }
             }
         }
     }
@@ -2359,7 +2415,7 @@ class AppViewModel(
         val servers = profile.servers.filter { it.id in serverIds }
         val smartAuto = appPlatform?.smartAuto
         if (smartAuto != null && servers.all(TunnelServer::isSmartAutoCandidate)) {
-            return smartAuto.rank(servers, measured)
+            return smartAuto.rank(servers, measured, relays = relayHosts(profile.servers))
         }
         // Protocols that work on the user's operator first, unless none of them answers.
         val advised = RemoteConfigPolicy.candidates(servers, appPlatform?.protocolAdvice()) { it.telemetryProtocol().wire }
@@ -2392,7 +2448,12 @@ class AppViewModel(
                     async(Dispatchers.IO) {
                         server.id to ServerPinger.measure(server)
                     }
-                }.awaitAll().toMap()
+                }.awaitAll().toMap().let { entryPings ->
+                    val routes = appPlatform?.smartAuto?.routeMeasurements(servers).orEmpty()
+                    entryPings.mapValues { (id, entry) -> routes[id]?.samplesMs?.sorted()?.let { values ->
+                        values.getOrNull(values.size / 2)?.toLong()
+                    } ?: entry }
+                }
             }
         }
 
@@ -2886,6 +2947,7 @@ class AppViewModel(
     }
 
     fun pauseVpn(minutes: Int) {
+        manualSelectionJob?.cancel()
         vpnController.pause(minutes)
     }
 
@@ -3274,15 +3336,13 @@ enum class ServerFilterType {
     ALL,
     REGULAR,
     MOBILE_ALLOWLIST,
-    DNS_TEST,
     FAVORITES,
     FASTEST;
 
     fun matches(server: TunnelServer, favorites: Set<String>): Boolean = when (this) {
         ALL, FASTEST -> true
-        REGULAR -> !server.isMobileServer() && server.dnsttConfig == null
+        REGULAR -> !server.isMobileServer()
         MOBILE_ALLOWLIST -> server.isMobileServer()
-        DNS_TEST -> server.dnsttConfig != null
         FAVORITES -> server.id in favorites
     }
 }
@@ -3427,10 +3487,12 @@ internal fun shouldShowConnectionTelemetryNotice(state: AppUiState): Boolean =
             !state.showAllowlistRequiredWarning
         )
 
-internal fun displayedServerId(state: AppUiState): String? =
-    state.vpn.serverId.takeIf {
+internal fun displayedServerId(state: AppUiState): String? {
+    if (!state.vpn.mainSelectionCertain && state.vpn.state !in setOf(VpnConnectionState.DISCONNECTED, VpnConnectionState.ERROR)) return null
+    return state.vpn.serverId.takeIf {
         state.vpn.state !in setOf(VpnConnectionState.DISCONNECTED, VpnConnectionState.ERROR)
     } ?: state.selectedServerId
+}
 
 enum class AppTab {
     HOME,

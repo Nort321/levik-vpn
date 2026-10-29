@@ -27,6 +27,15 @@ enum class VpnFailure {
     NETWORK_REQUIREMENT,
 }
 
+enum class HotSwitchPhase { PREPARING, APPLIED, FAILED, UNCERTAIN }
+
+data class HotSwitchSnapshot(
+    val phase: HotSwitchPhase,
+    val targetServerId: String,
+    val targetServerName: String? = null,
+    val preferenceSaved: Boolean = true,
+)
+
 data class VpnSnapshot(
     val state: VpnConnectionState = VpnConnectionState.DISCONNECTED,
     val engine: TunnelEngineKind? = null,
@@ -46,6 +55,10 @@ data class VpnSnapshot(
     val pausedAtHome: String? = null,
     val failure: VpnFailure? = null,
     val failureDetail: String? = null,
+    /** The main route is acknowledged separately from the live VPN interface. */
+    val mainSelectionCertain: Boolean = true,
+    val hotSwitch: HotSwitchSnapshot? = null,
+    val hotSwitchServerIds: Set<String> = emptySet(),
     internal val ownerGeneration: Long = 0,
     internal val ownerActive: Boolean = false,
 )
