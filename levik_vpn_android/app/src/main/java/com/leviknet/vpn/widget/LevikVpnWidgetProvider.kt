@@ -70,7 +70,9 @@ class LevikVpnWidgetProvider : AppWidgetProvider() {
             views.setTextViewText(R.id.widget_status, statusText)
             views.setTextViewText(
                 R.id.widget_server,
-                snapshot.serverName ?: context.getString(R.string.select_server),
+                if (snapshot.state == VpnConnectionState.CONNECTED && !snapshot.mainSelectionCertain)
+                    context.getString(R.string.hot_switch_uncertain_title)
+                else snapshot.serverName ?: context.getString(R.string.select_server),
             )
 
             appWidgetManager.updateAppWidget(appWidgetId, views)

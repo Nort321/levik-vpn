@@ -88,7 +88,8 @@ class LevikVpnTileService : TileService() {
                 tile.state = Tile.STATE_ACTIVE
                 tile.label = getString(R.string.app_name)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    tile.subtitle = snapshot.serverName ?: getString(R.string.status_connected)
+                    tile.subtitle = if (!snapshot.mainSelectionCertain) getString(R.string.hot_switch_uncertain_title)
+                        else snapshot.serverName ?: getString(R.string.status_connected)
                 }
             }
             VpnConnectionState.PAUSED -> {

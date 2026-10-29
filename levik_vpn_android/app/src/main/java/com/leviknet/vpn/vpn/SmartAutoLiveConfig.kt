@@ -28,6 +28,8 @@ internal class SmartAutoLiveConfig(
             File(directory, "sa-$nonce-live-$index.sock").path, server.syncHost())
     }
     @Volatile private var installedId = initialId
+    @Volatile var dnsResolvers: List<String> = emptyList()
+        private set
     val initial: SmartRouteProbeConfig.Candidate get() = candidates.first { it.id == installedId }
     fun installed(id: String) { require(candidates.any { it.id == id }); installedId = id }
     init { require((listOf(controlPath) + candidates.map { it.path }).all { it.toByteArray().size < 100 }) }
@@ -54,6 +56,9 @@ internal class SmartAutoLiveConfig(
             put("strategy", buildJsonObject { put("type", "random") })
         }
         val dns = base["dns"] as? JsonObject
+        dnsResolvers = (dns?.get("servers") as? JsonArray).orEmpty().mapNotNull { server ->
+            (server as? JsonPrimitive)?.content ?: ((server as? JsonObject)?.get("address") as? JsonPrimitive)?.content
+        }.filter { it != "localhost" && !it.contains("+local") }.distinct()
         val endpointNames = candidates.mapNotNull { it.endpointHost }.filter { ':' !in it && it.any(Char::isLetter) }.distinct()
         val effectiveDns = dns?.let { original -> JsonObject(original + buildMap {
             if (ownsControl) put("tag", JsonPrimitive(DNS))

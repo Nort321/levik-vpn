@@ -192,7 +192,8 @@ android {
             "PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER",
             "${playIntegrityCloudProjectNumber}L",
         )
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = providers.gradleProperty("levik.testInstrumentationRunner")
+            .orElse("androidx.test.runner.AndroidJUnitRunner").get()
         vectorDrawables.useSupportLibrary = true
 
         val abiFilterProperty = providers.gradleProperty("levik.abiFilters").orNull
