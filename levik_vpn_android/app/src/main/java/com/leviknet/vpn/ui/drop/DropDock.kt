@@ -276,6 +276,7 @@ private fun DockTransferCard(
                             overflow = TextOverflow.Ellipsis,
                         )
                         prompt?.code?.let { code -> DockCode(code, stringResource(R.string.drop_code_hint, transfer.peerName)) }
+                        DockNote(stringResource(if (transfer.path == SessionPath.LAN) R.string.drop_route_lan else R.string.drop_route_relay))
                         DockNote(stringResource(R.string.drop_offer_safety))
                         DockActions {
                             TextButton(onClick = { controller.answer(transfer.id, DropAnswer.DECLINE, prompt?.code) }, enabled = !answering) {
@@ -318,9 +319,12 @@ private fun DockTransferCard(
                             if (current == DockPhase.ACTIVE) {
                                 TextButton(onClick = { controller.control(transfer.id, DropAction.PAUSE) }) { Text(stringResource(R.string.drop_pause)) }
                             } else if (transfer.link == null) {
-                                TextButton(onClick = { controller.control(transfer.id, DropAction.RESUME) }) { Text(stringResource(R.string.drop_resume)) }
+                                TextButton(onClick = { controller.control(transfer.id, DropAction.RESUME) }) { Text(stringResource(if (transfer.route == "lan" || transfer.reason == "lan") R.string.drop_resume_lan else R.string.drop_resume)) }
                             }
                             CancelButton(transfer, controller)
+                        }
+                        if (current == DockPhase.PAUSED && transfer.route != null && transfer.route != "relay" && transfer.fileCount <= 20 && transfer.totalBytes <= 2L * 1024 * 1024 * 1024) {
+                            TextButton(onClick = { controller.control(transfer.id, DropAction.RELAY) }) { Text(stringResource(R.string.drop_resume_relay)) }
                         }
                     }
                     DockPhase.DONE -> {

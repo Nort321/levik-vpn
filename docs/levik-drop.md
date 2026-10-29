@@ -20,9 +20,35 @@ sender ◀──────── TCP on the local network ──────�
 - **Trust is the user's, not the server's.** The first time two apps meet, or
   after a reinstall changed a key, both screens show the same six digits and
   the user confirms them on both. The apps then pin each other's identity key.
-- **Beta limits:** 20 files and 2 GiB per transfer, one open transfer per app,
-  20 GiB a day per account through the relay (local-network bytes are not
-  counted), 100 Mbit/s for the whole relay, shared equally.
+- **Relay limits:** 20 files and 2 GiB per transfer, one open relay transfer per
+  app, 20 GiB a day per account, 100 Mbit/s for the whole relay, shared equally.
+- **Local transfers (capability v2):** no product size, file-count, daily-volume,
+  speed or concurrent-transfer quota. Device storage, filesystem/OS limits and
+  wire representation still apply (safe integer byte totals, signed 32-bit file
+  indices). Large manifests and resume lists are streamed in batches.
+- **Route before acceptance:** both apps establish and authenticate a local
+  connection before showing it as available. Otherwise they authorize a relay
+  route against its limits. No file content moves before the receiver accepts.
+  A selected LAN route is persistent. Any loss pauses the transfer; Resume
+  retries LAN. Only the explicit “Continue through server” action may change a
+  paused transfer to relay, after checking all relay limits again.
+  The website and relay are still needed for discovery and coordination; this
+  is not offline discovery.
+
+## Capability v2 and rollout
+
+V2 is requested in presence and in a new offer as `protocol: 2`; missing offer
+protocol means v1. A v2 offer requires a v2 receiver (`upgrade_required` otherwise).
+Existing v1 offers and their wire vectors remain supported; iOS is unchanged.
+The base v1 ECDH handshake and key derivation remain the same. V2 extensions below
+are used only for an offer whose server response says `protocol: 2`.
+
+Deploy in this order: the relay with signaling-token support, migration
+`levik_vpn_air/db/migrations/031_drop_routes.sql` and the website, then the Android,
+Windows, macOS and Linux clients. No destructive migration is required: existing
+rows default to `protocol = 1, route = 'relay'`. Client-only deployment cannot enable
+v2 against an older website. Roll back clients first if necessary; retain the
+additive DB columns and relay support while v2 transfers remain open.
 
 ## Website API
 
@@ -34,12 +60,12 @@ All requests are signed app requests ([Android mobile API](../levik_vpn_air/docs
 | `DELETE /api/mobile/v1/drop/presence` | Not ready any more (quit, sign-out, Android leaves the foreground with the VPN off). |
 | `GET /api/mobile/v1/drop/devices` | `{ ok, available, devices: [{ deviceId, name, platform, appVersion, current, ready, keyId }], quota: { limitBytes, usedBytes, resetsAt }, limits: { maxFiles, maxBytes } }`. `keyId`: first 16 hex digits of SHA-256 of the identity key, null if the app never registered one. |
 | `GET /api/mobile/v1/drop/transfers` | This app's transfers of the last 7 days, newest first: `{ ok, transfers: [Transfer], quota }`. |
-| `POST /api/mobile/v1/drop/transfers` `{ receiverDeviceId, fileCount, totalBytes }` | Offers files. Needs an active subscription. `{ ok, transfer, connection }`. |
+| `POST /api/mobile/v1/drop/transfers` `{ receiverDeviceId, fileCount, totalBytes, protocol?: 1|2 }` | Offers files. Needs an active subscription. `{ ok, transfer, connection }`. |
 | `POST /api/mobile/v1/drop/transfers/update` `{ id, action, reason? }` | One step, below. `{ ok, transfer, connection }` (`connection` only for `connect`). |
 
 ```
 Transfer   = { id, role: "sender"|"receiver", peerDeviceId, peerName, peerPlatform, state, reason,
-               fileCount, totalBytes, relayedBytes, createdAt, updatedAt, expiresAt, finishedAt }
+               fileCount, totalBytes, relayedBytes, protocol, route: "auto"|"lan"|"relay", createdAt, updatedAt, expiresAt, finishedAt }
 Connection = { token, expiresAt, endpoints: [{ host, port, pin }] }
 ```
 
@@ -53,12 +79,20 @@ Errors (`{ ok: false, error: { code, retryable } }`): `drop_unavailable` 503,
 | Action | Who | From → to |
 |---|---|---|
 | `connect` | both | `offered` stays; `active`/`paused` → `active`. Returns a fresh relay token (15 minutes) and pushes the deadline to 24 h. Needs an active subscription. |
+| `route_lan` | sender initially; either app when paused | v2: locks the route to LAN, independent of relay quota |
+| `route_relay` | sender initially; either app when paused | v2: checks 20 files, 2 GiB, daily quota and the single relay slot, then locks relay; sender rejoins with a fresh payload token |
 | `accept` | receiver | `offered` → `active` |
 | `decline` | receiver | `offered` → `declined` |
-| `pause` (`reason`: `user`, `network`, `quota`) | both | `active` → `paused` |
+| `pause` (`reason`: `user`, `network`, `quota`, `lan`) | both | `offered`/`active` → `paused` |
 | `complete` | both | `active`/`paused` → `done` |
 | `cancel` | both | open → `cancelled` (`reason`: `sender`/`receiver`) |
 | `fail` (`reason`: `source_changed`, `integrity`, `storage_full`, `storage_error`, `source_unreadable`, `protocol`, `key_rejected`) | both | open → `failed` |
+
+V2 offers start with `route = 'auto'` and do not reserve a relay slot or require
+remaining relay quota. Accept is refused until a route has been selected.
+Active or paused v2 LAN transfers do not expire on the 24-hour relay timer and
+remain visible in the transfer list regardless of age. Cancellation, account
+revocation and explicit decline continue to apply.
 
 An offer expires 15 minutes after it was made; an accepted transfer 24 hours
 after its last `connect` or pause (`expired`). Signing out an app ends its
@@ -104,7 +138,13 @@ before that list was fetched) end with `ended`; without a list newer than
 until accepted. Both with `Authorization: Bearer <HMAC-SHA256(secret, "levik-drop-relay-api:v1")>`.
 
 **Token.** `base64url(JSON) "." base64url(HMAC-SHA256(secret, "levik-drop-token:v1|" + body))`,
-claims `{ v: 1, k: "drop", t: transferId, r: "s"|"r", m: maxBytes, e: unixExpiry, n: random }`.
+claims `{ v: 1, k: "drop", t: transferId, r: "s"|"r", m: maxBytes, e: unixExpiry, n: random, signaling?: true }`.
+
+For v2 auto/LAN routes the website issues signaling-only tokens with a 64 KiB
+sender budget. These connections consume no daily quota, reject frames larger
+than 4096 bytes and reject the authenticated file-data record type `0x11`.
+They are only for handshake and route coordination; the sender must reconnect
+with a quota-limited non-signaling token before sending relay file content.
 
 ## Session
 
@@ -145,6 +185,26 @@ the user confirmed it, the sender sends no file byte before its user
 confirmed it, and only then each pins the key. Confirming on one side is not
 confirming on the other. Revoking a device on the website ends its transfers;
 its pin stays harmless, since the website never lets it join again.
+
+### V2 route and metadata messages
+
+Before a v2 manifest, the sender sends encrypted `{"t":"route","path":"lan"|"relay"}`
+over the selected path, after server authorization. The receiver checks that
+both directions actually use that path before presenting acceptance. A partial
+LAN switch never falls back to relay. A late LAN probe cannot change an already
+selected relay route.
+
+V2 uses `manifest_part` messages with `{ files, total, final }` (at most 16 files
+per part; `total` is that part's sum). The receiver checks the completed list
+against the website offer's count and total. `accept_part` similarly carries
+`{ offsets, prefix, final }`, at most 16 entries per part. No payload is sent until
+the whole accept list is validated. This avoids an artificial file-count limit
+from the single-control-frame size. Names remain encrypted.
+
+V2 data plaintext is `0x03 | file (u32) | offset (u64) | bytes`; its outer record
+byte is `0x11` instead of `0x10`, included in AES-GCM AAD. V2 receivers reject
+file data in an unmarked record. Control records retain `0x10`, and counters are
+shared across both types. Legacy v1 record and data encodings are unchanged.
 
 ### Records
 
@@ -192,8 +252,9 @@ any other attempt. Once both checked, the sender sends `lan_on` as its last
 record through the relay and every later record on the direct connection;
 the receiver answers `lan_ok` as its last record through the relay and
 switches too. Records keep their counters across the switch. If the direct
-connection breaks, the session ends and the next one starts through the
-relay (and may switch again). A VPN Kill Switch, a guest Wi-Fi or a firewall
+connection breaks, a v2 transfer pauses and retains its LAN route, including
+after app restart. Resume negotiates LAN again; a manual relay action is required
+to change the route. Legacy v1 transfers retain their previous reconnect behavior. A VPN Kill Switch, a guest Wi-Fi or a firewall
 that blocks the connection simply leaves the transfer on the relay.
 
 ## Saving
@@ -210,7 +271,8 @@ that blocks the connection simply leaves the transfer on the relay.
   "downloaded from the internet" mark (Windows Zone.Identifier, macOS
   quarantine); nothing gets an executable bit.
 - Partial files (`.<name>.levikdrop`) live next to the target and are removed
-  on cancel, on failure, and 24 hours after the last activity. Cancel never
+  on cancel or failure, and when the website expires the transfer. Active/paused
+  v2 LAN transfers are not expired by the relay timer. Cancel never
   removes files that were already completed.
 
 ## Platforms

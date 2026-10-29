@@ -885,7 +885,7 @@
 
     <!-- LevikDrop, docs/levik-drop.md -->
     <string name="drop_title">Передача файлов</string>
-    <string name="drop_caption">Между вашими устройствами: шифруется на устройстве и нигде не хранится. До %1$d файлов и %2$s за раз.</string>
+    <string name="drop_caption">Между вашими устройствами: шифруется на устройстве и нигде не хранится. По локальной сети — без лимитов LevikDrop. Через сервер — до %1$d файлов и %2$s за раз.</string>
     <string name="drop_refresh">Обновить передачу файлов</string>
     <string name="drop_loading">Загружаем устройства…</string>
     <string name="drop_unavailable">Передача файлов сейчас недоступна.</string>
@@ -977,7 +977,7 @@
     <string name="drop_error_busy">Дождитесь окончания текущей передачи: за раз передаётся один набор файлов.</string>
     <string name="drop_error_nothing">Файлы не выбраны.</string>
     <string name="drop_error_too_many">За раз можно передать до %1$d файлов.</string>
-    <string name="drop_error_too_large">За раз можно передать до %1$s.</string>
+    <string name="drop_error_too_large">Размер файлов не поддерживается файловой системой.</string>
     <string name="drop_error_unreadable">Не удалось открыть «%1$s».</string>
     <string name="drop_error_unreadable_any">Не удалось открыть файл.</string>
     <string name="drop_error_not_a_file">«%1$s» — это не файл. Папки пока не передаются.</string>
@@ -1024,4 +1024,12 @@
     <string name="server_country_servers">Серверы: %1$s</string>
     <string name="server_country_expanded">Развёрнуто</string>
     <string name="server_country_collapsed">Свёрнуто</string>
+    <string name="drop_route_lan">Напрямую по локальной сети · без лимитов LevikDrop</string>
+    <string name="drop_route_relay">Через сервер · до 20 файлов и 2 ГБ</string>
+    <string name="drop_route_checking">Проверяем прямое соединение…</string>
+    <string name="drop_resume_lan">Повторить по локальной сети</string>
+    <string name="drop_resume_relay">Продолжить через сервер</string>
+    <string name="drop_paused_lan">Пауза: нужна локальная сеть. Переход на сервер — только вручную.</string>
+    <string name="drop_upgrade_required">Для этой передачи обновите Levik на устройстве получателя.</string>
+    <string name="drop_relay_limits">Для передачи через сервер доступно до 20 файлов и 2 ГБ. Проверьте дневную квоту или подключите устройства к одной локальной сети.</string>
 </resources>

@@ -80,7 +80,7 @@ internal fun DropCard(state: DropUiState, controller: DropController) {
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
         if (tree != null) controller.setFolder(tree)
     }
-    val busy = snapshot.openTransfer != null
+    val busy = false // Route negotiation enforces the relay slot; LAN transfers can run together.
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
@@ -112,7 +112,7 @@ internal fun DropCard(state: DropUiState, controller: DropController) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        dropMessage(message, snapshot.maxFiles, snapshot.maxBytes),
+                        dropMessage(message, snapshot.maxFiles),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                         modifier = Modifier.weight(1f),
@@ -126,7 +126,7 @@ internal fun DropCard(state: DropUiState, controller: DropController) {
                     Spacer(Modifier.width(10.dp))
                     DropNote(stringResource(R.string.drop_loading))
                 }
-                snapshot.loadedAtMs == null -> DropNote(dropMessage(DropMessage.Api(snapshot.error.orEmpty()), snapshot.maxFiles, snapshot.maxBytes))
+                snapshot.loadedAtMs == null -> DropNote(dropMessage(DropMessage.Api(snapshot.error.orEmpty()), snapshot.maxFiles))
                 !snapshot.available -> DropNote(stringResource(R.string.drop_unavailable))
                 snapshot.devices.isEmpty() -> DropNote(stringResource(R.string.drop_no_devices))
                 else -> snapshot.devices.forEach { device ->
@@ -287,7 +287,10 @@ private fun DropTransferRow(transfer: DropTransferView, controller: DropControll
                 TextButton(onClick = { controller.control(transfer.id, DropAction.PAUSE) }) { Text(stringResource(R.string.drop_pause)) }
             }
             if (transfer.state == DropState.PAUSED && transfer.link == null) {
-                TextButton(onClick = { controller.control(transfer.id, DropAction.RESUME) }) { Text(stringResource(R.string.drop_resume)) }
+                TextButton(onClick = { controller.control(transfer.id, DropAction.RESUME) }) { Text(stringResource(if (transfer.route == "lan" || transfer.reason == "lan") R.string.drop_resume_lan else R.string.drop_resume)) }
+            }
+            if (transfer.state == DropState.PAUSED && transfer.route != null && transfer.route != "relay" && transfer.fileCount <= 20 && transfer.totalBytes <= 2L * 1024 * 1024 * 1024) {
+                TextButton(onClick = { controller.control(transfer.id, DropAction.RELAY) }) { Text(stringResource(R.string.drop_resume_relay)) }
             }
             if (transfer.state.open) {
                 TextButton(onClick = { controller.control(transfer.id, DropAction.CANCEL) }) { Text(stringResource(R.string.drop_cancel)) }
@@ -323,6 +326,8 @@ internal fun dropStatus(transfer: DropTransferView): String {
     val peer = transfer.peerName
     return when (transfer.state) {
         DropState.OFFERED -> when {
+            transfer.prompt?.kind == DropPrompt.Kind.OFFER && transfer.route != null -> stringResource(if (transfer.path == SessionPath.LAN) R.string.drop_route_lan else R.string.drop_route_relay)
+            transfer.route != null && transfer.path == null -> stringResource(R.string.drop_route_checking)
             transfer.sender && transfer.prompt?.kind == DropPrompt.Kind.CONFIRM -> stringResource(R.string.drop_status_check_code)
             transfer.sender && transfer.link == LinkStatus.SESSION -> stringResource(R.string.drop_status_waiting_accept, peer)
             transfer.sender -> stringResource(R.string.drop_status_waiting_peer, peer)
@@ -336,7 +341,7 @@ internal fun dropStatus(transfer: DropTransferView): String {
             transfer.path == SessionPath.LAN -> stringResource(R.string.drop_status_lan)
             else -> stringResource(R.string.drop_status_relay)
         }
-        DropState.PAUSED -> stringResource(if (transfer.reason == "quota") R.string.drop_status_paused_quota else R.string.drop_status_paused)
+        DropState.PAUSED -> stringResource(when (transfer.reason) { "lan" -> R.string.drop_paused_lan; "quota" -> R.string.drop_status_paused_quota; else -> R.string.drop_status_paused })
         DropState.DONE -> stringResource(if (transfer.sender) R.string.drop_status_delivered else R.string.drop_status_received)
         DropState.DECLINED -> if (transfer.sender) stringResource(R.string.drop_status_declined_by_peer, peer) else stringResource(R.string.drop_status_declined_self)
         DropState.CANCELLED -> stringResource(if (transfer.reason == "device_revoked") R.string.drop_status_cancelled_revoked else R.string.drop_status_cancelled)
@@ -346,15 +351,14 @@ internal fun dropStatus(transfer: DropTransferView): String {
 }
 
 @Composable
-private fun dropMessage(message: DropMessage, maxFiles: Int, maxBytes: Long): String {
-    val context = LocalContext.current
+private fun dropMessage(message: DropMessage, maxFiles: Int): String {
     return when (message) {
         is DropMessage.User -> when (message.kind) {
             DropUserError.Kind.SIGNED_OUT -> stringResource(R.string.drop_error_signed_out)
             DropUserError.Kind.BUSY -> stringResource(R.string.drop_error_busy)
             DropUserError.Kind.NOTHING -> stringResource(R.string.drop_error_nothing)
             DropUserError.Kind.TOO_MANY_FILES -> stringResource(R.string.drop_error_too_many, maxFiles)
-            DropUserError.Kind.TOO_LARGE -> stringResource(R.string.drop_error_too_large, DropFormat.bytes(context, maxBytes))
+            DropUserError.Kind.TOO_LARGE -> stringResource(R.string.drop_error_too_large)
             DropUserError.Kind.UNREADABLE -> message.detail?.let { stringResource(R.string.drop_error_unreadable, it) }
                 ?: stringResource(R.string.drop_error_unreadable_any)
             DropUserError.Kind.NOT_A_FILE -> stringResource(R.string.drop_error_not_a_file, message.detail.orEmpty())
@@ -367,6 +371,8 @@ private fun dropMessage(message: DropMessage, maxFiles: Int, maxBytes: Long): St
                 "subscription_required" -> R.string.drop_error_subscription
                 "device_not_ready" -> R.string.drop_error_not_ready
                 "device_busy" -> R.string.drop_error_device_busy
+                "upgrade_required" -> R.string.drop_upgrade_required
+                "relay_limits", "lan_required" -> R.string.drop_relay_limits
                 "quota_exceeded" -> R.string.drop_error_quota
                 "device_not_found" -> R.string.drop_error_device_gone
                 "drop_unavailable" -> R.string.drop_unavailable
@@ -400,7 +406,7 @@ internal fun DropDialogs(state: DropUiState, controller: DropController, signedI
 private fun DropShareDialog(state: DropUiState, controller: DropController, signedIn: Boolean) {
     val context = LocalContext.current
     val snapshot = state.snapshot
-    val busy = snapshot.openTransfer != null
+    val busy = false // Route negotiation enforces the relay slot; LAN transfers can run together.
     AlertDialog(
         onDismissRequest = controller::dismissShared,
         shape = RoundedCornerShape(24.dp),
@@ -430,7 +436,7 @@ private fun DropShareDialog(state: DropUiState, controller: DropController, sign
                     }
                 }
                 state.message?.let { message ->
-                    Text(dropMessage(message, snapshot.maxFiles, snapshot.maxBytes), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    Text(dropMessage(message, snapshot.maxFiles), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                 }
             }
         },

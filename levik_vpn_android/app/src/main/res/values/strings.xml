@@ -885,7 +885,7 @@
 
     <!-- LevikDrop, docs/levik-drop.md -->
     <string name="drop_title">File transfer</string>
-    <string name="drop_caption">Between your devices: encrypted on the device and stored nowhere. Up to %1$d files and %2$s at a time.</string>
+    <string name="drop_caption">Between your devices: encrypted on the device and stored nowhere. No LevikDrop limits on the local network. Through the server: up to %1$d files and %2$s at a time.</string>
     <string name="drop_refresh">Refresh file transfer</string>
     <string name="drop_loading">Loading devices…</string>
     <string name="drop_unavailable">File transfer is not available right now.</string>
@@ -977,7 +977,7 @@
     <string name="drop_error_busy">Wait for the current transfer to end: one set of files goes at a time.</string>
     <string name="drop_error_nothing">No files were chosen.</string>
     <string name="drop_error_too_many">Up to %1$d files can go at a time.</string>
-    <string name="drop_error_too_large">Up to %1$s can go at a time.</string>
+    <string name="drop_error_too_large">The file size exceeds the supported filesystem range.</string>
     <string name="drop_error_unreadable">Could not open “%1$s”.</string>
     <string name="drop_error_unreadable_any">Could not open the file.</string>
     <string name="drop_error_not_a_file">“%1$s” is not a file. Folders cannot be sent yet.</string>
@@ -1020,4 +1020,12 @@
     <string name="server_country_servers">Servers: %1$s</string>
     <string name="server_country_expanded">Expanded</string>
     <string name="server_country_collapsed">Collapsed</string>
+    <string name="drop_route_lan">Directly over the local network · no LevikDrop limits</string>
+    <string name="drop_route_relay">Through the server · up to 20 files and 2 GB</string>
+    <string name="drop_route_checking">Checking the direct connection…</string>
+    <string name="drop_resume_lan">Retry on the local network</string>
+    <string name="drop_resume_relay">Continue through the server</string>
+    <string name="drop_paused_lan">Paused: local network required. Switching to the server requires your action.</string>
+    <string name="drop_upgrade_required">Update Levik on the receiving device for this transfer.</string>
+    <string name="drop_relay_limits">Server transfers allow up to 20 files and 2 GB. Check the daily quota or connect both devices to the same local network.</string>
 </resources>

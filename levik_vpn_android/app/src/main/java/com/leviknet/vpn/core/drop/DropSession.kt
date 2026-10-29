@@ -14,6 +14,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -64,12 +65,17 @@ sealed class SessionWork(
     val ownPlatform: String,
     val peerPlatform: String?,
     val trust: (ByteArray) -> Trust,
-    /** Unless the direct connection broke in an earlier session of this relay connection. */
+    /** Whether this attempt may discover a local route. */
     val allowLan: Boolean,
     val events: SessionEvents,
     /** True once the user confirmed the code here; false: the codes differ. */
     val confirm: suspend (code: String, trust: Trust) -> Boolean,
-)
+) {
+    var route: String? = null
+    var expectedFiles: Int? = null
+    var expectedBytes: Long? = null
+    var selectRoute: suspend (SessionPath) -> Boolean = { true }
+}
 
 class SenderWork(
     transferId: String,
@@ -124,6 +130,11 @@ class DropSession(
     private var lanReady: Deferred<FrameChannel?>? = null
     private var lanListener: LanListener? = null
     private var lanBroke = false
+    private var routeSettled = false
+    private val manifestParts = mutableListOf<ManifestFile>()
+    private var manifestReceived = false
+    private val acceptOffsets = mutableListOf<Long>()
+    private val acceptPrefixes = mutableListOf<String?>()
     private var outcome: SessionOutcome? = null
 
     // Sender
@@ -158,7 +169,7 @@ class DropSession(
     }
 
     /** The relay said `gone`, or the connection closed. */
-    fun abort(detail: String) = finish(SessionOutcome.Lost(detail, lanBroke))
+    fun abort(detail: String) = finish(SessionOutcome.Lost(detail, lanBroke || input == SessionPath.LAN || output == SessionPath.LAN || work.route == "lan"))
 
     fun pause() = sayAndFinish(DropControl.Pause, SessionOutcome.Paused(bySelf = true))
 
@@ -194,6 +205,7 @@ class DropSession(
 
     private fun fromError(error: Throwable) {
         if (outcome != null) return
+        lanBroke = lanBroke || input == SessionPath.LAN || output == SessionPath.LAN || work.route == "lan"
         when (error) {
             is TransferFailure -> fail(error.reason)
             // A broken record or message: this session is over, the transfer is not.
@@ -252,10 +264,26 @@ class DropSession(
         opener = DropWire.RecordOpener(if (sender) sessionKeys.rs else sessionKeys.sr)
         val trust = work.trust(peerKey)
         work.events.keyed(sessionKeys.code, trust, peerKey)
-        work.events.path(SessionPath.RELAY)
+        if (work.route == null) work.events.path(SessionPath.RELAY)
 
         val reading = scope.launch { readLoop(trust) }
+        if (work.route != null && work.route != "relay" && listensOnLan()) scope.launch { openLan() }
         if (work is SenderWork) {
+            if (work.route != null) {
+                if (work.route != "relay") withTimeoutOrNull(LAN_SWITCH_TIMEOUT_MS) {
+                    while (outcome == null && !(input == SessionPath.LAN && output == SessionPath.LAN)) delay(20)
+                }
+                if (outcome != null) return
+                val path = if (input == SessionPath.LAN && output == SessionPath.LAN) SessionPath.LAN else SessionPath.RELAY
+                if (path == SessionPath.RELAY && (work.route == "lan" || input == SessionPath.LAN || output == SessionPath.LAN)) {
+                    lanBroke = true; abort("local route unavailable"); return
+                }
+                routeSettled = true
+                if (!work.selectRoute(path)) { abort("route reconnect"); return }
+                if (outcome != null) return
+                work.events.path(path)
+                sendControl(DropControl.Route(if (path == SessionPath.LAN) "lan" else "relay"))
+            }
             if (trust != Trust.TRUSTED && !work.confirm(sessionKeys.code, trust)) {
                 fail("key_rejected")
                 return
@@ -264,7 +292,7 @@ class DropSession(
             sendControl(DropControl.Manifest(work.files.map { ManifestFile(it.name, it.size) }))
             manifestSent = true
         }
-        if (listensOnLan()) scope.launch { openLan() }
+        if (work.route == null && listensOnLan()) scope.launch { openLan() }
         reading.join()
     }
 
@@ -279,13 +307,23 @@ class DropSession(
     private suspend fun sendPlaintext(plaintext: ByteArray, switchTo: SessionPath? = null) {
         val records = sealer ?: throw DropProtocolException("no keys")
         sendLock.withLock {
-            socketFor(output).send(records.seal(plaintext))
+            socketFor(output).send(records.seal(plaintext, work.route != null && (plaintext[0] == 0x02.toByte() || plaintext[0] == 0x03.toByte())))
             if (switchTo != null) output = switchTo
         }
     }
 
-    private suspend fun sendControl(control: DropControl, switchTo: SessionPath? = null) =
-        sendPlaintext(DropWire.encodeControl(control), switchTo)
+    private suspend fun sendControl(control: DropControl, switchTo: SessionPath? = null) {
+        if (work.route != null && control is DropControl.Manifest) {
+            for (i in control.files.indices step 16) {
+                sendPlaintext(DropWire.encodeControl(DropControl.ManifestPart(control.files.subList(i, minOf(i + 16, control.files.size)), i + 16 >= control.files.size)))
+            }
+        } else if (work.route != null && control is DropControl.Accept) {
+            for (i in control.offsets.indices step 16) {
+                val end = minOf(i + 16, control.offsets.size)
+                sendPlaintext(DropWire.encodeControl(DropControl.AcceptPart(control.offsets.subList(i, end), control.prefix.subList(i, end), end == control.offsets.size)))
+            }
+        } else sendPlaintext(DropWire.encodeControl(control), switchTo)
+    }
 
     private suspend fun nextRecord(): ByteArray {
         if (input == SessionPath.RELAY) return inbox.receiveCatching().getOrNull() ?: throw Ended()
@@ -305,7 +343,10 @@ class DropSession(
                 if (outcome != null) return
                 when (val plaintext = DropWire.decodePlaintext(records.open(frame))) {
                     DropPlaintext.Unknown -> continue
-                    is DropPlaintext.Data -> onData(plaintext.file, plaintext.offset, plaintext.bytes)
+                    is DropPlaintext.Data -> {
+                        if (work.route != null && frame[0] != 0x11.toByte()) throw DropProtocolException("unmarked file data")
+                        onData(plaintext.file, plaintext.offset, plaintext.bytes)
+                    }
                     is DropPlaintext.Control -> onControl(plaintext.control, trust)
                 }
                 if (outcome != null) return
@@ -319,10 +360,37 @@ class DropSession(
 
     private suspend fun onControl(control: DropControl, trust: Trust) {
         when (control) {
+            is DropControl.Route -> {
+                val path = if (control.path == "lan") SessionPath.LAN else SessionPath.RELAY
+                if (work.route == null || work !is ReceiverWork || routeSettled || path != input || path != output || (work.route == "lan" && path != SessionPath.LAN)) throw DropProtocolException("unexpected route")
+                routeSettled = true
+                work.events.path(path)
+            }
+            is DropControl.ManifestPart -> {
+                if (work.route == null || !routeSettled || work !is ReceiverWork || manifestReceived) throw DropProtocolException("early manifest")
+                manifestParts.addAll(control.files)
+                if (manifestParts.size > (work.expectedFiles ?: Int.MAX_VALUE)) throw DropProtocolException("manifest count")
+                if (control.final) {
+                    val files = manifestParts.toList(); manifestParts.clear()
+                    manifestReceived = true
+                    val total = files.fold(0L) { total, file -> if (file.size > DropWire.MAX_TOTAL - total) throw DropProtocolException("manifest size"); total + file.size }
+                    if ((work.expectedFiles != null && files.size != work.expectedFiles) || (work.expectedBytes != null && total != work.expectedBytes)) throw DropProtocolException("manifest offer mismatch")
+                    receiverControl(work, DropControl.Manifest(files), trust)
+                }
+            }
+            is DropControl.AcceptPart -> {
+                if (work.route == null || work !is SenderWork || !routeSettled || accepted != null) throw DropProtocolException("early accept")
+                acceptOffsets.addAll(control.offsets); acceptPrefixes.addAll(control.prefix)
+                if (acceptOffsets.size > work.files.size) throw DropProtocolException("accept count")
+                if (control.final) {
+                    senderControl(work, DropControl.Accept(acceptOffsets.toList(), acceptPrefixes.toList()))
+                    acceptOffsets.clear(); acceptPrefixes.clear()
+                }
+            }
             DropControl.Pause -> finish(SessionOutcome.Paused(bySelf = false))
             DropControl.Cancel -> finish(SessionOutcome.Cancelled(bySelf = false))
             is DropControl.Fail -> finish(SessionOutcome.Failed(bySelf = false, control.reason))
-            is DropControl.Lan -> if (!listensOnLan() && work.allowLan && lanReady == null) dialLan(control.addrs, control.port)
+            is DropControl.Lan -> if (!listensOnLan() && work.allowLan && work.route != "relay" && !routeSettled && lanReady == null) dialLan(control.addrs, control.port)
             // The sender's last record through the relay.
             DropControl.LanOn -> {
                 if (work !is ReceiverWork || input != SessionPath.RELAY) throw DropProtocolException("unexpected lan_on")
@@ -334,7 +402,10 @@ class DropSession(
                 }
                 input = SessionPath.LAN
             }
-            else -> if (work is SenderWork) senderControl(work, control) else receiverControl(work as ReceiverWork, control, trust)
+            else -> {
+                if (work.route != null && (control is DropControl.Manifest || control is DropControl.Accept)) throw DropProtocolException("unframed metadata")
+                if (work is SenderWork) senderControl(work, control) else receiverControl(work as ReceiverWork, control, trust)
+            }
         }
     }
 
@@ -372,7 +443,7 @@ class DropSession(
 
     private fun onLanReady(socket: FrameChannel?) {
         if (socket == null || lan === socket) return
-        if (outcome != null) {
+        if (outcome != null || routeSettled) {
             socket.close()
             return
         }
@@ -390,7 +461,7 @@ class DropSession(
             scope.launch {
                 try {
                     sendControl(DropControl.LanOn, switchTo = SessionPath.LAN)
-                    work.events.path(SessionPath.LAN)
+                    if (work.route == null) work.events.path(SessionPath.LAN)
                 } catch (error: Exception) {
                     fromError(error)
                 }
@@ -408,7 +479,7 @@ class DropSession(
         onLanReady(socket)
         sendControl(DropControl.LanOk, switchTo = SessionPath.LAN)
         input = SessionPath.LAN
-        work.events.path(SessionPath.LAN)
+        if (work.route == null) work.events.path(SessionPath.LAN)
     }
 
     // Sender -------------------------------------------------------------------------------
@@ -470,7 +541,7 @@ class DropSession(
             readSource(work.sources, file, offset, accept.prefix[index], digest) { buffer, length ->
                 while (outcome == null && sentBytes - (ackedTotal() - ackedAtAccept) > DropWire.WINDOW) ackSignal.receive()
                 if (outcome != null) throw Ended()
-                sendPlaintext(DropWire.encodeData(index, position, buffer, length))
+                sendPlaintext(DropWire.encodeData(index, position, buffer, length, work.route != null))
                 position += length
                 sentBytes += length
             }

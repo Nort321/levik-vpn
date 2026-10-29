@@ -126,6 +126,24 @@ class DropProtocolTest {
     }
 
     @Test
+    fun wideFileRecordsMatchDesktopBytesAndAuthenticateTheirType() {
+        val plain = DropWire.encodeData(70_000, 50L * 1024 * 1024 * 1024, "abc".encodeToByteArray(), wide = true)
+        assertEquals("03000111700000000c80000000616263", plain.toHex())
+        val data = DropWire.decodePlaintext(plain) as DropPlaintext.Data
+        assertEquals(70_000, data.file)
+        assertEquals(50L * 1024 * 1024 * 1024, data.offset)
+        val sealed = DropWire.RecordSealer(hex("sr")).seal(plain, dataRecord = true)
+        assertEquals(0x11.toByte(), sealed[0])
+        assertArrayEquals(plain, DropWire.RecordOpener(hex("sr")).open(sealed))
+        sealed[0] = 0x10
+        assertFails { DropWire.RecordOpener(hex("sr")).open(sealed) }
+        val part = DropControl.ManifestPart(listOf(ManifestFile("large.bin", 50L * 1024 * 1024 * 1024)), true)
+        assertEquals(part, control(part.toJson().toString()))
+        assertEquals(DropControl.Route("lan"), control("""{"t":"route","path":"lan"}"""))
+        assertFails { control("""{"t":"route","path":"anything"}""") }
+    }
+
+    @Test
     fun namesMatchDesktop() {
         val cases = vectors.getValue("names") as JsonArray
         for (case in cases) {
@@ -154,7 +172,7 @@ class DropProtocolTest {
         assertEquals(DropControl.Lan(listOf("192.168.1.5"), 40_000), control("""{"t":"lan","addrs":["192.168.1.5"],"port":40000}"""))
         assertNull(control("""{"t":"later"}"""))
         assertFails { control("""{"t":"manifest","files":[{"name":"a","size":3}],"total":4}""") }
-        assertFails { control("""{"t":"ack","file":20,"offset":1}""") }
+        assertFails { control("""{"t":"ack","file":2147483647,"offset":1}""") }
         assertFails { control("""{"t":"ack","file":0,"offset":-1}""") }
         assertFails { control("""{"t":"lan","addrs":["8.8.8.8"],"port":40000}""") }
         assertFails { control("""{"t":"lan","addrs":["127.0.0.1"],"port":40000}""") }
