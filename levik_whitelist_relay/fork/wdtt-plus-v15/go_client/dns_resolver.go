@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
+	"net/netip"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -18,10 +21,11 @@ const dnsProbeHost = "login.vk.ru"
 var deviceSystemResolver = net.DefaultResolver
 
 type dnsRoute struct {
-	Label   string
-	Network string
-	Address string
-	System  bool
+	Label    string
+	Network  string
+	Address  string
+	System   bool
+	Physical bool
 }
 
 type dnsRouteProbe struct {
@@ -32,9 +36,12 @@ type dnsRouteProbe struct {
 type directDNSProbe func(context.Context, dnsRoute, time.Duration) error
 type systemDNSProbe func(context.Context, *net.Resolver, time.Duration) error
 
-func setupGlobalResolver() error {
+func setupGlobalResolver(bootstrapDNSServer string) error {
+	if err := validateBootstrapDNSServer(bootstrapDNSServer); err != nil {
+		return err
+	}
 	systemResolver := deviceSystemResolver
-	route, probes := chooseDNSRouteForMode(context.Background(), systemResolver, probeDNSRoute, probeSystemDNS, !levikMode.Load())
+	route, probes := chooseDNSRouteForMode(context.Background(), systemResolver, probeDNSRoute, probeSystemDNS, !levikMode.Load(), bootstrapDNSServer)
 	if route.System {
 		if levikMode.Load() {
 			return fmt.Errorf("Levik cellular mode requires a protectable direct DNS route")
@@ -53,7 +60,7 @@ func setupGlobalResolver() error {
 }
 
 func chooseDNSRoute(ctx context.Context, systemResolver *net.Resolver) (dnsRoute, []dnsRouteProbe) {
-	return chooseDNSRouteForMode(ctx, systemResolver, probeDNSRoute, probeSystemDNS, true)
+	return chooseDNSRouteForMode(ctx, systemResolver, probeDNSRoute, probeSystemDNS, true, "")
 }
 
 func chooseDNSRouteWithProbes(
@@ -62,7 +69,7 @@ func chooseDNSRouteWithProbes(
 	probeDirect directDNSProbe,
 	probeSystem systemDNSProbe,
 ) (dnsRoute, []dnsRouteProbe) {
-	return chooseDNSRouteForMode(ctx, systemResolver, probeDirect, probeSystem, true)
+	return chooseDNSRouteForMode(ctx, systemResolver, probeDirect, probeSystem, true, "")
 }
 
 func chooseDNSRouteForMode(
@@ -71,13 +78,24 @@ func chooseDNSRouteForMode(
 	probeDirect directDNSProbe,
 	probeSystem systemDNSProbe,
 	allowSystem bool,
+	bootstrapDNSServer string,
 ) (dnsRoute, []dnsRouteProbe) {
-	candidates := []dnsRoute{
+	// Android supplies the resolver of the selected physical network, not the
+	// tunnel's DNS. fixedDNSResolver still requires a protect/bind ACK for each
+	// socket, so an operator-only DNS route cannot recurse through our own VPN.
+	candidates := make([]dnsRoute, 0, 6)
+	if bootstrapDNSServer != "" {
+		candidates = append(candidates,
+			dnsRoute{Label: "physical network UDP", Network: "udp", Address: bootstrapDNSServer, Physical: true},
+			dnsRoute{Label: "physical network TCP", Network: "tcp", Address: bootstrapDNSServer, Physical: true},
+		)
+	}
+	candidates = append(candidates, []dnsRoute{
 		{Label: "77.88.8.8 UDP", Network: "udp", Address: "77.88.8.8:53"},
 		{Label: "77.88.8.1 UDP", Network: "udp", Address: "77.88.8.1:53"},
 		{Label: "77.88.8.8 TCP", Network: "tcp", Address: "77.88.8.8:53"},
 		{Label: "77.88.8.1 TCP", Network: "tcp", Address: "77.88.8.1:53"},
-	}
+	}...)
 
 	probes := make([]dnsRouteProbe, 0, len(candidates)+1)
 	for _, route := range candidates {
@@ -103,6 +121,21 @@ func chooseDNSRouteForMode(
 		return systemRoute, probes
 	}
 	return dnsRoute{}, probes
+}
+
+func validateBootstrapDNSServer(value string) error {
+	if value == "" {
+		return nil // Older control clients omit this optional resolver.
+	}
+	endpoint, err := netip.ParseAddrPort(value)
+	if err != nil || len(value) > 128 || strings.ContainsAny(value, "\x00\r\n\t ") || endpoint.Port() != 53 {
+		return fmt.Errorf("invalid physical network DNS endpoint")
+	}
+	address := endpoint.Addr().Unmap()
+	if address.IsUnspecified() || address.IsLoopback() || address.IsMulticast() {
+		return fmt.Errorf("invalid physical network DNS address")
+	}
+	return nil
 }
 
 func probeDNSRoute(ctx context.Context, route dnsRoute, timeout time.Duration) error {
@@ -165,9 +198,29 @@ func summarizeDNSFailures(probes []dnsRouteProbe, includeSystem bool) string {
 		if probe.Err == nil || (!includeSystem && probe.Route.System) {
 			continue
 		}
-		parts = append(parts, probe.Route.Label+": "+shortDNSError(probe.Err))
+		detail := shortDNSError(probe.Err)
+		if probe.Route.Physical {
+			// net.DNSError and net.OpError can embed carrier/private resolver
+			// addresses. Only fixed categories may leave this local DNS path.
+			detail = physicalDNSErrorCode(probe.Err)
+		}
+		parts = append(parts, probe.Route.Label+": "+detail)
 	}
 	return strings.Join(parts, "; ")
+}
+
+func physicalDNSErrorCode(err error) string {
+	var networkError net.Error
+	switch {
+	case errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &networkError) && networkError.Timeout()):
+		return "dns_timeout"
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "dns_refused"
+	case errors.Is(err, syscall.ENETUNREACH), errors.Is(err, syscall.EHOSTUNREACH), errors.Is(err, syscall.EADDRNOTAVAIL):
+		return "dns_unreachable"
+	default:
+		return "dns_failed"
+	}
 }
 
 func shortDNSError(err error) string {

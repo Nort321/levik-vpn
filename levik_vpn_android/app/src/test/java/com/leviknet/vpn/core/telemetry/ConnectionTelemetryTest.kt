@@ -1,6 +1,10 @@
 package com.leviknet.vpn.core.telemetry
 
 import android.app.ApplicationExitInfo
+import com.leviknet.vpn.core.network.WhitelistDetectionDiagnostic
+import com.leviknet.vpn.core.network.WhitelistMode
+import com.leviknet.vpn.core.network.WhitelistProbeDiagnostic
+import com.leviknet.vpn.core.network.WhitelistProbeOutcome
 import java.io.File
 import java.nio.file.Files
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -120,6 +124,88 @@ class SessionRecorderTest {
         assertEquals("15", client.os)
         assertEquals("samsunglectronique", client.oem)
         assertEquals("unknown", telemetryClientInfo("", "", "").oem)
+    }
+
+    private fun diagnostic(
+        mode: WhitelistMode = WhitelistMode.ACTIVE,
+        outcome: WhitelistProbeOutcome = WhitelistProbeOutcome.SHORT_BODY,
+        elapsedMs: Long = 5_800L,
+    ) = WhitelistDetectionDiagnostic(
+        mode = mode,
+        elapsedMs = elapsedMs,
+        probes = listOf(WhitelistProbeDiagnostic("mozilla", false, outcome, elapsedMs, 16 * 1_024, 200)),
+    )
+
+    @Test
+    fun `detector diagnostics preserve partial transfers without raw network details`() {
+        val session = recorder()
+        session.connected()
+        session.whitelistDetection(diagnostic())
+        val events = session.snapshot()["timeline"]!!.jsonArray.map { it.jsonObject }.drop(1)
+        assertEquals(listOf("wl.mode.active.t3", "wl.mozilla.short_body.h200.t3.b3"), events.map { it["code"]!!.jsonPrimitive.content })
+        assertTrue(events.all { it.keys == setOf("t", "e", "code", "count") })
+        assertTrue(events.all { it["e"]!!.jsonPrimitive.content == "core_log" && it["count"]!!.jsonPrimitive.int == 1 })
+    }
+
+    @Test
+    fun `unchanged scans do not crowd recovery events out of the timeline`() {
+        val session = recorder()
+        session.connected()
+        session.whitelistDetection(diagnostic())
+        repeat(100) {
+            now += 1_000
+            session.whitelistDetection(diagnostic(elapsedMs = 800L))
+        }
+        session.recovery(RecoveryAction.FAILOVER)
+        assertEquals(4, session.snapshot()["timeline"]!!.jsonArray.size)
+        now += 5 * 60_000
+        session.whitelistDetection(diagnostic())
+        assertEquals(5, session.snapshot()["timeline"]!!.jsonArray.size)
+    }
+
+    @Test
+    fun `a changed probe result is reported immediately and unknown ids are excluded`() {
+        val session = recorder()
+        session.connected()
+        session.whitelistDetection(diagnostic())
+        session.whitelistDetection(diagnostic(mode = WhitelistMode.INACTIVE, outcome = WhitelistProbeOutcome.OK))
+        session.whitelistDetection(diagnostic().copy(probes = listOf(
+            WhitelistProbeDiagnostic("untrusted-address", false, WhitelistProbeOutcome.DNS, 0, 0, null),
+        )))
+        val codes = session.snapshot()["timeline"]!!.jsonArray.drop(1).map { it.jsonObject["code"]!!.jsonPrimitive.content }
+        assertTrue(codes.contains("wl.mozilla.ok.h200.t3.b3"))
+        assertFalse(codes.any { "untrusted" in it || it == "other" })
+        assertTrue(codes.all { Regex("^[a-z0-9_.:-]{1,48}$").matches(it) })
+    }
+
+    @Test
+    fun `preconnect diagnostics follow the real result and do not turn cancellations into failures`() {
+        val failed = recorder()
+        failed.whitelistDetection(diagnostic())
+        assertTrue(failed.snapshot()["timeline"]!!.jsonArray.isEmpty())
+        failed.attemptFailed(AttemptStage.HANDSHAKE, "tls")
+        val events = failed.snapshot()["timeline"]!!.jsonArray.map { it.jsonObject }
+        assertEquals("attempt_failed", events.first()["e"]!!.jsonPrimitive.content)
+        assertEquals("tls", events.first()["code"]!!.jsonPrimitive.content)
+        assertEquals(3, events.size)
+
+        val cancelled = recorder()
+        cancelled.whitelistDetection(diagnostic())
+        cancelled.end(EndBy.USER, "user")
+        assertTrue(cancelled.snapshot()["timeline"]!!.jsonArray.isEmpty())
+    }
+
+    @Test
+    fun `mobile checks identify the node without affecting regular node quality`() {
+        val session = recorder()
+        val nodeId = "n1" + "a".repeat(20)
+        session.mobileTrafficCheck(nodeId, TelemetryProtocol.VLESS_XHTTP, 420L)
+        session.mobileTrafficCheck(nodeId, TelemetryProtocol.VLESS_XHTTP, null)
+        session.mobileTrafficCheck("invalid node address", TelemetryProtocol.RELAY, null)
+        session.mobileNetworkOffline()
+        val events = session.snapshot()["timeline"]!!.jsonArray.map { it.jsonObject }
+        assertEquals(listOf("mobile_check.$nodeId.ok.t1", "mobile_check.$nodeId.timeout", "mobile_check.relay.timeout", "mobile_check.network_offline"), events.map { it["code"]!!.jsonPrimitive.content })
+        assertTrue(events.all { it["e"]!!.jsonPrimitive.content == "core_log" })
     }
 }
 

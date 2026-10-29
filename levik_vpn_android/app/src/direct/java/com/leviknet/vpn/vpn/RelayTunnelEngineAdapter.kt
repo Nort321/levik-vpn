@@ -319,6 +319,7 @@ private class AndroidRelayNativeSession(
                 vkAuthMode = "account",
                 proxyUsername = proxyUsername,
                 proxyPassword = proxyPassword,
+                bootstrapDnsServer = environment.dnsServer,
             )
             writeControl(codec.encodeInit(init))
             stateMachine.markInitSent()

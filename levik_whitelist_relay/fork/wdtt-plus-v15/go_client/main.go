@@ -377,6 +377,7 @@ func main() {
 	var levikServerPublicKey string
 	var levikProxyUsername string
 	var levikProxyPassword string
+	var levikBootstrapDNSServer string
 	var levikProtector *levikSocketProtector
 	if strings.TrimSpace(*levikControlSocket) != "" {
 		if *connPassword != "" || *vkHash != "" || *rtMasque || os.Getenv("WDTT_CUSTOM_VK_CLIENT_ID") != "" || os.Getenv("WDTT_CUSTOM_VK_CLIENT_SECRET") != "" {
@@ -420,6 +421,7 @@ func main() {
 		levikServerPublicKey = init.ServerPublicKey
 		levikProxyUsername = init.ProxyUsername
 		levikProxyPassword = init.ProxyPassword
+		levikBootstrapDNSServer = init.BootstrapDNSServer
 		*vkAuthMode = init.VKAuthMode
 		setAccountControl(levikControlClient)
 		levikProtector, err = acceptLevikProtector(ctx, init.ProtectFDSocket, levikControlClient)
@@ -429,7 +431,7 @@ func main() {
 		}
 		defer levikProtector.close()
 	}
-	if err := setupGlobalResolver(); err != nil && levikControlClient != nil {
+	if err := setupGlobalResolver(levikBootstrapDNSServer); err != nil && levikControlClient != nil {
 		levikControlClient.fail("dns_route_unavailable", err)
 		log.Fatalf("[LEVIK] DNS: %v", err)
 	}

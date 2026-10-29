@@ -1371,9 +1371,11 @@ class LevikVpnService : VpnService() {
     }
 
     private suspend fun resolveBootstrapDnsServer(server: TunnelServer, network: Network): String? {
-        if (server.engine != TunnelEngineKind.XRAY && smartAutoLiveConfig == null) return null
+        if (server.engine != TunnelEngineKind.XRAY && server.engine != TunnelEngineKind.LEVIK_RELAY && smartAutoLiveConfig == null) return null
         val dnsServer = networkMonitor.awaitBootstrapDnsServer(network)
-        if (dnsServer == null && requiresBootstrapDns(ServerPinger.extractEndpoint(server.outbound)?.first)) {
+        if (dnsServer == null && server.engine != TunnelEngineKind.LEVIK_RELAY &&
+            requiresBootstrapDns(ServerPinger.extractEndpoint(server.outbound)?.first)
+        ) {
             // An unprotected/system fallback can resolve through our own TUN after startup.
             // Wait for the physical network to supply a resolver instead of looping or using
             // a public DNS endpoint that may be blocked by the mobile allow-list.
@@ -1634,6 +1636,7 @@ class LevikVpnService : VpnService() {
 
     /** The next mobile server after [failed] carried nothing under allowlists; null when none is left. */
     private suspend fun advanceAllowlist(failed: TunnelServer, network: Network?, requireRunning: Boolean): TunnelServer? {
+        val generation = if (requireRunning) serviceCommands.connectionGeneration ?: return null else null
         allowlistLadder.tried(failed.id, failed.smartProtocol())
         if (allowlistLadder.exhausted()) {
             AppLogger.w(LOG_TAG, "Allowlists: no mobile server carried traffic; giving up for now")
@@ -1645,7 +1648,8 @@ class LevikVpnService : VpnService() {
             return null
         }
         val accepted = !requireRunning || connectionMutex.withLock {
-            coreRunning && currentServer?.id == failed.id
+            generation != null && serviceCommands.permitsAutomaticConnection(generation) &&
+                coreRunning && currentServer?.id == failed.id && currentNetwork == network
         }
         if (!accepted) return null
         allowlistLadder.climbed()
@@ -2672,7 +2676,7 @@ class LevikVpnService : VpnService() {
     }
 
     private fun launchTrafficCheck(server: TunnelServer, network: Network, initialDelayMs: Long) {
-        val allowlist = server.isMobileServer() && allowlistSessionActive()
+        val allowlist = server.isMobileServer()
         if (!allowlist && (!container.settings.automaticServer.value || !server.isSmartAutoCandidate())) return
         // Anti-Block sends unlisted sites around the tunnel: the check would pass without it.
         if (container.settings.routingPreset.value == RoutingPreset.BLOCKED_ONLY) return
@@ -2689,6 +2693,7 @@ class LevikVpnService : VpnService() {
                 telemetry.record { it.trafficCheck(checkedNode, elapsedMs, ok = true) }
             }
             if (allowlist) {
+                telemetry.record { it.mobileTrafficCheck(checkedNode, server.telemetryProtocol(), elapsedMs) }
                 onAllowlistTrafficChecked(server, network, passed)
                 return@launch
             }
@@ -2739,19 +2744,20 @@ class LevikVpnService : VpnService() {
             AppLogger.i(LOG_TAG, "Allowlists: traffic passes on ${server.smartProtocol()}")
             return
         }
-        // Only with allowlists on does a failure say something about this server under them.
-        val mode = try {
-            container.whitelistDetector.detect(network, forceRefresh = true)
-        } catch (error: CancellationException) {
-            throw error
-        } catch (_: Throwable) {
-            WhitelistMode.UNKNOWN
-        }
-        if (mode != WhitelistMode.ACTIVE) {
-            AppLogger.w(LOG_TAG, "Allowlists: traffic check failed while allowlists are not on; ignored")
+        // A manually pinned mobile server is checked for diagnostics, but keeps the user's selection.
+        if (!allowlistSessionActive()) return
+        val generation = serviceCommands.connectionGeneration ?: return
+        if (!smartAuto.mobilePhysicalWorks(network)) {
+            telemetry.record { it.mobileNetworkOffline() }
+            AppLogger.w(LOG_TAG, "Allowlists: traffic check failed while the physical network is offline; waiting")
             return
         }
-        lastWhitelistMode = mode
+        if (!serviceCommands.permitsAutomaticConnection(generation) || !coreRunning ||
+            currentServer?.id != server.id || currentNetwork != network
+        ) return
+        // The actual download is stronger evidence than the detector's site heuristic.
+        // INACTIVE/UNKNOWN must not leave a dead mobile tunnel selected.
+        wakeAllowlistProbe()
         smartAuto.recordAllowlistFailure(server, network)
         tunnelHealthPolicy.markCandidateFailed(server.id, SystemClock.elapsedRealtime())
         advanceAllowlist(server, network, requireRunning = true) ?: return

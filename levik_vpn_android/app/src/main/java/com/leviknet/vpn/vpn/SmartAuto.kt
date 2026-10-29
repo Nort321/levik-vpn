@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Smart Auto on the device, docs/app-platform.md "Smart Auto": ranks servers
@@ -236,6 +237,11 @@ class SmartAuto(
     suspend fun physicalWorks(network: Network): Boolean =
         firstAnswer(PHYSICAL_CHECK_URLS) { url -> 0L.takeIf { reaches(network, url) } } != null
 
+    /** Mobile recovery checks domestic sites: foreign sites may be blocked by the allowlist itself. */
+    suspend fun mobilePhysicalWorks(network: Network): Boolean = withTimeoutOrNull(CHECK_TIMEOUT_MS.toLong()) {
+        firstAnswer(ALLOWLIST_PHYSICAL_CHECK_URLS) { url -> 0L.takeIf { reaches(network, url) } }
+    } != null
+
     /**
      * A salted hash naming the network without its name or addresses: the
      * operator code (MCC-MNC) on mobile data, the gateway and DNS servers otherwise.
@@ -340,6 +346,12 @@ class SmartAuto(
         val PHYSICAL_CHECK_URLS = listOf(
             "https://www.gstatic.com/generate_204",
             "https://1.1.1.1/cdn-cgi/trace",
+        )
+        val ALLOWLIST_PHYSICAL_CHECK_URLS = listOf(
+            "https://www.ozon.ru/",
+            "https://ya.ru/",
+            "https://www.avito.ru/",
+            "https://vk.com/",
         )
     }
 }

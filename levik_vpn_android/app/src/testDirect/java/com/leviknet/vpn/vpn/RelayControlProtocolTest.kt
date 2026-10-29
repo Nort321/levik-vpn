@@ -137,27 +137,36 @@ class RelayControlProtocolTest {
 
     @Test
     fun `init uses bounded workers and keeps secret fields only in control JSON`() {
-        val payload = codec.encodeInit(
-            RelayNativeInit(
-                peer = "relay.example.com:443",
-                turnHashes = listOf("abcdefghijklmnop"),
-                accessToken = "ABCDEFGHJKLMNPQR",
-                deviceId = "a".repeat(64),
-                workers = 18,
-                turnFrontSni = "front.example.com",
-                protectFdSocket = "@levik_wlr_protect_abcdefghijklmnop",
-                serverPublicKey = "A".repeat(43),
-                vkAuthMode = "account",
-                proxyUsername = "u".repeat(24),
-                proxyPassword = "p".repeat(48),
-            ),
+        val init = RelayNativeInit(
+            peer = "relay.example.com:443",
+            turnHashes = listOf("abcdefghijklmnop"),
+            accessToken = "ABCDEFGHJKLMNPQR",
+            deviceId = "a".repeat(64),
+            workers = 18,
+            turnFrontSni = "front.example.com",
+            protectFdSocket = "@levik_wlr_protect_abcdefghijklmnop",
+            serverPublicKey = "A".repeat(43),
+            vkAuthMode = "account",
+            proxyUsername = "u".repeat(24),
+            proxyPassword = "p".repeat(48),
         )
+        val payload = codec.encodeInit(init)
 
         assertTrue(payload.contains("\"workers\":18"))
         assertTrue(payload.contains("\"turnStreamFirst\":true"))
         assertTrue(payload.contains("\"turnSni\":\"front.example.com\""))
         assertTrue(payload.contains("\"password\":\"ABCDEFGHJKLMNPQR\""))
         assertTrue(payload.contains("\"vkAuthMode\":\"account\""))
+        assertTrue("bootstrapDnsServer" !in payload)
+
+        listOf("10.0.0.1:53", "[2001:db8::53]:53", "[fe80::1%rmnet0]:53").forEach { resolver ->
+            assertTrue(codec.encodeInit(init.copy(bootstrapDnsServer = resolver)).contains("\"bootstrapDnsServer\":\"$resolver\""))
+        }
+        listOf("dns.example:53", "10.0.0.1:443", "127.0.0.1:53", "0.0.0.0:53", "[::1]:53", "224.0.0.1:53").forEach { resolver ->
+            assertThrows(RelayProtocolException::class.java) {
+                codec.encodeInit(init.copy(bootstrapDnsServer = resolver))
+            }
+        }
     }
 
     @Test
