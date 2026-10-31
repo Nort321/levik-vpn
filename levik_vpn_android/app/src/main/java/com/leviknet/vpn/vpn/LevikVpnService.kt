@@ -831,7 +831,7 @@ class LevikVpnService : VpnService() {
                 "Selected HotSwitch server is no longer available"
             }
             attemptedServerId = selectedId
-            var selected = if (fallbackAttempt != null || required != null) {
+            val selected = if (fallbackAttempt != null || required != null) {
                 profile.servers.firstOrNull { it.id == selectedId }
                     ?: error("Auto-failover server is no longer present in the tunnel profile")
             } else {
@@ -909,47 +909,8 @@ class LevikVpnService : VpnService() {
                 }
             } else null
 
-            if (sharingHost == null && fallbackAttempt == null && container.settings.automaticServer.value && selected.isSmartAutoCandidate()) {
-                container.appPlatform.refreshNodeLoad(maxAgeMs = 15_000L, waitMs = 1_200L)
-                val probeBootstrapDns = bootstrapDnsServer ?: networkMonitor.awaitBootstrapDnsServer(network)
-                val pool = container.appPlatform.avoidMaintenance(profile.servers.filter(TunnelServer::isSmartAutoCandidate))
-                val chosen = SmartRoutePreflight(container.xrayRuntime, container.tunnelEngineRegistry, container.json, filesDir).select(
-                    owner = coreOwner,
-                    profile = profile,
-                    servers = pool,
-                    network = network,
-                    smartAuto = container.appPlatform.smartAuto,
-                    fallbackServerId = selected.id,
-                    environment = { candidate -> TunnelEngineEnvironment(
-                        network = network,
-                        protector = fileDescriptorProtector(network, candidate),
-                        dnsServer = probeBootstrapDns,
-                        unboundSocketProtector = { fd -> protectUnboundTunnelSocket(fd, ::protect) },
-                    ) },
-                    baseConfig = { probeProfile, id -> XrayConfigBuilder(container.json).build(
-                        profile = probeProfile, selectedServerId = id, tunFileDescriptor = 0,
-                        primaryDnsIp = primaryDns, secondaryDnsIp = secondaryDns,
-                        dohEndpoint = dohUrl,
-                        antiDpiEnabled = antiDpi,
-                        antiDpiPackets = container.settings.antiDpiPackets.value,
-                        antiDpiLength = container.settings.antiDpiLength.value,
-                        antiDpiInterval = container.settings.antiDpiInterval.value,
-                        xhttpMuxHosts = container.appPlatform.xhttpMuxHosts(),
-                    ) },
-                )
-                coroutineContext.ensureActive()
-                if (!serviceCommands.permitsConnection(generation)) return@connection
-                if (networkMonitor.activeNetwork(selected.networkRequirement) != network) {
-                    throw NetworkSetupException("Underlying network changed during route selection")
-                }
-                if (container.settings.automaticServer.value && chosen != null) {
-                    selected = pool.first { it.id == chosen }
-                    attemptedServerId = selected.id
-                    bootstrapDnsServer = resolveBootstrapDnsServer(selected, network)
-                    currentBootstrapDnsServer = bootstrapDnsServer
-                    container.repository.selectServer(selected.id)
-                }
-            }
+            // Smart Auto connects at once to the ranked choice (cached full-route measurements first)
+            // and measures every route afterwards through the running core, see SmartAutoLiveRuntime.
             // Load endpoint-specific routing only after the actual complete route has been chosen.
             profile = container.repository.prepareServiceRoutes(profile, selected, container.appPlatform.flagEnabled("service_routes"))
             val routes = ServiceRouteConfig.prepare(profile, selected, filesDir, container.settings.autoFallbackServer.value)
@@ -1270,7 +1231,7 @@ class LevikVpnService : VpnService() {
                 startStats()
                 startAutoHealing()
                 startTrafficCheck(selected, network)
-                startSmartAutoLive(network, generation)
+                startSmartAutoLive(network, generation, initialRound = true)
                 startMobileServerAutomation()
                 startRelayEntitlementWatchdog(selected, prepared)
                 connectionExpiryDeadline?.let(::scheduleProfileExpiry)
@@ -1717,7 +1678,8 @@ class LevikVpnService : VpnService() {
         }.also { it.start() }
     }
 
-    private fun startSmartAutoLive(network: Network, generation: Long) {
+    /** [initialRound]: a fresh connection, which went up without measuring, measures every route first. */
+    private fun startSmartAutoLive(network: Network, generation: Long, initialRound: Boolean = false) {
         // Sharing inbounds bypass the owner's TUN counters. Until per-inbound accounting is
         // available, suspend optimization for the entire sharing session (failure recovery stays).
         if (sharingHost != null || sharingGuest != null) return
@@ -1735,6 +1697,7 @@ class LevikVpnService : VpnService() {
         autoHealingJob?.cancel()
         autoHealingJob = null
         smartAutoLiveRuntime = SmartAutoLiveRuntime(config, serviceScope, network, container.appPlatform.smartAuto,
+            initialRound = initialRound,
             enabled = ::enabled,
             currentId = { currentServer?.id },
             heavyTraffic = { VpnStateStore.state.value.let { it.downloadBytesPerSecond + it.uploadBytesPerSecond > 512 * 1024 } },

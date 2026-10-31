@@ -80,4 +80,21 @@ class SmartRouteSelectionTest {
         assertEquals(32, candidates.size)
         assertEquals("direct", candidates[1].id)
     }
+
+    @Test fun `finalists cover delay, screening speed and another entry`() {
+        val measured = mapOf(
+            "near" to measurement(20.0).copy(screeningMbps = 10.0),
+            "near-twin" to measurement(25.0).copy(screeningMbps = 12.0),
+            "fast" to measurement(80.0).copy(screeningMbps = 90.0),
+            "other-entry" to measurement(40.0).copy(screeningMbps = 5.0),
+            "dead" to SmartRouteMeasurement(emptyList(), 2),
+        )
+        val entries = mapOf("near" to "msk", "near-twin" to "msk", "fast" to "msk", "other-entry" to "spb")
+        assertEquals(listOf("near", "fast", "other-entry"), SmartRouteSelection.finalists(measured, emptyMap(), entries::get).toList())
+    }
+
+    @Test fun `finalists leave fresh overload out while another route passes`() {
+        val measured = mapOf("a" to measurement(20.0), "b" to measurement(60.0))
+        assertEquals(setOf("b"), SmartRouteSelection.finalists(measured, mapOf("a" to resource(state = "overloaded", load = 1.0))) { null })
+    }
 }

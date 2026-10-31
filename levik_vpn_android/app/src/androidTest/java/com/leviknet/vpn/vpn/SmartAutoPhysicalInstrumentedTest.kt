@@ -100,8 +100,10 @@ class SmartAutoPhysicalInstrumentedTest {
         try {
             val started = Instant.now()
             container.vpnController.connect()
+            // The VPN goes up first; Smart Auto then measures every route through the running core.
+            await(container, 15_000) { it.state == VpnConnectionState.CONNECTED }
             withTimeout(15_000) {
-                while (AppLogger.getLogs().none { it.tag == "SmartRoutePreflight" && it.message == "measurement begin" && it.timestamp >= started }) delay(20)
+                while (AppLogger.getLogs().none { it.tag == "SmartAutoLiveRuntime" && it.message == "initial measurement begin" && it.timestamp >= started }) delay(20)
             }
             val cancelledAt = System.nanoTime()
             container.vpnController.disconnect()
@@ -124,7 +126,9 @@ class SmartAutoPhysicalInstrumentedTest {
             val started = System.nanoTime()
             container.vpnController.connect()
             var initial = await(container) { it.state == VpnConnectionState.CONNECTED }
-            AppLogger.i("PhysicalAutoTest", "Cold Auto connection ms=${(System.nanoTime() - started) / 1_000_000}")
+            val coldMs = (System.nanoTime() - started) / 1_000_000
+            AppLogger.i("PhysicalAutoTest", "Cold Auto connection ms=$coldMs")
+            assertTrue("Cold Auto waited for route measurements: $coldMs ms", coldMs < 15_000)
             AppLogger.i("PhysicalAutoTest", "Auto engine=${initial.engine}, country=${initial.serverCountryCode}, hot targets=${initial.hotSwitchServerIds.size}")
             var initialNetwork = transfer(context)
             var profile = requireNotNull(container.repository.tunnelProfile.value)
