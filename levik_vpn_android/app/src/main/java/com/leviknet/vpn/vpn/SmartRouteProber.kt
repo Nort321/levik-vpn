@@ -36,8 +36,11 @@ internal class SmartRouteProber(
     private val candidates: List<SmartRouteProbeConfig.Candidate>,
     private val transport: SmartRouteProbeTransport? = null,
 ) : AutoCloseable {
+    private val sockets = if (transport != null) emptyMap() else candidates.associate {
+        it.id to PrivateUnixSocketFactory(it.path)
+    }
     private val clients = if (transport != null) emptyMap() else candidates.associate { candidate -> candidate.id to OkHttpClient.Builder()
-        .socketFactory(PrivateUnixSocketFactory(candidate.path))
+        .socketFactory(sockets.getValue(candidate.id))
         .proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", 9)))
         .followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
         .connectTimeout(2, TimeUnit.SECONDS).readTimeout(3, TimeUnit.SECONDS).writeTimeout(3, TimeUnit.SECONDS)
@@ -154,6 +157,10 @@ internal class SmartRouteProber(
     }
 
     override fun close() {
+        // Conscrypt closes TLS only after its HTTP/2 reader releases a lock. With a
+        // custom UDS Socket that reader can otherwise wait forever in readba_native.
+        // Closing the owned raw sockets first releases both idle and active readers.
+        sockets.values.forEach(PrivateUnixSocketFactory::close)
         clients.values.forEach { client ->
             client.dispatcher.cancelAll()
             client.connectionPool.evictAll()

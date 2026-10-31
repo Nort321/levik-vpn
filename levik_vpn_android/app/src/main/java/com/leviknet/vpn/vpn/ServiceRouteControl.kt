@@ -10,8 +10,11 @@ import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.Socket
 import java.net.SocketAddress
+import java.net.SocketException
 import java.nio.ByteBuffer
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.SocketFactory
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Call
@@ -29,8 +32,9 @@ internal class ServiceRouteControl private constructor(controlPath: String, priv
     private val gate = Any()
     private var closed = false
     private val calls = mutableSetOf<Call>()
+    private val sockets = PrivateUnixSocketFactory(controlPath)
     private val client = OkHttpClient.Builder()
-        .socketFactory(PrivateUnixSocketFactory(controlPath))
+        .socketFactory(sockets)
         .proxy(Proxy.NO_PROXY)
         .dns { hostname -> require(hostname == "localhost"); listOf(InetAddress.getLoopbackAddress()) }
         .protocols(listOf(Protocol.H2_PRIOR_KNOWLEDGE))
@@ -76,6 +80,7 @@ internal class ServiceRouteControl private constructor(controlPath: String, priv
     }
 
     override fun close() {
+        sockets.close()
         synchronized(gate) { closed = true; calls.forEach(Call::cancel) }
         client.dispatcher.cancelAll()
         client.connectionPool.evictAll()
@@ -139,9 +144,24 @@ internal fun probeServiceExit(candidate: ServiceRouteConfig.Candidate): Boolean 
     return false
 }
 
-internal class PrivateUnixSocketFactory(private val path: String) : SocketFactory() {
+internal class PrivateUnixSocketFactory(private val path: String) : SocketFactory(), AutoCloseable {
+    private val closed = AtomicBoolean(false)
+    private val sockets = ConcurrentHashMap.newKeySet<Socket>()
     init { require(path.startsWith('/') && path.toByteArray().size < 100 && !path.contains('\u0000')) }
-    override fun createSocket(): Socket = PrivateUnixSocket(path)
+    override fun createSocket(): Socket {
+        if (closed.get()) throw SocketException("Private socket factory is closed")
+        val socket = PrivateUnixSocket(path) { sockets.remove(it) }
+        sockets.add(socket)
+        if (closed.get()) {
+            socket.close()
+            throw SocketException("Private socket factory is closed")
+        }
+        return socket
+    }
+    override fun close() {
+        closed.set(true)
+        sockets.toList().forEach { runCatching { it.close() } }
+    }
     override fun createSocket(host: String?, port: Int): Socket = throw UnsupportedOperationException()
     override fun createSocket(host: String?, port: Int, localHost: InetAddress?, localPort: Int): Socket = throw UnsupportedOperationException()
     override fun createSocket(host: InetAddress?, port: Int): Socket = throw UnsupportedOperationException()
@@ -149,18 +169,23 @@ internal class PrivateUnixSocketFactory(private val path: String) : SocketFactor
 }
 
 /** OkHttp supports custom sockets; TLS, when probing, is layered over these streams. */
-private class PrivateUnixSocket(private val path: String) : Socket() {
+private class PrivateUnixSocket(private val path: String, private val onClosed: (Socket) -> Unit = {}) : Socket() {
     private val local = LocalSocket()
-    private var opened = false
-    private var closed = false
+    @Volatile private var opened = false
+    private val closed = AtomicBoolean(false)
     private var readTimeout = 0
     override fun connect(endpoint: SocketAddress?, timeout: Int) {
-        require(!closed && !opened)
+        if (closed.get()) throw SocketException("Private socket is closed")
+        if (opened) throw SocketException("Private socket is already connected")
         // Android declares the timeout overload but throws UnsupportedOperationException.
         // This is an app-private local endpoint; reads and the control call remain bounded.
         local.connect(LocalSocketAddress(path, LocalSocketAddress.Namespace.FILESYSTEM))
         opened = true
         local.soTimeout = readTimeout
+        if (closed.get()) {
+            closeLocal()
+            throw SocketException("Private socket was closed during connection")
+        }
     }
     override fun connect(endpoint: SocketAddress?) = connect(endpoint, 0)
     override fun getInputStream(): InputStream = local.inputStream
@@ -175,15 +200,27 @@ private class PrivateUnixSocket(private val path: String) : Socket() {
     override fun setTcpNoDelay(on: Boolean) = Unit
     override fun getTcpNoDelay(): Boolean = true
     override fun setKeepAlive(on: Boolean) = Unit
-    override fun isConnected(): Boolean = opened && !closed
-    override fun isClosed(): Boolean = closed
+    override fun isConnected(): Boolean = opened && !closed.get()
+    override fun isClosed(): Boolean = closed.get()
     override fun getInetAddress(): InetAddress = InetAddress.getLoopbackAddress()
     override fun getLocalAddress(): InetAddress = InetAddress.getLoopbackAddress()
     override fun getPort(): Int = 9
     override fun getLocalPort(): Int = 0
     override fun shutdownInput() = local.shutdownInput()
     override fun shutdownOutput() = local.shutdownOutput()
-    override fun close() { if (!closed) { closed = true; local.close() } }
+    override fun close() {
+        if (!closed.compareAndSet(false, true)) return
+        try {
+            // Wake Conscrypt's idle HTTP/2 reader before it takes its TLS close lock.
+            closeLocal()
+        } finally { onClosed(this) }
+    }
+
+    private fun closeLocal() {
+        runCatching { local.shutdownInput() }
+        runCatching { local.shutdownOutput() }
+        local.close()
+    }
 }
 
 private fun InputStream.readBounded(limit: Int): ByteArray {

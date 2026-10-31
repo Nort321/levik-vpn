@@ -1,6 +1,7 @@
 package com.leviknet.vpn.vpn
 
 import android.net.Network
+import com.leviknet.vpn.core.logger.AppLogger
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -28,6 +29,7 @@ internal class SmartRoutePreflight(
         environment: (TunnelServer) -> TunnelEngineEnvironment,
         baseConfig: (PreparedTunnelProfile, String) -> String,
     ): String? = withContext(Dispatchers.IO) {
+        AppLogger.d("SmartRoutePreflight", "begin")
         val candidates = SmartRouteSelection.candidates(smartAuto.eligibleRoutes(servers))
         val contexts = candidates.associate { it.id to smartAuto.measurementContext(it) }
         val routeIds = smartAuto.routeResources(candidates).mapValues { it.value.id }
@@ -49,6 +51,7 @@ internal class SmartRoutePreflight(
                 val tuic = mutableListOf<TunnelServer>()
                 // Native TUIC owns its physical sockets; Xray must not bind its local SOCKS sockets.
                 withTimeoutOrNull(4_000L) {
+                    AppLogger.d("SmartRoutePreflight", "native preparation begin")
                     for (server in candidates.filter { it.engine == TunnelEngineKind.LEVIK_TUIC }.take(4)) {
                         ensureActive()
                         val prepared = try {
@@ -60,6 +63,7 @@ internal class SmartRoutePreflight(
                         }
                     }
                 }
+                AppLogger.d("SmartRoutePreflight", "native preparation end")
                 val batches = listOf(regular to false, tuic to true).filter { it.first.isNotEmpty() }
                 suspend fun probeBatch(batch: Pair<List<TunnelServer>, Boolean>, speed: Map<String, SmartRouteMeasurement>? = null) {
                     val (batchServers, localOnly) = batch
@@ -69,17 +73,23 @@ internal class SmartRoutePreflight(
                         val probeProfile = profile.copy(servers = batchServers, serviceRoutes = null)
                         val base = json.parseToJsonElement(baseConfig(probeProfile, batchServers.first().id)).jsonObject
                         val env = environment(byId.getValue(batchServers.first().id))
+                        AppLogger.d("SmartRoutePreflight", "core start begin local=$localOnly bandwidth=${speed != null}")
                         lease = runtime.start(owner, json.encodeToString(JsonObject.serializer(), config.apply(base)),
                             object : libXray.DialerController {
                                 override fun protectFd(fd: Long): Boolean = if (localOnly) env.unboundSocketProtector(fd) else env.protector.protectAndBind(fd)
                             }, if (localOnly) null else env.dnsServer, replaceActive = false)
+                        AppLogger.d("SmartRoutePreflight", "core start end")
                         SmartRouteProber(config.candidates).use { prober ->
+                            AppLogger.d("SmartRoutePreflight", "measurement begin")
                             if (speed == null) prober.measureLatency(onMeasurement = ::measured) else prober.measureBandwidth(speed, ::measured)
+                            AppLogger.d("SmartRoutePreflight", "measurement end")
                         }
                     } catch (error: CancellationException) { throw error } catch (_: Exception) {
                         // Probe infrastructure being unavailable does not disable ordinary VPN connections.
                     } finally {
+                        AppLogger.d("SmartRoutePreflight", "core stop begin")
                         lease?.let { runtime.stop(owner, it) }
+                        AppLogger.d("SmartRoutePreflight", "core stop end")
                         config.close()
                     }
                 }
