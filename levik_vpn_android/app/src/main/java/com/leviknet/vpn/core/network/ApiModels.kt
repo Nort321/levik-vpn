@@ -146,6 +146,7 @@ data class TrialSummary(
     val eligible: Boolean,
     val status: String,
     val expiresAt: String? = null,
+    val purchasePending: Boolean = false,
 )
 
 @Serializable
@@ -223,6 +224,7 @@ data class SubscriptionActions(
     val revokeDevice: Boolean,
     val slotAddon: Boolean,
     val trafficAddon: Boolean,
+    val chooseTariff: Boolean = false,
 )
 
 @Serializable
@@ -236,6 +238,8 @@ data class OrderSummary(
     val paymentMethodId: String,
     val createdAt: String,
     val paymentUrl: String? = null,
+    val keyPreserved: Boolean = false,
+    val accessExpiresAt: String? = null,
 )
 
 @Serializable
@@ -244,6 +248,7 @@ data class CatalogResponse(
     val tariffs: List<CatalogTariff>,
     val paymentMethods: List<CatalogPaymentMethod>,
     val addons: List<CatalogAddon> = emptyList(),
+    val purchaseDiscountPercent: Int = 0,
 )
 
 @Serializable

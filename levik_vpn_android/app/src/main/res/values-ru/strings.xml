@@ -1032,4 +1032,15 @@
     <string name="drop_paused_lan">Пауза: нужна локальная сеть. Переход на сервер — только вручную.</string>
     <string name="drop_upgrade_required">Для этой передачи обновите Levik на устройстве получателя.</string>
     <string name="drop_relay_limits">Для передачи через сервер доступно до 20 файлов и 2 ГБ. Проверьте дневную квоту или подключите устройства к одной локальной сети.</string>
+    <string name="trial_choose_tariff">Выбрать тариф после пробника</string>
+    <string name="trial_choose_explanation">Сейчас у вас бесплатный пробный доступ к обоим режимам. Обычный VPN работает и на телефоне через мобильный интернет без белых списков. LTE нужен для обхода белых списков. Выберите только нужное — ключ сохранится.</string>
+    <string name="trial_monthly_price">%1$d ₽ / месяц</string>
+    <string name="trial_payment_confirmation">Проверьте выбранный тариф</string>
+    <string name="trial_payment_total">Итого с комиссией способа оплаты: %1$d ₽</string>
+    <string name="trial_key_preserved">Ключ пробника сохранится. Второй режим останется доступен до первоначального окончания пробника.</string>
+    <string name="trial_payment_discount_note">На странице оплаты будет окончательная сумма с учётом скидки по приглашению, если она есть.</string>
+    <string name="trial_change_choice">Изменить выбор</string>
+    <string name="trial_order_period">Срок: %1$d мес.</string>
+    <string name="trial_paid_until">Оплаченный доступ до %1$s</string>
+    <string name="trial_paid_key_preserved">Ключ подписки сохранён.</string>
 </resources>

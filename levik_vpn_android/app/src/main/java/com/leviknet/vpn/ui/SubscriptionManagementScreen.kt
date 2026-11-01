@@ -17,6 +17,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -52,6 +54,7 @@ import com.leviknet.vpn.core.network.SubscriptionSummary
 import com.leviknet.vpn.ui.theme.LevikBlue
 import java.text.NumberFormat
 import java.util.Locale
+import kotlin.math.ceil
 
 @Composable
 internal fun SubscriptionManagementScreen(
@@ -69,6 +72,11 @@ internal fun SubscriptionManagementScreen(
         mutableStateOf(paymentMethods.firstOrNull()?.id.orEmpty())
     }
     val selectedPaymentMethod = paymentMethods.firstOrNull { it.id == paymentMethodId }
+    val trialChoice = account?.trial?.purchasePending == true
+    var chosenTrialTariff by remember(trialChoice) { mutableStateOf<String?>(null) }
+    val trialTariffs = catalog?.tariffs.orEmpty().filter {
+        it.purchaseEnabled && it.periods.isNotEmpty() && it.id in listOf("regular", "lte_solo", "multi")
+    }.sortedBy { listOf("regular", "lte_solo", "multi").indexOf(it.id) }
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -160,79 +168,121 @@ internal fun SubscriptionManagementScreen(
             }
         }
 
-        item { SectionTitle(stringResource(R.string.subscription_management_payment_method)) }
-
-        when {
-            loading && catalog == null -> item {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                ) {
-                    Row(
-                        modifier = Modifier.padding(20.dp),
-                        horizontalArrangement = Arrangement.Center,
-                    ) {
-                        CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+        if (trialChoice) {
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    SectionTitle(stringResource(R.string.trial_choose_tariff))
+                    Text(stringResource(R.string.trial_choose_explanation))
+                    if (catalog == null) {
+                        if (loading) CircularProgressIndicator(Modifier.size(24.dp))
+                        else Text(stringResource(R.string.subscription_management_catalog_error_description))
+                    } else if (trialTariffs.isEmpty()) {
+                        Text(stringResource(R.string.subscription_management_plans_unavailable_description))
                     }
-                }
-            }
-            catalog == null -> item {
-                EmptyManagementCard(
-                    title = stringResource(R.string.subscription_management_catalog_error),
-                    description = stringResource(R.string.subscription_management_catalog_error_description),
-                    actionLabel = stringResource(R.string.login_retry),
-                    onAction = onRefresh,
-                )
-            }
-            paymentMethods.isEmpty() -> item {
-                EmptyManagementCard(
-                    title = stringResource(R.string.subscription_management_payment_unavailable),
-                    description = stringResource(R.string.subscription_management_payment_unavailable_description),
-                )
-            }
-            else -> item {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                ) {
-                    Column(Modifier.padding(vertical = 8.dp)) {
-                        paymentMethods.forEach { method ->
-                            PaymentMethodRow(
-                                method = method,
-                                selected = method.id == paymentMethodId,
+                    trialTariffs.forEach { tariff ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().selectable(
+                                selected = chosenTrialTariff == tariff.id,
                                 enabled = !loading,
-                                onSelected = { paymentMethodId = method.id },
-                            )
+                                role = Role.RadioButton,
+                                onClick = { chosenTrialTariff = tariff.id },
+                            ).padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = chosenTrialTariff == tariff.id, onClick = null)
+                            Spacer(Modifier.width(10.dp))
+                            Column {
+                                Text(tariff.title, fontWeight = FontWeight.SemiBold)
+                                Text(tariff.description)
+                                tariff.periods.firstOrNull { it.months == 1 }?.let {
+                                    Text(stringResource(R.string.trial_monthly_price, it.amountRub))
+                                }
+                            }
                         }
                     }
                 }
             }
         }
 
-        item { SectionTitle(stringResource(R.string.subscription_management_plans)) }
+        if (!trialChoice || chosenTrialTariff != null) {
+            item { SectionTitle(stringResource(R.string.subscription_management_payment_method)) }
 
-        val tariffs = catalog?.tariffs.orEmpty().filter {
-            it.purchaseEnabled && it.periods.isNotEmpty()
-        }
-        if (catalog != null && tariffs.isEmpty()) {
-            item {
-                EmptyManagementCard(
-                    title = stringResource(R.string.subscription_management_plans_unavailable),
-                    description = stringResource(R.string.subscription_management_plans_unavailable_description),
-                )
+            when {
+                loading && catalog == null -> item {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(18.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(20.dp),
+                            horizontalArrangement = Arrangement.Center,
+                        ) {
+                            CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                        }
+                    }
+                }
+                catalog == null -> item {
+                    EmptyManagementCard(
+                        title = stringResource(R.string.subscription_management_catalog_error),
+                        description = stringResource(R.string.subscription_management_catalog_error_description),
+                        actionLabel = stringResource(R.string.login_retry),
+                        onAction = onRefresh,
+                    )
+                }
+                paymentMethods.isEmpty() -> item {
+                    EmptyManagementCard(
+                        title = stringResource(R.string.subscription_management_payment_unavailable),
+                        description = stringResource(R.string.subscription_management_payment_unavailable_description),
+                    )
+                }
+                else -> item {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(18.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    ) {
+                        Column(Modifier.padding(vertical = 8.dp)) {
+                            paymentMethods.forEach { method ->
+                                PaymentMethodRow(
+                                    method = method,
+                                    selected = method.id == paymentMethodId,
+                                    enabled = !loading,
+                                    onSelected = { paymentMethodId = method.id },
+                                )
+                            }
+                        }
+                    }
+                }
             }
-        } else {
-            items(tariffs, key = CatalogTariff::id) { tariff ->
-                TariffPurchaseCard(
-                    tariff = tariff,
-                    paymentMethodId = selectedPaymentMethod?.id.orEmpty(),
-                    loading = loading,
-                    onPurchase = onPurchase,
-                )
+
+            item { SectionTitle(stringResource(R.string.subscription_management_plans)) }
+
+            val tariffs = catalog?.tariffs.orEmpty().filter {
+                it.purchaseEnabled && it.periods.isNotEmpty() && (!trialChoice || it.id == chosenTrialTariff)
+            }
+            if (catalog != null && tariffs.isEmpty()) {
+                item {
+                    EmptyManagementCard(
+                        title = stringResource(R.string.subscription_management_plans_unavailable),
+                        description = stringResource(R.string.subscription_management_plans_unavailable_description),
+                    )
+                }
+            } else {
+                items(tariffs, key = CatalogTariff::id) { tariff ->
+                    TariffPurchaseCard(
+                        tariff = tariff,
+                        paymentMethodId = selectedPaymentMethod?.id.orEmpty(),
+                        paymentMethod = selectedPaymentMethod,
+                        preserveTrialKey = trialChoice,
+                        trialSubscriptionId = account?.subscriptions?.firstOrNull { it.actions.chooseTariff }?.uuid,
+                        discountPercent = catalog?.purchaseDiscountPercent ?: 0,
+                        loading = loading,
+                        onPurchase = onPurchase,
+                    )
+                }
             }
         }
 
@@ -249,6 +299,7 @@ internal fun SubscriptionManagementScreen(
             items(account.orders, key = OrderSummary::id) { order ->
                 OrderCard(
                     order = order,
+                    tariffTitle = catalog?.tariffs?.firstOrNull { it.id == order.tariffId }?.title,
                     loading = loading,
                     onContinue = { onContinueOrder(order.id) },
                 )
@@ -319,7 +370,7 @@ private fun ManagedSubscriptionCard(
                 value = "${subscription.devices.used} / ${subscription.devices.limit}",
             )
 
-            if (subscription.actions.renew && tariff != null) {
+            if (subscription.actions.renew && !subscription.actions.chooseTariff && tariff != null) {
                 Text(
                     text = stringResource(R.string.subscription_management_renewal_period),
                     style = MaterialTheme.typography.labelLarge,
@@ -439,11 +490,46 @@ private fun ManagedSubscriptionCard(
 private fun TariffPurchaseCard(
     tariff: CatalogTariff,
     paymentMethodId: String,
+    paymentMethod: CatalogPaymentMethod?,
+    preserveTrialKey: Boolean,
+    trialSubscriptionId: String?,
+    discountPercent: Int,
     loading: Boolean,
     onPurchase: (String, String?, String?, Int?, String) -> Unit,
 ) {
     var months by remember(tariff.id) { mutableIntStateOf(tariff.periods.first().months) }
     val selectedPeriod = tariff.periods.firstOrNull { it.months == months }
+    var confirming by remember(tariff.id) { mutableStateOf(false) }
+    val total = selectedPeriod?.let {
+        val discounted = (it.amountRub - it.amountRub.toLong() * discountPercent.coerceIn(0, 100) / 100).coerceAtLeast(1)
+        ceil(discounted * (1 + (paymentMethod?.feePercent ?: 0.0) / 100)).toInt()
+    }
+    if (confirming && selectedPeriod != null && total != null) {
+        AlertDialog(
+            onDismissRequest = { confirming = false },
+            title = { Text(stringResource(R.string.trial_payment_confirmation)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(tariff.title)
+                    Text(tariff.description)
+                    Text(selectedPeriod.title)
+                    Text(paymentMethod?.title.orEmpty())
+                    Text(stringResource(R.string.trial_payment_total, total))
+                    if (preserveTrialKey) Text(stringResource(R.string.trial_key_preserved))
+                    Text(stringResource(R.string.trial_payment_discount_note))
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirming = false
+                    onPurchase(if (preserveTrialKey) "access_renewal" else "access_purchase", trialSubscriptionId, tariff.id, selectedPeriod.months, paymentMethodId)
+                }, enabled = !loading && paymentMethodId.isNotBlank() && (!preserveTrialKey || trialSubscriptionId != null)) {
+                    Text(stringResource(R.string.purchase_continue))
+                }
+            },
+            dismissButton = { TextButton(onClick = { confirming = false }) { Text(stringResource(R.string.trial_change_choice)) } },
+        )
+    }
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -503,16 +589,8 @@ private fun TariffPurchaseCard(
                 }
             }
             Button(
-                onClick = {
-                    onPurchase(
-                        "access_purchase",
-                        null,
-                        tariff.id,
-                        selectedPeriod?.months,
-                        paymentMethodId,
-                    )
-                },
-                enabled = !loading && selectedPeriod != null && paymentMethodId.isNotBlank(),
+                onClick = { confirming = true },
+                enabled = !loading && selectedPeriod != null && paymentMethodId.isNotBlank() && (!preserveTrialKey || trialSubscriptionId != null),
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = LevikBlue),
                 shape = RoundedCornerShape(14.dp),
@@ -524,8 +602,8 @@ private fun TariffPurchaseCard(
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = selectedPeriod?.let {
-                        stringResource(R.string.subscription_management_buy_for, it.amountRub)
+                    text = total?.let {
+                        stringResource(R.string.subscription_management_buy_for, it)
                     } ?: stringResource(R.string.purchase_continue),
                     textAlign = TextAlign.Center,
                 )
@@ -574,6 +652,7 @@ private fun PaymentMethodRow(
 @Composable
 private fun OrderCard(
     order: OrderSummary,
+    tariffTitle: String?,
     loading: Boolean,
     onContinue: () -> Unit,
 ) {
@@ -590,6 +669,8 @@ private fun OrderCard(
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(orderKindLabel(order.kind), fontWeight = FontWeight.Bold)
+                tariffTitle?.let { Text(it, fontWeight = FontWeight.SemiBold) }
+                if (order.months > 0) Text(stringResource(R.string.trial_order_period, order.months))
                 Text(
                     text = formatDate(order.createdAt),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -609,6 +690,8 @@ private fun OrderCard(
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
             )
+            order.accessExpiresAt?.let { Text(stringResource(R.string.trial_paid_until, formatDate(it))) }
+            if (order.keyPreserved) Text(stringResource(R.string.trial_paid_key_preserved))
             if (pending) {
                 Button(
                     onClick = onContinue,
@@ -724,7 +807,7 @@ private fun orderKindLabel(kind: String): String = stringResource(
 private fun orderStatusLabel(status: String): String = stringResource(
     when (status.lowercase(Locale.ROOT)) {
         "pending", "pending_payment" -> R.string.subscription_management_order_pending
-        "paid", "completed", "succeeded" -> R.string.subscription_management_order_paid
+        "paid", "completed", "succeeded", "delivered" -> R.string.subscription_management_order_paid
         "canceled", "cancelled" -> R.string.subscription_management_order_cancelled
         "expired" -> R.string.expired
         else -> R.string.subscription_management_order_processing
@@ -733,7 +816,7 @@ private fun orderStatusLabel(status: String): String = stringResource(
 
 @Composable
 private fun orderStatusColor(status: String) = when (status.lowercase(Locale.ROOT)) {
-    "paid", "completed", "succeeded" -> MaterialTheme.colorScheme.primary
+    "paid", "completed", "succeeded", "delivered" -> MaterialTheme.colorScheme.primary
     "canceled", "cancelled", "expired" -> MaterialTheme.colorScheme.error
     else -> LevikBlue
 }

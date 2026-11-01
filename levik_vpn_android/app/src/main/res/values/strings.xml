@@ -1028,4 +1028,15 @@
     <string name="drop_paused_lan">Paused: local network required. Switching to the server requires your action.</string>
     <string name="drop_upgrade_required">Update Levik on the receiving device for this transfer.</string>
     <string name="drop_relay_limits">Server transfers allow up to 20 files and 2 GB. Check the daily quota or connect both devices to the same local network.</string>
+    <string name="trial_choose_tariff">Choose a plan after the trial</string>
+    <string name="trial_choose_explanation">Your free trial includes both modes. Regular VPN works on phones and mobile internet without allow-lists. LTE is for bypassing allow-lists. Choose only what you need; your key stays the same.</string>
+    <string name="trial_monthly_price">%1$d ₽ / month</string>
+    <string name="trial_payment_confirmation">Check your plan</string>
+    <string name="trial_payment_total">Total including payment fee: %1$d ₽</string>
+    <string name="trial_key_preserved">Your trial key stays the same. The other mode remains available until the original trial expiry.</string>
+    <string name="trial_payment_discount_note">The payment page will show the final amount, including any referral discount.</string>
+    <string name="trial_change_choice">Change choice</string>
+    <string name="trial_order_period">Period: %1$d mo.</string>
+    <string name="trial_paid_until">Paid access until %1$s</string>
+    <string name="trial_paid_key_preserved">Your subscription key has been preserved.</string>
 </resources>
