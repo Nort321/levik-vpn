@@ -347,7 +347,7 @@ class MobileApiClient(
 
     /** LevikDrop: this phone can receive now, docs/levik-drop.md "Website API". */
     suspend fun dropPresence(accessToken: String, key: String) {
-        val body = JsonObject(mapOf("key" to JsonPrimitive(key), "protocol" to JsonPrimitive(1))).toString().encodeToByteArray()
+        val body = JsonObject(mapOf("key" to JsonPrimitive(key), "protocol" to JsonPrimitive(2))).toString().encodeToByteArray()
         jsonRequest(METHOD_PUT, DROP_PRESENCE_PATH, body, accessToken)
     }
 
@@ -369,6 +369,7 @@ class MobileApiClient(
         val body = JsonObject(
             mapOf(
                 "receiverDeviceId" to JsonPrimitive(receiverDeviceId),
+                "protocol" to JsonPrimitive(2),
                 "fileCount" to JsonPrimitive(fileCount),
                 "totalBytes" to JsonPrimitive(totalBytes),
             ),

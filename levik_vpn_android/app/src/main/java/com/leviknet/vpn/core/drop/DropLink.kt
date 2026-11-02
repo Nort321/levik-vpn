@@ -162,7 +162,12 @@ class RelayLink(
                 closeAfterSaying()
                 return@launch
             }
-            if (outcome.lanBroke) allowLan = false
+            if (outcome.lanBroke && work.route != null) {
+                host.outcome(outcome)
+                closeAfterSaying()
+                return@launch
+            }
+            if (outcome.lanBroke) allowLan = false // Existing v1 reconnect policy.
             // A session that broke on its own needs a fresh `peer`: rejoining gives both apps one.
             val left = outcome.detail == PEER_LEFT || outcome.detail == NEW_SESSION || outcome.detail.startsWith("relay")
             host.outcome(outcome)

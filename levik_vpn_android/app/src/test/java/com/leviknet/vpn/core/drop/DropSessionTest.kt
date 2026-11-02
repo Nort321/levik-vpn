@@ -131,28 +131,39 @@ class DropSessionTest {
         manifest: List<ManifestFile>? = null,
         targets: TargetFiles? = null,
         senderConfirms: Boolean = true,
+        route: String? = null,
+        allowLan: Boolean = false,
     ): Run = runBlocking {
         val (senderEnd, receiverEnd) = relayPair()
         val codes = mutableListOf<String>()
+        val paths = java.util.concurrent.CopyOnWriteArrayList<SessionPath>()
         val sources = FileSources()
         val senderWork = SenderWork(
-            transferId, SoftwareIdentity(), "android", "windows", { Trust.NEW }, false,
-            SessionEvents(keyed = { code, _, _ -> synchronized(codes) { codes += code } }, path = {}, progress = {}),
+            transferId, SoftwareIdentity(), "android", "windows", { Trust.NEW }, allowLan,
+            SessionEvents(keyed = { code, _, _ -> synchronized(codes) { codes += code } }, path = { paths += it }, progress = {}),
             { _, _ -> senderConfirms },
             sources.describe(files.map(File::getPath)), sources,
         )
         val receiverWork = ReceiverWork(
-            transferId, SoftwareIdentity(), "windows", "android", { Trust.NEW }, false,
-            SessionEvents(keyed = { code, _, _ -> synchronized(codes) { codes += code } }, path = {}, progress = {}),
-            { _, _ -> true }, manifest, targets, decide,
+            transferId, SoftwareIdentity(), "windows", "android", { Trust.NEW }, allowLan,
+            SessionEvents(keyed = { code, _, _ -> synchronized(codes) { codes += code } }, path = { paths += it }, progress = {}),
+            { _, _ -> true }, manifest, targets, { names, code, trust ->
+                if (route != null) assertEquals("Route must be known on both sides before accepting", 2, paths.size)
+                decide(names, code, trust)
+            },
         )
+        for (work in listOf(senderWork, receiverWork)) {
+            work.route = route
+            work.expectedFiles = files.size
+            work.expectedBytes = files.sumOf(File::length)
+        }
         val sender = DropSession(senderEnd, senderWork, scope)
         val receiver = DropSession(receiverEnd, receiverWork, scope)
         // A frame one side sends arrives at the other end of the socket pair.
         pump(senderEnd, sender)
         pump(receiverEnd, receiver)
         withTimeout(30_000) {
-            val sent = async { sender.run() }
+            val sent = async { sender.run().also { if (it is SessionOutcome.Lost) senderEnd.close() } }
             val received = async { receiver.run() }
             Run(sent.await(), received.await()).also {
                 senderEnd.close()
@@ -183,6 +194,46 @@ class DropSessionTest {
         assertEquals(0L, File(inbox, "empty").length())
         assertEquals(3, placed.size)
         assertEquals(emptyList<String>(), leftovers())
+    }
+
+    @Test
+    fun v2RelayRouteIsKnownBeforeAcceptance() {
+        val result = run(listOf(source("relay", "payload".encodeToByteArray())), accepting(), route = "relay")
+        assertEquals(SessionOutcome.Done, result.sender)
+        assertEquals("payload", File(inbox, "relay").readText())
+    }
+
+    @Test
+    fun pinnedLocalRouteDoesNotFallBackToRelay() {
+        var asked = false
+        val result = run(listOf(source("local", "payload".encodeToByteArray())), { _, _, _ -> asked = true; null }, route = "lan")
+        assertTrue(result.sender is SessionOutcome.Lost && result.sender.lanBroke)
+        assertTrue(!asked)
+        assertEquals(emptyList<String>(), inbox.list().orEmpty().toList())
+    }
+
+    @Test
+    fun v2LocalRouteTransfersMoreThanTwentyFiles() {
+        org.junit.Assume.assumeTrue(DropLan.privateAddresses().isNotEmpty())
+        val files = (0 until 40).map { source("file-$it", "payload-$it".encodeToByteArray()) }
+        val result = run(files, accepting(), route = "lan", allowLan = true)
+        assertEquals(SessionOutcome.Done, result.sender)
+        assertEquals(SessionOutcome.Done, result.receiver)
+        assertEquals(40, inbox.list().orEmpty().size)
+        assertEquals("payload-39", File(inbox, "file-39").readText())
+    }
+
+    @Test
+    fun v2LocalRouteOffersLargeFileBeforeReadingItsContents() {
+        org.junit.Assume.assumeTrue(DropLan.privateAddresses().isNotEmpty())
+        val file = source("large", ByteArray(0))
+        RandomAccessFile(file, "rw").use { it.setLength(50L * 1024 * 1024 * 1024) }
+        val result = run(listOf(file), { manifest, _, _ ->
+            assertEquals(50L * 1024 * 1024 * 1024, manifest.single().size)
+            null
+        }, route = "auto", allowLan = true)
+        assertEquals(SessionOutcome.Declined(bySelf = true), result.receiver)
+        assertEquals(emptyList<String>(), inbox.list().orEmpty().toList())
     }
 
     @Test

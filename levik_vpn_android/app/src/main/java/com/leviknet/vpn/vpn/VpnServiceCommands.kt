@@ -5,6 +5,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Keeps teardown ordered without letting cancellation of a new connection cancel teardown. */
 internal class VpnServiceCommands(private val scope: CoroutineScope) {
@@ -52,7 +53,11 @@ internal class VpnServiceCommands(private val scope: CoroutineScope) {
 
     // Called from onStartCommand on the main thread. Publish the barrier before running teardown,
     // including when a test or a caller uses an immediate coroutine dispatcher.
-    fun enqueueStop(stop: suspend () -> Unit) {
+    fun enqueueStop(
+        stuckAfterMs: Long? = null,
+        onStuck: () -> Unit = {},
+        stop: suspend () -> Unit,
+    ) {
         val previousStop = pendingStop
         val job = scope.launch(start = CoroutineStart.LAZY) {
             previousStop?.join()
@@ -60,6 +65,11 @@ internal class VpnServiceCommands(private val scope: CoroutineScope) {
         }
         pendingStop = job
         job.start()
+        // Teardown waits for the connection lock, and a connection stuck in a blocking call
+        // never releases it. The caller decides how to give up on such a stop.
+        if (stuckAfterMs != null) scope.launch {
+            if (withTimeoutOrNull(stuckAfterMs) { job.join() } == null) onStuck()
+        }
     }
 
     suspend fun awaitPendingStop() {

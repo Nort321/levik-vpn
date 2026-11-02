@@ -1,6 +1,7 @@
 package com.leviknet.vpn.vpn
 
 import android.net.Network
+import com.leviknet.vpn.core.logger.AppLogger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -20,6 +21,8 @@ internal class SmartAutoLiveRuntime(
     private val scope: CoroutineScope,
     private val network: Network,
     private val smartAuto: SmartAuto,
+    /** The connection went up on the ranked choice without measuring: compare every route once first. */
+    private val initialRound: Boolean = false,
     private val enabled: () -> Boolean,
     private val currentId: () -> String?,
     private val heavyTraffic: () -> Boolean,
@@ -52,6 +55,9 @@ internal class SmartAutoLiveRuntime(
             }
         }
         job = scope.launch(Dispatchers.IO) {
+            if (initialRound) try { measureAll() } catch (error: CancellationException) { throw error } catch (_: Exception) {
+                // The incumbent stays installed; the regular rounds below keep comparing.
+            }
             delay(30_000L)
             while (isActive && !closed.get()) {
                 if (!enabled()) break
@@ -150,10 +156,72 @@ internal class SmartAutoLiveRuntime(
         }
     }
 
+    /**
+     * The full comparison the connection skipped: every route's delay, then sequential speed samples
+     * of up to three finalists, all through the running core. A different winner is installed for new
+     * flows at once, without the quiet window: right after connecting there is little to keep in place.
+     */
+    private suspend fun measureAll() {
+        refreshLoad()
+        currentCoroutineContext().ensureActive()
+        if (!enabled()) return
+        val current = currentId() ?: return
+        val valid = config.originals.filter { contexts[it.id] == smartAuto.measurementContext(it) }
+        if (valid.none { it.id == current }) return
+        val resources = smartAuto.routeResources(valid)
+        evidence.refresh(resources)
+        val roundRoutes = evidence.routeIds()
+        val candidates = config.candidates.filter { candidate -> valid.any { it.id == candidate.id } }
+        val measured = java.util.concurrent.ConcurrentHashMap<String, SmartRouteMeasurement>()
+        val now = System.currentTimeMillis()
+        AppLogger.d(TAG, "initial measurement begin")
+        withTimeoutOrNull(INITIAL_ROUND_MS) {
+            SmartRouteProber(candidates).use { prober ->
+                prober.measureLatency { id, value -> measured[id] = value }
+                if (heavyTraffic()) return@use
+                val finalists = SmartRouteSelection.finalists(measured.toMap(), resources) { id -> valid.firstOrNull { it.id == id }?.syncHost() }
+                prober.measureBandwidth(finalists.associateWith { measured.getValue(it) }) { id, value ->
+                    if (value.hasBandwidth) evidence.measuredBandwidth(id, value, now)
+                    measured[id] = value
+                }
+                lastSpeedMs = now
+            }
+        }
+        AppLogger.d(TAG, "initial measurement end")
+        currentCoroutineContext().ensureActive()
+        if (!enabled() || currentId() != current) return
+        val latestResources = smartAuto.routeResources(valid)
+        val changed = evidence.refresh(latestResources)
+        val fresh = measured.filterKeys { id -> id !in changed && valid.firstOrNull { it.id == id }?.let { contexts[id] == smartAuto.measurementContext(it) } == true }
+        fresh.forEach { (id, value) -> valid.firstOrNull { it.id == id }?.let { smartAuto.recordRouteMeasurement(it, network, value, contexts.getValue(id), roundRoutes[id]) } }
+        val winner = SmartRouteSelection.order(fresh, latestResources, valid.map(TunnelServer::id)).firstOrNull() ?: return
+        if (winner == current || !fresh.getValue(winner).confirmed) return
+        val candidate = config.candidates.first { it.id == winner }
+        if (!evidence.proven(winner, System.currentTimeMillis())) {
+            val verified = withTimeoutOrNull(4_000L) { SmartRouteProber(listOf(candidate)).use { it.verifyData(winner) } } == true
+            if (!verified) { evidence.failed(winner); return }
+            evidence.verified(winner, System.currentTimeMillis())
+        }
+        val canInstall: suspend () -> Boolean = {
+            val latest = smartAuto.routeResources(valid)
+            currentId() == current && listOf(current, winner).all { id ->
+                latest[id]?.id.let { it == null || it == roundRoutes[id] } &&
+                    valid.firstOrNull { it.id == id }?.let { contexts[id] == smartAuto.measurementContext(it) } == true
+            }
+        }
+        if (enabled() && install(candidate, control, canInstall)) policy.installed(System.currentTimeMillis())
+    }
+
     override fun close() {
         closed.set(true)
         job?.cancel()
         statsJob?.cancel()
         control?.close()
+    }
+
+    private companion object {
+        const val TAG = "SmartAutoLiveRuntime"
+        /** The 22-second budget the connection used to wait for, now spent with the VPN up. */
+        const val INITIAL_ROUND_MS = 22_000L
     }
 }

@@ -40,8 +40,8 @@ object DropWire {
     const val PROTOCOL = 1
     const val MAX_FRAME = 270_336
     const val MAX_CHUNK = 262_144
-    const val MAX_FILES = 20
-    const val MAX_TOTAL = 2L * 1024 * 1024 * 1024
+    const val MAX_FILES = Int.MAX_VALUE
+    const val MAX_TOTAL = 9_007_199_254_740_991L
 
     /** Bytes the sender keeps in flight beyond the last acknowledgement. */
     const val WINDOW = 8L * 1024 * 1024
@@ -314,9 +314,9 @@ object DropWire {
         private val key = SecretKeySpec(key, "AES")
         private var seq = 0L
 
-        fun seal(plaintext: ByteArray): ByteArray {
+        fun seal(plaintext: ByteArray, dataRecord: Boolean = false): ByteArray {
             val current = seq++
-            val header = headerFor(current)
+            val header = headerFor(current).also { if (dataRecord) it[0] = 0x11 }
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(128, nonceFor(current)))
             cipher.updateAAD(header)
@@ -329,7 +329,7 @@ object DropWire {
         private var seq = 0L
 
         fun open(record: ByteArray): ByteArray {
-            if (record.size < 9 + 16 + 1 || record[0] != 0x10.toByte()) fail("not a record")
+            if (record.size < 9 + 16 + 1 || (record[0] != 0x10.toByte() && record[0] != 0x11.toByte())) fail("not a record")
             val current = ByteBuffer.wrap(record, 1, 8).long
             if (current != seq) fail("record out of order")
             val plaintext = try {
@@ -352,23 +352,26 @@ object DropWire {
 
     fun encodeControl(control: DropControl): ByteArray = byteArrayOf(0x01) + control.toJson().toString().encodeToByteArray()
 
-    fun encodeData(file: Int, offset: Long, bytes: ByteArray, length: Int = bytes.size): ByteArray {
+    fun encodeData(file: Int, offset: Long, bytes: ByteArray, length: Int = bytes.size, wide: Boolean = false): ByteArray {
         if (length < 1 || length > MAX_CHUNK) fail("bad chunk")
-        val buffer = ByteBuffer.allocate(11 + length)
-        buffer.put(0x02).putShort(file.toShort()).putLong(offset).put(bytes, 0, length)
+        val buffer = ByteBuffer.allocate((if (wide) 13 else 11) + length)
+        if (wide) buffer.put(0x03).putInt(file) else buffer.put(0x02).putShort(file.toShort())
+        buffer.putLong(offset).put(bytes, 0, length)
         return buffer.array()
     }
 
     fun decodePlaintext(plaintext: ByteArray): DropPlaintext {
         if (plaintext.isEmpty()) return DropPlaintext.Unknown
-        if (plaintext[0] == 0x02.toByte()) {
-            if (plaintext.size < 12 || plaintext.size > 11 + MAX_CHUNK) fail("bad data record")
+        if (plaintext[0] == 0x02.toByte() || plaintext[0] == 0x03.toByte()) {
+            val head = if (plaintext[0] == 0x03.toByte()) 13 else 11
+            if (plaintext.size < head + 1 || plaintext.size > head + MAX_CHUNK) fail("bad data record")
             val buffer = ByteBuffer.wrap(plaintext)
             buffer.get()
-            val file = buffer.short.toInt() and 0xffff
+            val file = if (head == 13) buffer.int else buffer.short.toInt() and 0xffff
+            if (file < 0) fail("bad file index")
             val offset = buffer.long
             if (offset < 0 || offset > MAX_TOTAL) fail("bad offset")
-            return DropPlaintext.Data(file, offset, plaintext.copyOfRange(11, plaintext.size))
+            return DropPlaintext.Data(file, offset, plaintext.copyOfRange(head, plaintext.size))
         }
         if (plaintext[0] != 0x01.toByte()) return DropPlaintext.Unknown
         if (plaintext.size > 64 * 1024) fail("control too long")
@@ -407,6 +410,21 @@ object DropWire {
         val obj = value as? JsonObject ?: fail("bad control")
         val type = string(obj["t"]) ?: fail("bad control")
         return when (type) {
+            "route" -> DropControl.Route(string(obj["path"])?.takeIf { it == "lan" || it == "relay" } ?: fail("bad route"))
+            "manifest_part" -> {
+                val final = (obj["final"] as? JsonPrimitive)?.takeIf { !it.isString }?.content?.let { when(it) { "true" -> true; "false" -> false; else -> null } } ?: fail("bad manifest part")
+                val files = obj["files"] as? JsonArray ?: fail("bad manifest part")
+                if (files.size > 16) fail("bad manifest part")
+                val part = parseControl(JsonObject(obj + ("t" to JsonPrimitive("manifest")))) as? DropControl.Manifest ?: fail("bad manifest part")
+                DropControl.ManifestPart(part.files, final)
+            }
+            "accept_part" -> {
+                val final = (obj["final"] as? JsonPrimitive)?.takeIf { !it.isString }?.content?.let { when(it) { "true" -> true; "false" -> false; else -> null } } ?: fail("bad accept part")
+                val offsets = obj["offsets"] as? JsonArray ?: fail("bad accept part")
+                if (offsets.size > 16) fail("bad accept part")
+                val part = parseControl(JsonObject(obj + ("t" to JsonPrimitive("accept")))) as? DropControl.Accept ?: fail("bad accept part")
+                DropControl.AcceptPart(part.offsets, part.prefix, final)
+            }
             "manifest" -> {
                 val files = obj["files"] as? JsonArray ?: fail("bad manifest")
                 if (files.size < 1 || files.size > MAX_FILES) fail("bad manifest")
@@ -417,7 +435,7 @@ object DropWire {
                     if (name.isEmpty() || name.length > 1024) fail("bad manifest")
                     ManifestFile(name, count(file["size"], MAX_TOTAL) ?: fail("bad manifest"))
                 }
-                val total = parsed.sumOf(ManifestFile::size)
+                val total = parsed.fold(0L) { total, file -> if (file.size > MAX_TOTAL - total) fail("bad manifest"); total + file.size }
                 if (count(obj["total"], Long.MAX_VALUE) != total || total > MAX_TOTAL) fail("bad manifest")
                 DropControl.Manifest(parsed)
             }
@@ -462,6 +480,10 @@ object DropWire {
 data class ManifestFile(val name: String, val size: Long)
 
 sealed class DropControl {
+    data class Route(val path: String) : DropControl()
+    data class ManifestPart(val files: List<ManifestFile>, val final: Boolean) : DropControl()
+    data class AcceptPart(val offsets: List<Long>, val prefix: List<String?>, val final: Boolean) : DropControl()
+
     data class Manifest(val files: List<ManifestFile>) : DropControl() {
         val total: Long get() = files.sumOf(ManifestFile::size)
     }
@@ -481,6 +503,9 @@ sealed class DropControl {
     /** Field order as the desktop apps write it. */
     fun toJson(): JsonObject {
         val fields: Map<String, JsonElement> = when (this) {
+            is Route -> mapOf("t" to JsonPrimitive("route"), "path" to JsonPrimitive(path))
+            is ManifestPart -> Manifest(files).toJson() + mapOf("t" to JsonPrimitive("manifest_part"), "final" to JsonPrimitive(final))
+            is AcceptPart -> Accept(offsets, prefix).toJson() + mapOf("t" to JsonPrimitive("accept_part"), "final" to JsonPrimitive(final))
             is Manifest -> mapOf(
                 "t" to JsonPrimitive("manifest"),
                 "files" to JsonArray(files.map { JsonObject(mapOf("name" to JsonPrimitive(it.name), "size" to JsonPrimitive(it.size))) }),

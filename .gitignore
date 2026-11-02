@@ -114,3 +114,6 @@ pnpm-debug.log*
 # Local iOS project and its convenience symlink
 /levik_vpn_ios/
 /LevikVPN iOS
+
+# Local agent memory dump (contains server IPs and ops details)
+/levik_memory.md

@@ -3,6 +3,7 @@ package com.leviknet.vpn.vpn
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -211,5 +212,36 @@ class VpnServiceCommandsTest {
         commands.onStart(2)
         commands.awaitPendingStop()
         assertTrue(commands.isLatest(2))
+    }
+
+    @Test
+    fun `a stop stuck behind the connection lock reports itself once`() = runTest {
+        val commands = VpnServiceCommands(this)
+        val releaseStop = CompletableDeferred<Unit>()
+        var stuck = 0
+        commands.requestConnection(false)
+        commands.enqueueStop(stuckAfterMs = 10_000L, onStuck = { stuck++ }) { releaseStop.await() }
+        advanceTimeBy(9_999L)
+        runCurrent()
+        assertEquals(0, stuck)
+        advanceTimeBy(2L)
+        runCurrent()
+        assertEquals(1, stuck)
+        assertTrue(commands.isStopping)
+        releaseStop.complete(Unit)
+        runCurrent()
+        assertEquals(1, stuck)
+    }
+
+    @Test
+    fun `a stop that finishes in time is never reported as stuck`() = runTest {
+        val commands = VpnServiceCommands(this)
+        var stuck = false
+        commands.requestConnection(false)
+        commands.enqueueStop(stuckAfterMs = 10_000L, onStuck = { stuck = true }) { }
+        advanceTimeBy(20_000L)
+        runCurrent()
+        assertFalse(stuck)
+        assertFalse(commands.isStopping)
     }
 }

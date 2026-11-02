@@ -189,6 +189,7 @@ class AppViewModel(
     private var pendingPairingToken: String? = null
     private var pendingOnboardingAction: OnboardingAction? = null
     private var connectionPending = false
+    private var pendingSharingInvitation: String? = null
     private var searchDebounceJob: Job? = null
     private var isRefreshingAccount = false
     private var profileRefreshPending = false
@@ -1301,6 +1302,7 @@ class AppViewModel(
         connectionPreparationJob?.cancel()
         connectionStartJob?.cancel()
         connectionPending = false
+        pendingSharingInvitation = null
         val cancelLteWarning = pendingLteAction == PendingLteAction.Connect
         val cancelAllowlistWarning = pendingAllowlistAction == PendingAllowlistAction.Connect
         val cancelRelayIntroduction = pendingRelayIntroduction is PendingRelayIntroduction.Connect
@@ -1609,6 +1611,26 @@ class AppViewModel(
         }
     }
 
+    /** Guest credentials are memory-only and use the same disclosure/permission flow as normal VPN. */
+    fun connectSharingGuest(invitation: String) {
+        if (BuildConfig.IS_PLAY_DISTRIBUTION || appContext == null) return
+        cancelPendingConnection()
+        connectionPreparationJob = viewModelScope.launch {
+            try {
+                com.leviknet.vpn.core.sharing.SharingInvitation.parse(invitation)
+                pendingSharingInvitation = invitation.trim()
+                connectionPending = true
+                if (vpnController.hasDisclosureConsent()) effectChannel.send(AppEffect.RequestVpnPermission)
+                else mutableState.update { it.copy(showVpnDisclosure = true) }
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                pendingSharingInvitation = null
+                connectionPending = false
+                mutableState.update { it.copy(problem = error.toAppProblem(ProblemOperation.CONNECT)) }
+            }
+        }
+    }
+
     fun acceptVpnDisclosure() {
         viewModelScope.launch {
             try {
@@ -1619,6 +1641,7 @@ class AppViewModel(
                 }
             } catch (error: Throwable) {
                 connectionPending = false
+                pendingSharingInvitation = null
                 mutableState.update {
                     it.copy(
                         showVpnDisclosure = false,
@@ -1637,6 +1660,7 @@ class AppViewModel(
         if (!connectionPending) return
         if (!granted) {
             connectionPending = false
+            pendingSharingInvitation = null
             mutableState.update { it.copy(message = UiMessage.VPN_PERMISSION_DENIED) }
             return
         }
@@ -1649,11 +1673,15 @@ class AppViewModel(
     fun onNotificationPermissionResult(granted: Boolean) {
         if (!connectionPending) return
         connectionPending = false
+        val sharingInvitation = pendingSharingInvitation
+        pendingSharingInvitation = null
         connectionStartJob = viewModelScope.launch {
             try {
                 ensureActive()
                 val beforeStart = vpnController.state.value
-                vpnController.connect()
+                if (sharingInvitation != null && appContext != null) {
+                    com.leviknet.vpn.core.sharing.SharingController.connectGuest(appContext, sharingInvitation)
+                } else vpnController.connect()
                 // Keep OFF available after dispatch, until the service acknowledges this ON.
                 vpnController.state.first { it != beforeStart }
             } catch (error: Throwable) {

@@ -159,11 +159,20 @@ Android does this in the Direct build only; iOS does not take part.
 
 ### Smart Auto
 
-Android and Windows/macOS/Linux compare regular candidates through their
-actual VPN outbounds before starting the system TUN. A temporary core exposes
-private candidate-specific proxies; the probes have no direct fallback and do
-not inherit split routing. Android also prepares the native TUIC proxy before
-TUN. Desktop TUIC remains a manual choice. Mobile/allowlist and home-road
+Windows/macOS/Linux compare regular candidates through their actual VPN
+outbounds before starting the system TUN. A temporary core exposes private
+candidate-specific proxies; the probes have no direct fallback and do not
+inherit split routing. Desktop TUIC remains a manual choice.
+
+Android does not wait for that comparison. It connects at once to the ranked
+choice (fresh full-route measurements of the same network first, then the
+bootstrap score below) and runs the same full comparison right afterwards
+through the private candidate proxies of the running core, including the
+prepared native TUIC proxies. A confirmed, data-verified different winner is
+installed for new flows without the quiet window, since a fresh connection
+has little to keep in place; the regular live rounds follow. Before this the
+measurement ran ahead of the TUN and every reconnect repeated it, which kept
+Auto on "connecting" for minutes on slow networks. Mobile/allowlist and home-road
 choices keep their existing policies; regular cascades are measured through
 their entry, intermediate hops and exit.
 
@@ -231,7 +240,7 @@ it freezes the last acknowledged main target. Protected/Home/TUIC modes retain
 their existing lifecycle.
 
 Reconnects and network changes can obtain new preflight observations after
-teardown. A failed core, physical network or TUN cannot be repaired through a
+teardown (on Android, the first live round of the new connection). A failed core, physical network or TUN cannot be repaired through a
 balancer override; connection recovery remains a distinct lifecycle operation.
 Planned maintenance and explicit profile/network changes retain their separate
 lifecycle rules and may require a reconnect; they are not fatigue-based Auto
@@ -272,7 +281,10 @@ sites, the protocol is noted as failing and the app moves to the next rung of
 the ladder: the best server of a protocol not yet tried, else the best untried
 server, three moves at most until the user connects again or the network
 changes. In the Anti-Block routing mode the check is skipped, because
-unlisted sites go around the tunnel. Each 64 KB check (not the allowlist one)
+unlisted sites go around the tunnel. On Android a server the user chose is
+checked only when the tunnel sends but hardly receives; a failure is recorded
+the same way, but the server stays and the home screen says the operator
+probably blocks it, offering the automatic choice. Each 64 KB check (not the allowlist one)
 is recorded as a `check` event in [connection telemetry](connection-telemetry.md)
 when the user allows it; a failure only when the phone's own network works.
 Before connecting, the app asks for the [live node load](#live-node-load). The

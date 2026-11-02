@@ -64,6 +64,23 @@ object SmartRouteSelection {
         return best + healthy.keys.filterNot(best::contains).sortedBy { healthy.getValue(it).delayCost }
     }
 
+    /**
+     * At most three routes for the sequential speed test: the lowest delay, the best screening
+     * transfer, and the best one behind another entry, so a shared entry cannot hide an exit.
+     */
+    fun finalists(measurements: Map<String, SmartRouteMeasurement>, resources: Map<String, SmartRouteResource>, entry: (String) -> String?): Set<String> {
+        val passing = measurements.filterValues { it.samplesMs.isNotEmpty() }
+        val healthy = passing.filterKeys { resources[it]?.overloaded != true }.ifEmpty { passing }
+        val ordered = healthy.keys.sortedBy { healthy.getValue(it).delayCost }
+        val finalists = linkedSetOf<String>()
+        ordered.firstOrNull()?.let(finalists::add)
+        healthy.maxByOrNull { it.value.screeningMbps ?: 0.0 }?.key?.let(finalists::add)
+        val firstEntry = ordered.firstOrNull()?.let(entry)
+        ordered.firstOrNull { entry(it) != firstEntry && it !in finalists }?.let(finalists::add)
+        ordered.firstOrNull { it !in finalists }?.takeIf { finalists.size < 3 }?.let(finalists::add)
+        return finalists
+    }
+
     /** Round-robin topology/protocol diversity; an entry's fast SYN cannot monopolize the probe budget. */
     fun candidates(servers: List<TunnelServer>): List<TunnelServer> {
         val groups = servers.groupBy { it.syncHost() ?: it.id }.values.map { entry ->

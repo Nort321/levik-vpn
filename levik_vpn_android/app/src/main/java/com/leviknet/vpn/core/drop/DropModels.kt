@@ -72,6 +72,7 @@ data class DropTransferView(
     val finishedAtMs: Long?,
     /** Available after the handshake, before the sender confirms and releases the manifest. */
     val verificationCode: String? = null,
+    val route: String? = null,
 )
 
 data class DropQuota(val limitBytes: Long, val usedBytes: Long, val resetsAtMs: Long)
@@ -83,8 +84,8 @@ data class DropSnapshot(
     val devices: List<DropDevice> = emptyList(),
     val transfers: List<DropTransferView> = emptyList(),
     val quota: DropQuota? = null,
-    val maxFiles: Int = DropWire.MAX_FILES,
-    val maxBytes: Long = DropWire.MAX_TOTAL,
+    val maxFiles: Int = 20,
+    val maxBytes: Long = 2L * 1024 * 1024 * 1024,
     /** Where received files go; null on Android 9 and older until the user picks a folder. */
     val folder: String? = null,
     /** The website's error code of the last failed refresh, "network" or null. */
@@ -95,7 +96,7 @@ data class DropSnapshot(
 
 enum class DropAnswer { ACCEPT, DECLINE, CONFIRM, REJECT }
 
-enum class DropAction { PAUSE, RESUME, CANCEL }
+enum class DropAction { PAUSE, RESUME, RELAY, CANCEL }
 
 /** What the app tells the user outside its screen. */
 sealed class DropNotice {

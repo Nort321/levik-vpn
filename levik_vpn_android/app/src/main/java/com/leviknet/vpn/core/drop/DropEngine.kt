@@ -94,8 +94,8 @@ class DropEngine(
     private var available = false
     private var loadedAt: Long? = null
     private var quota: DropQuota? = null
-    private var maxFiles = DropWire.MAX_FILES
-    private var maxBytes = DropWire.MAX_TOTAL
+    private var maxFiles = 20
+    private var maxBytes = 2L * 1024 * 1024 * 1024
     private var error: String? = null
     private val links = mutableMapOf<String, RelayLink>()
     private val live = mutableMapOf<String, Live>()
@@ -114,6 +114,8 @@ class DropEngine(
     val notices: SharedFlow<DropNotice> = mutableNotices.asSharedFlow()
 
     private class WebTransfer(
+        val protocol: Int,
+        val route: String,
         val id: String,
         val sender: Boolean,
         val peerDeviceId: String,
@@ -315,14 +317,14 @@ class DropEngine(
         val generation = epoch
         load()
         requireCurrent(generation)
-        if (web.values.any { it.state.open }) throw DropUserError(DropUserError.Kind.BUSY)
         val unique = refs.distinct()
         if (unique.isEmpty()) throw DropUserError(DropUserError.Kind.NOTHING)
-        if (unique.size > maxFiles) throw DropUserError(DropUserError.Kind.TOO_MANY_FILES, maxFiles.toString())
         val files = sources.describe(unique)
         requireCurrent(generation)
-        val total = files.sumOf(SourceFile::size)
-        if (total > maxBytes) throw DropUserError(DropUserError.Kind.TOO_LARGE)
+        val total = files.fold(0L) { total, file ->
+            if (file.size < 0 || file.size > DropWire.MAX_TOTAL - total) throw DropUserError(DropUserError.Kind.TOO_LARGE)
+            total + file.size
+        }
         creating++
         try {
             val response = api.create(deviceId, files.size, total)
@@ -375,6 +377,15 @@ class DropEngine(
                 }
                 stopLink(id)
                 step(id, "pause", "user")
+            }
+            DropAction.RELAY -> {
+                val transfer = web[id] ?: throw DropUserError(DropUserError.Kind.STALE)
+                if (transfer.state != DropState.PAUSED || transfer.protocol != 2) throw DropUserError(DropUserError.Kind.STALE)
+                step(id, "route_relay")
+                if (web[id]?.route != "relay") throw DropUserError(DropUserError.Kind.BAD_RESPONSE)
+                resuming += id
+                ensureLink(id)
+                changed()
             }
             DropAction.RESUME -> {
                 resuming += id
@@ -488,7 +499,7 @@ class DropEngine(
                         StoredReceiver(
                             id = transfer.id,
                             peerDeviceId = transfer.peerDeviceId,
-                            decision = if (transfer.state == DropState.OFFERED) null else ACCEPTED,
+                            decision = if (transfer.protocol == 2 || transfer.state == DropState.OFFERED) null else ACCEPTED,
                         ),
                     )
                 } else if (stored is StoredReceiver && stored.decision == DECLINED) {
@@ -676,12 +687,34 @@ class DropEngine(
             },
             progress = { done -> if (current(generation)) progress(id, done) },
         )
+        fun configure(work: SessionWork) {
+            if (transfer.protocol != 2) return
+            work.route = transfer.route
+            work.expectedFiles = transfer.fileCount
+            work.expectedBytes = transfer.totalBytes
+            work.selectRoute = { path ->
+                val route = if (path == SessionPath.LAN) "lan" else "relay"
+                if (transfer.route == route) true else {
+                    try {
+                        step(id, if (path == SessionPath.LAN) "route_lan" else "route_relay")
+                        if (web[id]?.route != route) throw DropUserError(DropUserError.Kind.BAD_RESPONSE)
+                        path == SessionPath.LAN
+                    } catch (failure: Exception) {
+                        if (failure is CancellationException) throw failure
+                        stopLink(id)
+                        error = if (path == SessionPath.RELAY) "lan_required" else errorCode(failure) ?: NETWORK
+                        step(id, "pause", "lan")
+                        false
+                    }
+                }
+            }
+        }
         if (stored is StoredSender) {
-            return SenderWork(id, own, PLATFORM, transfer.peerPlatform, trust, allowLan, events, confirm, stored.files, sources)
+            return SenderWork(id, own, PLATFORM, transfer.peerPlatform, trust, allowLan && !(transfer.protocol == 2 && transfer.route == "relay"), events, confirm, stored.files, sources).also(::configure)
         }
         stored as StoredReceiver
         return ReceiverWork(
-            id, own, PLATFORM, transfer.peerPlatform, trust, allowLan, events, confirm,
+            id, own, PLATFORM, transfer.peerPlatform, trust, allowLan && !(transfer.protocol == 2 && transfer.route == "relay"), events, confirm,
             manifest = stored.manifest,
             targets = targetFilesFor(stored),
             decide = decide@{ manifest, code, level ->
@@ -707,7 +740,7 @@ class DropEngine(
                 }
                 files
             },
-        )
+        ).also(::configure)
     }
 
     private fun targetFilesFor(stored: StoredReceiver): TargetFiles? {
@@ -791,6 +824,11 @@ class DropEngine(
         try {
             when (outcome) {
                 is SessionOutcome.Lost -> {
+                    if (outcome.lanBroke && web[id]?.protocol == 2) {
+                        stopLink(id)
+                        step(id, "pause", "lan")
+                        return
+                    }
                     if (!outcome.detail.startsWith("protocol")) return
                     val failures = (protocolFailures[id] ?: 0) + 1
                     protocolFailures[id] = failures
@@ -901,6 +939,7 @@ class DropEngine(
             doneBytes = minOf(done, transfer.totalBytes),
             bytesPerSecond = rate.takeIf { transfer.state.open },
             path = state?.path,
+            route = transfer.route.takeIf { transfer.protocol == 2 },
             link = if (links.containsKey(transfer.id)) state?.link ?: LinkStatus.CONNECTING else null,
             prompt = prompts[transfer.id]?.prompt,
             folder = (stored as? StoredReceiver)?.folder,
@@ -976,7 +1015,11 @@ class DropEngine(
             val createdAt = time(obj["createdAt"]) ?: return null
             val fileCount = number(obj["fileCount"]) ?: return null
             val totalBytes = number(obj["totalBytes"]) ?: return null
+            if (fileCount !in 1..DropWire.MAX_FILES.toLong() || totalBytes !in 0..DropWire.MAX_TOTAL) return null
+            if (number(obj["protocol"]) == 2L && text(obj["route"]) !in setOf("auto", "lan", "relay")) return null
             return WebTransfer(
+                protocol = if (number(obj["protocol"]) == 2L) 2 else 1,
+                route = text(obj["route"])?.takeIf { it in setOf("auto", "lan", "relay") } ?: "relay",
                 id = id,
                 sender = sender,
                 peerDeviceId = peerDeviceId,

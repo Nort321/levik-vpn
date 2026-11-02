@@ -59,6 +59,8 @@ data class VpnSnapshot(
     val mainSelectionCertain: Boolean = true,
     val hotSwitch: HotSwitchSnapshot? = null,
     val hotSwitchServerIds: Set<String> = emptySet(),
+    /** The server the user chose sends but carries no traffic on this network: likely blocked by the operator. */
+    val trafficBlockedServerId: String? = null,
     internal val ownerGeneration: Long = 0,
     internal val ownerActive: Boolean = false,
 )
