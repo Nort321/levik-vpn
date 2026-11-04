@@ -109,6 +109,7 @@ The app attaches that token to sessions started on the same network.
 | `settings` | booleans only; `batteryUnrestricted` is Android only |
 | `timeline` | at most 200 events, `t` in milliseconds from session start |
 | `end` | present when `final` is `true` |
+| `core` | desktop only, optional: counters of the new Rust core, see [Rust core](#rust-core) |
 
 `node` is the server display name from the subscription, the same for all
 users. `proto` is one of `vless-reality`, `vless-xhttp`, `vless-ws`,
@@ -198,6 +199,39 @@ do not enter the ordinary 64 KiB `check` ranking. A failed mobile check is
 followed by `mobile_check.network_offline` if domestic endpoints on the
 selected physical network also fail. A manually selected mobile server is
 checked for diagnostics but retains the existing manual selection behavior.
+
+## Rust core
+
+The desktop apps are moving their connection logic from TypeScript to a
+Rust core one function at a time. While both run side by side, a session
+may carry counters that show whether the two give the same answers:
+
+```json
+"core": {
+  "ver": "0.3.0",
+  "mode": "shadow",
+  "compared": 1204,
+  "differed": 1,
+  "failed": 0,
+  "decided": 0,
+  "fn": { "smartAuto.rankSmart": { "differed": 1, "failed": 0 } }
+}
+```
+
+| Field | Values |
+| --- | --- |
+| `ver` | version of the Rust core module, `major.minor.patch` |
+| `mode` | `shadow` (TypeScript decides, Rust answers in parallel), `rust` (Rust decides, TypeScript is the fallback) or `ts` (Rust is switched off) |
+| `compared` | answers computed by both and compared |
+| `differed` | of those, answers that were not the same |
+| `failed` | calls where the Rust core failed or answered in an unexpected form |
+| `decided` | calls where the Rust answer was used |
+| `fn` | at most 16 functions, by name such as `smartAuto.rankSmart`, that had a difference or a failure, with their counts |
+
+Counters cover the time since the previous session's final report, so every
+call is counted once. Only counts and fixed function names are sent: never
+the inputs, the answers or where in them the answers differed. Apps without
+the Rust core send no `core` field.
 
 ## Retention
 
