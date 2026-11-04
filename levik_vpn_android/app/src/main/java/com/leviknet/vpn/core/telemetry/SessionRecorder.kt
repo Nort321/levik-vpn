@@ -261,7 +261,8 @@ class SessionRecorder(
             pendingWhitelistDiagnostic = diagnostic
             return
         }
-        val probes = diagnostic.probes.filter { it.id in WHITELIST_PROBES }.distinctBy { it.id }
+        // Learning candidates are not part of the decision this timeline explains.
+        val probes = diagnostic.probes.filter { !it.candidate && it.id in WHITELIST_PROBES }.distinctBy { it.id }
         // Time jitter alone must not fill the bounded timeline with repeated scans.
         val changed = probes.filter { lastWhitelistProbes[it.id] != whitelistProbeState(it) }
         val elapsed = elapsedMs()

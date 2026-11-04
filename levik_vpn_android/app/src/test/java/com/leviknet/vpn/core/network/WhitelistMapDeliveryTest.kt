@@ -35,8 +35,14 @@ class WhitelistMapDeliveryTest {
         fun region(token: String = "signed-token", ttl: Long = 60_000) = WhitelistMapResponse(
             200, "{\"token\":\"$token\",\"expiresAt\":${wall + ttl}}",
         )
+        var outcomes: Map<String, String> = emptyMap()
+        var scopes = mutableListOf<AllowlistProbeScope?>()
         suspend fun collect(network: String? = "cellular-A", detect: () -> WhitelistMode = { WhitelistMode.ACTIVE }) {
-            delivery.collect(network, { current }) { detections++; detect() }
+            delivery.collect(network, { current }) { scope ->
+                detections++
+                scopes += scope
+                WhitelistObservation(detect(), outcomes)
+            }
         }
     }
 
@@ -232,5 +238,36 @@ class WhitelistMapDeliveryTest {
         assertEquals(2, f.detections)
         assertFalse(f.calls.any { it.body?.contains("\"signal\":\"active\"") == true })
         assertTrue(f.calls.all { it.body?.contains("\"signal\":\"inactive\"") == true })
+    }
+
+    @Test fun probeOutcomesTravelWithTheReportAndScopeComesFromTheToken() = runTest {
+        val f = Fixture()
+        val claims = java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString("{\"region\":\"RU-KOS\",\"source\":\"x\",\"epoch\":1,\"asn\":3216}".toByteArray())
+        val token = "$claims.signature"
+        f.handler = { call -> if (call.operation == WhitelistMapOperation.REGION) f.region(token) else WhitelistMapResponse(204) }
+        f.outcomes = mapOf("gosuslugi" to "ok", "Bad Id" to "ok", "github" to "short_body")
+        f.collect()
+        assertEquals(listOf(AllowlistProbeScope("RU-KOS", 3216)), f.scopes)
+        assertEquals(
+            "{\"token\":\"$token\",\"signal\":\"active\",\"transport\":\"cellular\",\"probes\":{\"gosuslugi\":\"ok\",\"github\":\"short_body\"}}",
+            f.calls[1].body,
+        )
+    }
+
+    @Test fun relayWithoutProbeSupportStillGetsThePlainReport() = runTest {
+        val f = Fixture()
+        f.outcomes = mapOf("gosuslugi" to "ok")
+        f.handler = { call ->
+            when {
+                call.operation == WhitelistMapOperation.REGION -> f.region()
+                call.body!!.contains("probes") -> WhitelistMapResponse(400)
+                else -> WhitelistMapResponse(204)
+            }
+        }
+        f.collect()
+        assertEquals(3, f.calls.size)
+        assertEquals("{\"token\":\"signed-token\",\"signal\":\"active\",\"transport\":\"cellular\"}", f.calls[2].body)
+        assertEquals(f.calls[1].channel, f.calls[2].channel)
     }
 }

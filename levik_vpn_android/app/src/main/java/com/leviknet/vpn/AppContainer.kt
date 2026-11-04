@@ -1,12 +1,18 @@
 package com.leviknet.vpn
 
 import android.app.Application
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.telephony.TelephonyManager
 import com.leviknet.vpn.core.drop.AndroidDropFolders
 import com.leviknet.vpn.core.drop.ContentDropSources
 import com.leviknet.vpn.core.drop.DropEngine
 import com.leviknet.vpn.core.drop.KeystoreDropIdentity
 import com.leviknet.vpn.core.drop.RepositoryDropApi
 import com.leviknet.vpn.core.drop.SecureDropSecrets
+import com.leviknet.vpn.core.network.AllowlistProbeCatalogStore
+import com.leviknet.vpn.core.network.AllowlistScopeMemory
 import com.leviknet.vpn.core.network.AppAttestationPolicy
 import com.leviknet.vpn.core.network.CensorshipRadarWorker
 import com.leviknet.vpn.core.network.MobileApiClient
@@ -92,9 +98,30 @@ class AppContainer(application: Application) {
         scope = nativeCleanupScope,
         interruptedEnd = processExitResolver(application),
     )
-    val whitelistDetector = WhitelistDetector(application) { diagnostic ->
+    /** Signed, self-learning allowlist probe sets, docs/whitelist-probes.md. */
+    val allowlistProbes = AllowlistProbeCatalogStore(File(application.noBackupFilesDir, "allowlist-probes.json"))
+    val allowlistScopes = AllowlistScopeMemory(File(application.noBackupFilesDir, "allowlist-scope.json"))
+
+    /** MCC+MNC of the serving mobile network; needs no permission. */
+    fun mobileOperatorCode(): String? = runCatching {
+        appContext.getSystemService(TelephonyManager::class.java)?.networkOperator
+    }.getOrNull()?.takeIf { it.isNotBlank() }
+
+    val whitelistDetector = WhitelistDetector(
+        context = application,
+        catalog = allowlistProbes::current,
+        scopeOf = { network ->
+            // The region is known for mobile data only; Wi-Fi keeps the national set.
+            if (whitelistDetectorIsCellular(network)) allowlistScopes.scopeFor(mobileOperatorCode()) else null
+        },
+    ) { diagnostic ->
         connectionTelemetry.record { it.whitelistDetection(diagnostic) }
     }
+
+    private fun whitelistDetectorIsCellular(network: Network): Boolean =
+        appContext.getSystemService(ConnectivityManager::class.java)
+            ?.getNetworkCapabilities(network)
+            ?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true
 
     /** Signed list of Levik hosts; read before the first request. */
     private val serviceEndpoints = ServiceEndpointsStore(File(application.noBackupFilesDir, "service-endpoints.json"))
@@ -204,10 +231,12 @@ class AppContainer(application: Application) {
 
     init {
         nativeCleanupScope.launch {
+            allowlistProbes.load()
             if (APP_CATALOG_ENABLED) appCatalog.load()
             while (true) {
                 serviceEndpoints.refreshIfDue(ENDPOINTS_REFRESH_MS)
                 if (APP_CATALOG_ENABLED) appCatalog.refreshIfDue(ENDPOINTS_REFRESH_MS)
+                allowlistProbes.refreshIfDue()
                 delay(ENDPOINTS_CHECK_MS)
             }
         }

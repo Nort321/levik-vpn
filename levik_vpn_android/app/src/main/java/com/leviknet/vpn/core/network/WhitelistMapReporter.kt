@@ -39,7 +39,11 @@ class WhitelistMapReporter(context: Context, private val settings: AppSettings) 
 
     suspend fun clear() = mutex.withLock { delivery.clear() }
 
-    suspend fun collect(detector: WhitelistDetector) = mutex.withLock {
+    /** [rememberScope] keeps the token's region and operator so the detector uses them between reports. */
+    suspend fun collect(
+        detector: WhitelistDetector,
+        rememberScope: (AllowlistProbeScope) -> Unit = {},
+    ) = mutex.withLock {
         if (!settings.whitelistMapEnabled.value) { delivery.clear(); return@withLock }
         withContext(Dispatchers.IO) {
             try {
@@ -47,8 +51,13 @@ class WhitelistMapReporter(context: Context, private val settings: AppSettings) 
                 currentNetworkCheck = {
                     network != null && detector.directNetwork() == network && isCellularNetwork(network)
                 }
-                delivery.collect(network, currentNetworkCheck) {
-                    if (network == null) WhitelistMode.UNKNOWN else detector.detect(network, forceRefresh = true)
+                delivery.collect(network, currentNetworkCheck) { scope ->
+                    if (network == null) {
+                        WhitelistObservation(WhitelistMode.UNKNOWN, emptyMap())
+                    } else {
+                        scope?.let(rememberScope)
+                        detector.observe(network, scope)
+                    }
                 }
             } catch (error: Exception) {
                 if (error is CancellationException) throw error

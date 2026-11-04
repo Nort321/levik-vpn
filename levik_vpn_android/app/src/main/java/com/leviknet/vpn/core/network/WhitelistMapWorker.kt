@@ -6,6 +6,8 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.leviknet.vpn.LevikVpnApplication
 import java.util.concurrent.TimeUnit
 
@@ -13,7 +15,11 @@ class WhitelistMapWorker(context: Context, params: WorkerParameters) : Coroutine
     override suspend fun doWork(): Result {
         val container = (applicationContext as? LevikVpnApplication)?.container ?: return Result.success()
         if (container.settings.whitelistMapEnabled.value) {
-            container.whitelistMapReporter.collect(container.whitelistDetector)
+            // Anonymous GET of the signed probe catalog; at most every 6 hours.
+            withContext(Dispatchers.IO) { container.allowlistProbes.refreshIfDue() }
+            container.whitelistMapReporter.collect(container.whitelistDetector) { scope ->
+                container.allowlistScopes.remember(container.mobileOperatorCode(), scope)
+            }
         } else {
             container.whitelistMapReporter.clear()
         }

@@ -327,7 +327,17 @@ allowlists and stalls the transfer after a few kilobytes. The foreign sites
 (Cloudflare, Fastly, OVH, GitHub, Wikipedia) have no caches inside Russian
 operators. Allowlists are on when at least two domestic sites answer and at
 most one foreign site delivers; the internet is open only when most foreign
-sites (three of five) deliver; anything else is unknown and changes nothing. It probes on every network change, then every 30 seconds, every 2 minutes after
+sites (three of five) deliver; anything else is unknown and changes nothing.
+The sites are not fixed: allowlists differ by region and operator, so the app
+uses a signed probe catalog (`GET /api/mobile/v1/allowlist-probes`, ECDSA P-256,
+refreshed every 6 hours, also through the LTE CDN path). It picks the set of its
+region and operator, read from the anonymous map token, then the region's, then
+the national one; it falls back to the built-in sites when the catalog is
+missing, expired or fails verification, and refuses catalogs whose foreign
+sites would count under 16 KB. Each map report also measures up to four other
+sites on the side, which never change the answer, and sends every probe's
+outcome with the report, so the server learns which sites open under allowlists
+where. It probes on every network change, then every 30 seconds, every 2 minutes after
 two equal answers, and every 5 minutes after two more (2 minutes at most on a
 mobile server, whose traffic is limited). A changed answer, a new network, a
 failing health check or a tunnel that looks frozen starts over at 30 seconds.

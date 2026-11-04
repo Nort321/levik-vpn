@@ -54,6 +54,8 @@ data class WhitelistProbeDiagnostic(
     val elapsedMs: Long,
     val receivedBytes: Int,
     val httpStatus: Int?,
+    /** Measured for the server's learning only; never part of the decision. */
+    val candidate: Boolean = false,
 ) {
     val reachable: Boolean get() = outcome == WhitelistProbeOutcome.OK
 }
@@ -62,6 +64,13 @@ data class WhitelistDetectionDiagnostic(
     val mode: WhitelistMode,
     val elapsedMs: Long,
     val probes: List<WhitelistProbeDiagnostic>,
+)
+
+/** A forced measurement for the anonymous map: the mode and every probe's outcome. */
+data class WhitelistObservation(
+    val mode: WhitelistMode,
+    /** Probe id → [WhitelistProbeOutcome.wire]; decision probes and candidates. */
+    val outcomes: Map<String, String>,
 )
 
 internal data class WhitelistProbeResult(
@@ -115,9 +124,14 @@ internal fun classifyWhitelistMode(results: List<WhitelistProbeResult>): Whiteli
     }
 }
 
-/** Detects provider allow-list mode on the physical network without routing probes through VPN. */
+/**
+ * Detects provider allow-list mode on the physical network without routing probes through VPN.
+ * The probe set comes from the signed catalog, chosen by the network's region and operator.
+ */
 class WhitelistDetector(
     context: Context,
+    private val catalog: () -> AllowlistProbeCatalog = { AllowlistProbeCatalog.BUILT_IN },
+    private val scopeOf: (Network) -> AllowlistProbeScope? = { null },
     private val onDiagnostic: (WhitelistDetectionDiagnostic) -> Unit = {},
 ) {
     private val connectivityManager =
@@ -127,6 +141,7 @@ class WhitelistDetector(
     private var cachedNetwork: Network? = null
     private var cachedAtElapsedMs = 0L
     private var cachedMode = WhitelistMode.UNKNOWN
+    private var cachedSet: String? = null
 
     suspend fun detect(forceRefresh: Boolean = false): WhitelistMode {
         val network = directNetwork() ?: return WhitelistMode.UNKNOWN
@@ -136,21 +151,48 @@ class WhitelistDetector(
     suspend fun detect(
         network: Network,
         forceRefresh: Boolean,
-    ): WhitelistMode = detectionMutex.withLock {
+    ): WhitelistMode = measure(network, forceRefresh, scopeOf(network), candidates = 0).mode
+
+    /**
+     * A fresh measurement with [scope] (from the map's region token) plus a few candidate
+     * sites for the server's learning. The candidates never change the answer.
+     */
+    suspend fun observe(network: Network, scope: AllowlistProbeScope?): WhitelistObservation {
+        val diagnostic = measure(network, forceRefresh = true, scope = scope, candidates = MAX_REPORTED_PROBES)
+        return WhitelistObservation(
+            mode = diagnostic.mode,
+            outcomes = diagnostic.probes.take(MAX_REPORTED_PROBES).associate { it.id to it.outcome.wire },
+        )
+    }
+
+    private suspend fun measure(
+        network: Network,
+        forceRefresh: Boolean,
+        scope: AllowlistProbeScope?,
+        candidates: Int,
+    ): WhitelistDetectionDiagnostic = detectionMutex.withLock {
         val now = SystemClock.elapsedRealtime()
-        if (!forceRefresh && network == cachedNetwork && cachedMode != WhitelistMode.UNKNOWN && now - cachedAtElapsedMs < CACHE_TTL_MS) {
-            return@withLock cachedMode
+        val probeCatalog = catalog()
+        val set = "${probeCatalog.sequence}:${probeCatalog.setNameFor(scope)}"
+        if (!forceRefresh && network == cachedNetwork && set == cachedSet && cachedMode != WhitelistMode.UNKNOWN &&
+            now - cachedAtElapsedMs < CACHE_TTL_MS
+        ) {
+            return@withLock WhitelistDetectionDiagnostic(cachedMode, 0L, emptyList())
         }
+        val decisive = probeCatalog.probesFor(scope)
+        val extra = probeCatalog.candidatesFor(scope, minOf(MAX_CANDIDATES, candidates - decisive.size))
 
         // Every probe has its own deadline, so a slow one never discards the others' answers.
         val probes = coroutineScope {
-            PROBES.map { probe ->
-                async { reachable(network, probe) }
-            }.awaitAll()
-        }
-        val mode = classifyWhitelistMode(probes.map { WhitelistProbeResult(it.id, it.domestic, it.reachable) })
+            decisive.map { probe -> async { reachable(network, probe, candidate = false) } } +
+                extra.map { probe -> async { reachable(network, probe, candidate = true) } }
+        }.awaitAll()
+        val mode = classifyWhitelistMode(
+            probes.filterNot(WhitelistProbeDiagnostic::candidate).map { WhitelistProbeResult(it.id, it.domestic, it.reachable) },
+        )
         currentCoroutineContext().ensureActive()
 
+        cachedSet = set
         cachedNetwork = network
         if (mode != WhitelistMode.UNKNOWN) {
             cachedAtElapsedMs = now
@@ -166,8 +208,9 @@ class WhitelistDetector(
         )
         AppLogger.i(
             "WhitelistDetector",
-            "Allowlists: mode=${mode.name} ms=${diagnostic.elapsedMs}; " + probes.joinToString("; ") {
-                "${it.id}=${it.outcome.wire},ms=${it.elapsedMs},bytes=${it.receivedBytes},http=${it.httpStatus ?: 0}"
+            "Allowlists: mode=${mode.name} ms=${diagnostic.elapsedMs} set=$set; " + probes.joinToString("; ") {
+                (if (it.candidate) "+" else "") +
+                    "${it.id}=${it.outcome.wire},ms=${it.elapsedMs},bytes=${it.receivedBytes},http=${it.httpStatus ?: 0}"
             },
         )
         try {
@@ -178,7 +221,7 @@ class WhitelistDetector(
             // A diagnostic consumer must not change a completed network decision.
             AppLogger.w("WhitelistDetector", "Allowlists: diagnostic consumer unavailable")
         }
-        mode
+        diagnostic
     }
 
     // activeNetwork points at the VPN while connected; enumeration is required to find
@@ -221,8 +264,8 @@ class WhitelistDetector(
      * timeouts, and a blocking call ignores coroutine cancellation. The probe runs on its
      * own and is abandoned at the deadline instead of holding up the answer.
      */
-    private suspend fun reachable(network: Network, probe: Probe): WhitelistProbeDiagnostic {
-        val progress = ProbeProgress()
+    private suspend fun reachable(network: Network, probe: AllowlistProbe, candidate: Boolean): WhitelistProbeDiagnostic {
+        val progress = ProbeProgress(candidate)
         val attempt = probeScope.async { probe(network, probe, progress) }
         return try {
             withTimeoutOrNull(PROBE_DEADLINE_MS) { attempt.await() }
@@ -237,7 +280,7 @@ class WhitelistDetector(
 
     private fun probe(
         network: Network,
-        probe: Probe,
+        probe: AllowlistProbe,
         progress: ProbeProgress,
     ): WhitelistProbeDiagnostic {
         var conn: HttpURLConnection? = null
@@ -282,15 +325,16 @@ class WhitelistDetector(
         }
     }
 
-    private class ProbeProgress {
+    private class ProbeProgress(private val candidate: Boolean) {
         private val startedAtElapsedMs = SystemClock.elapsedRealtime()
         val connection = AtomicReference<HttpURLConnection?>()
         val receivedBytes = AtomicInteger(0)
         val httpStatus = AtomicInteger(-1)
 
-        fun result(probe: Probe, outcome: WhitelistProbeOutcome) = WhitelistProbeDiagnostic(
+        fun result(probe: AllowlistProbe, outcome: WhitelistProbeOutcome) = WhitelistProbeDiagnostic(
             id = probe.id,
             domestic = probe.domestic,
+            candidate = candidate,
             outcome = outcome,
             elapsedMs = (SystemClock.elapsedRealtime() - startedAtElapsedMs).coerceAtLeast(0L),
             receivedBytes = receivedBytes.get(),
@@ -305,36 +349,17 @@ class WhitelistDetector(
         else -> 0
     } + if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) 10 else 0
 
-    /**
-     * A foreign site counts only after [minBytes] of its body arrive. Some operators
-     * (Beeline) let a TLS handshake and a tiny answer through under allowlists and
-     * stall the transfer after a few kilobytes, so a status code alone means nothing.
-     */
-    private data class Probe(
-        val id: String,
-        val url: String,
-        val domestic: Boolean,
-        val minBytes: Int = 0,
-    )
+    // A foreign site counts only after AllowlistProbe.minBytes of its body arrive. Some
+    // operators (Beeline) let a TLS handshake and a tiny answer through under allowlists
+    // and stall the transfer after a few kilobytes, so a status code alone means nothing.
 
     companion object {
         // A congested mobile network can take a few seconds for one TLS handshake and 32 KB.
         private const val SOCKET_TIMEOUT_MS = 4_000
         private const val PROBE_DEADLINE_MS = 6_000L
         private const val CACHE_TTL_MS = 60_000L
-        private const val FOREIGN_MIN_BYTES = 32 * 1024
-
-        // Foreign hosts with their own networks: no caches inside Russian operators.
-        private val PROBES = listOf(
-            Probe("ozon", "https://www.ozon.ru/", domestic = true),
-            Probe("yandex", "https://ya.ru/", domestic = true),
-            Probe("avito", "https://www.avito.ru/", domestic = true),
-            Probe("vk", "https://vk.com/", domestic = true),
-            Probe("cloudflare", "https://speed.cloudflare.com/__down?bytes=$FOREIGN_MIN_BYTES", domestic = false, FOREIGN_MIN_BYTES),
-            Probe("mozilla", "https://www.mozilla.org/en-US/", domestic = false, FOREIGN_MIN_BYTES),
-            Probe("ovh", "https://proof.ovh.net/files/1Mb.dat", domestic = false, FOREIGN_MIN_BYTES),
-            Probe("github", "https://github.com/", domestic = false, FOREIGN_MIN_BYTES),
-            Probe("wikipedia", "https://www.wikipedia.org/", domestic = false, FOREIGN_MIN_BYTES),
-        )
+        /** A map report carries at most this many probe outcomes (server limit 16). */
+        internal const val MAX_REPORTED_PROBES = 16
+        private const val MAX_CANDIDATES = 4
     }
 }
