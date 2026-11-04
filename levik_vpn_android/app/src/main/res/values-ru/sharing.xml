@@ -1,8 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="sharing_title">Поделиться VPN</string>
-    <string name="sharing_subtitle">Раздайте подключение Android-телефона находящимся рядом устройствам. Root не нужен.</string>
-    <string name="sharing_open">Поделиться VPN / подключиться к телефону</string>
+    <string name="sharing_chip">Раздать VPN</string>
+    <string name="sharing_profile_body">Раздайте VPN через точку доступа или получите интернет от другого телефона</string>
+    <string name="sharing_active_title">Раздача VPN включена</string>
+    <string name="sharing_hotspot_hint_title">Точка доступа включена</string>
+    <string name="sharing_hotspot_hint_body">Нажмите, чтобы раздать через неё VPN</string>
+    <string name="sharing_hint_dismiss">Скрыть подсказку</string>
     <string name="sharing_receive">Получить интернет от телефона</string>
     <string name="sharing_receive_short">Получить</string>
     <string name="sharing_host_short">Раздать</string>

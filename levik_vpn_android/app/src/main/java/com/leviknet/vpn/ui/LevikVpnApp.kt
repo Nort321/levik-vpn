@@ -245,6 +245,11 @@ fun LevikVpnApp(viewModel: AppViewModel) {
     var showActivationScanner by remember { mutableStateOf(false) }
     var showSharing by remember { mutableStateOf(false) }
     var showSharingScanner by remember { mutableStateOf(false) }
+    val tetheringActive = !BuildConfig.IS_PLAY_DISTRIBUTION && com.leviknet.vpn.ui.sharing.rememberTetheringActive()
+    var sharingHintDismissed by rememberSaveable { mutableStateOf(false) }
+    // A dismissed hint comes back the next time the hotspot is switched on.
+    LaunchedEffect(tetheringActive) { if (!tetheringActive) sharingHintDismissed = false }
+    val sharingVpnConnected = state.vpn.state == VpnConnectionState.CONNECTED
     var sharingInvitation by remember { mutableStateOf<String?>(null) }
     var selectedSubscriptionForDevices by remember { mutableStateOf<SubscriptionSummary?>(null) }
     var showClearTrafficHistoryDialog by remember { mutableStateOf(false) }
@@ -414,10 +419,25 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     onSettingsSyncChanged = viewModel::setSettingsSyncEnabled,
                     onSharePresenceChanged = viewModel::setSharePresence,
                     onSleepAtHomeChanged = viewModel::setSleepAtHome,
-                    sharingCard = {
-                        if (!BuildConfig.IS_PLAY_DISTRIBUTION) com.leviknet.vpn.ui.sharing.SharingEntryCard(sharing) { showSharing = true }
+                    sharingBanner = {
+                        if (!BuildConfig.IS_PLAY_DISTRIBUTION) {
+                            com.leviknet.vpn.ui.sharing.SharingHomeBanner(
+                                snapshot = sharing,
+                                hotspotHint = tetheringActive && sharingVpnConnected && !sharingHintDismissed,
+                                onOpen = { showSharing = true },
+                                onDismissHint = { sharingHintDismissed = true },
+                            )
+                        }
+                    },
+                    sharingChip = {
+                        if (!BuildConfig.IS_PLAY_DISTRIBUTION && sharingVpnConnected && sharing.host == null) {
+                            com.leviknet.vpn.ui.sharing.SharingChip { showSharing = true }
+                        }
                     },
                     remoteDevices = {
+                        if (!BuildConfig.IS_PLAY_DISTRIBUTION) {
+                            com.leviknet.vpn.ui.sharing.SharingProfileEntry(sharing) { showSharing = true }
+                        }
                         if (viewModel.rules.enabled) {
                             com.leviknet.vpn.ui.rules.RulesEntryCard(onClick = viewModel.rules::open)
                         }
@@ -1595,7 +1615,8 @@ private fun MainContent(
     onSettingsSyncChanged: (Boolean) -> Unit,
     onSharePresenceChanged: (Boolean) -> Unit,
     onSleepAtHomeChanged: (Boolean) -> Unit,
-    sharingCard: @Composable () -> Unit = {},
+    sharingBanner: @Composable () -> Unit = {},
+    sharingChip: @Composable () -> Unit = {},
     remoteDevices: @Composable () -> Unit = {},
     /** LevikDrop above the tab bar, on every tab. */
     dropDock: @Composable () -> Unit = {},
@@ -1641,7 +1662,8 @@ private fun MainContent(
                 onAutomaticServer = onAutomaticServer,
                 onDismissAnnouncement = onDismissAnnouncement,
                 onOpenAnnouncementLink = onOpenAnnouncementLink,
-                sharingCard = sharingCard,
+                sharingBanner = sharingBanner,
+                sharingChip = sharingChip,
             )
             AppTab.SERVERS -> ServersScreen(
                 modifier = contentModifier,
@@ -2025,7 +2047,9 @@ private fun HomeScreen(
     onAutomaticServer: () -> Unit,
     onDismissAnnouncement: (String) -> Unit,
     onOpenAnnouncementLink: (String) -> Unit,
-    sharingCard: @Composable () -> Unit = {},
+    /** Hotspot hint or active-sharing status; emits nothing (not even spacing) otherwise. */
+    sharingBanner: @Composable () -> Unit = {},
+    sharingChip: @Composable () -> Unit = {},
 ) {
     val selectedServer = state.profile?.servers?.firstOrNull {
         it.id == displayedServerId(state)
@@ -2071,8 +2095,7 @@ private fun HomeScreen(
                 }
             }
         }
-        Spacer(Modifier.height(12.dp))
-        sharingCard()
+        sharingBanner()
         state.announcements.forEach { announcement ->
             Spacer(Modifier.height(12.dp))
             AnnouncementBanner(
@@ -2259,6 +2282,7 @@ private fun HomeScreen(
                     }
                 }
             }
+            sharingChip()
         }
 
         if (trialAvailable) {

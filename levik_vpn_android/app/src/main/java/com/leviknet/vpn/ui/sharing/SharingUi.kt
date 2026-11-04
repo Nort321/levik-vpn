@@ -1,23 +1,29 @@
 package com.leviknet.vpn.ui.sharing
 
+import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.os.PersistableBundle
 import android.provider.Settings
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -26,6 +32,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -33,6 +41,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -44,14 +53,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringArrayResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.SecureFlagPolicy
+import androidx.core.content.ContextCompat
 import com.leviknet.vpn.R
 import com.leviknet.vpn.core.sharing.SharingController
 import com.leviknet.vpn.core.sharing.SharingInvitation
@@ -59,6 +71,7 @@ import com.leviknet.vpn.core.sharing.SharingNetworks
 import com.leviknet.vpn.core.sharing.SharingSnapshot
 import com.leviknet.vpn.core.sharing.SharingStateStore
 import com.leviknet.vpn.ui.activationQrBitmap
+import com.leviknet.vpn.ui.theme.LevikBlue
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Proxy
@@ -69,17 +82,131 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/** Live system tethering (hotspot/USB) state; false when the OS does not report it. */
 @Composable
-fun SharingEntryCard(snapshot: SharingSnapshot, onClick: () -> Unit) {
-    Surface(onClick = onClick, shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainer,
-        modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(stringResource(R.string.sharing_open), fontWeight = FontWeight.SemiBold)
-            Text(when {
-                snapshot.guest != null -> stringResource(R.string.sharing_guest_active, snapshot.guest.name)
-                snapshot.host != null -> stringResource(if (snapshot.host.ready) R.string.sharing_ready else R.string.sharing_not_ready)
-                else -> stringResource(R.string.sharing_subtitle)
-            }, style = MaterialTheme.typography.bodySmall)
+fun rememberTetheringActive(): Boolean {
+    val context = LocalContext.current.applicationContext
+    var active by remember { mutableStateOf(false) }
+    DisposableEffect(context) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                active = SharingNetworks.isTethering(intent)
+            }
+        }
+        // Sent by the tethering module, not by our app, so it must be exported. A spoofed
+        // broadcast can only toggle the dismissible hint; sharing itself re-validates addresses.
+        val sticky = ContextCompat.registerReceiver(
+            context, receiver, IntentFilter(SharingNetworks.TETHER_STATE_CHANGED), ContextCompat.RECEIVER_EXPORTED,
+        )
+        active = SharingNetworks.isTethering(sticky)
+        onDispose { runCatching { context.unregisterReceiver(receiver) } }
+    }
+    return active
+}
+
+/** Home banner: shown only while sharing runs or the hotspot is on and VPN is connected. */
+@Composable
+fun SharingHomeBanner(snapshot: SharingSnapshot, hotspotHint: Boolean, onOpen: () -> Unit, onDismissHint: () -> Unit) {
+    val host = snapshot.host
+    if (host == null && !hotspotHint) return
+    Spacer(Modifier.height(12.dp))
+    Surface(
+        onClick = onOpen,
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.primaryContainer,
+        border = BorderStroke(1.dp, LevikBlue.copy(alpha = 0.35f)),
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 12.dp, end = if (host == null) 0.dp else 12.dp, top = 10.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(painterResource(R.drawable.ic_hotspot), contentDescription = null, modifier = Modifier.size(18.dp), tint = LevikBlue)
+            Spacer(Modifier.width(8.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    stringResource(
+                        when {
+                            host == null -> R.string.sharing_hotspot_hint_title
+                            host.ready -> R.string.sharing_active_title
+                            else -> R.string.sharing_not_ready
+                        },
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    if (host == null) stringResource(R.string.sharing_hotspot_hint_body)
+                    else stringResource(R.string.sharing_until, time(host.expiresAt)),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (host == null) {
+                IconButton(onClick = onDismissHint) {
+                    Icon(
+                        painterResource(R.drawable.ic_close),
+                        contentDescription = stringResource(R.string.sharing_hint_dismiss),
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Quick chip in the home feature row, next to routing/DoH/Anti-DPI. */
+@Composable
+fun SharingChip(onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+    ) {
+        Row(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                painterResource(R.drawable.ic_hotspot),
+                contentDescription = null,
+                modifier = Modifier.size(15.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                stringResource(R.string.sharing_chip),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+    }
+}
+
+/** Permanent entry in Profile, styled like the Family card next to it. */
+@Composable
+fun SharingProfileEntry(snapshot: SharingSnapshot, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+    ) {
+        Row(Modifier.fillMaxWidth().padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(painterResource(R.drawable.ic_hotspot), contentDescription = null, tint = LevikBlue, modifier = Modifier.size(24.dp))
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(stringResource(R.string.sharing_title), fontWeight = FontWeight.SemiBold)
+                Text(
+                    when (val host = snapshot.host) {
+                        null -> stringResource(R.string.sharing_profile_body)
+                        else -> stringResource(if (host.ready) R.string.sharing_ready else R.string.sharing_not_ready)
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }

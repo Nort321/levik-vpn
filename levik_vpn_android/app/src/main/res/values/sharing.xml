@@ -1,8 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="sharing_title">Share VPN</string>
-    <string name="sharing_subtitle">Share your Android phone’s connection with nearby devices. No root required.</string>
-    <string name="sharing_open">Share VPN / connect to a phone</string>
+    <string name="sharing_chip">Share VPN</string>
+    <string name="sharing_profile_body">Share your VPN over a hotspot or get internet from another phone</string>
+    <string name="sharing_active_title">VPN sharing is on</string>
+    <string name="sharing_hotspot_hint_title">Hotspot is on</string>
+    <string name="sharing_hotspot_hint_body">Tap to share your VPN through it</string>
+    <string name="sharing_hint_dismiss">Hide hint</string>
     <string name="sharing_receive">Get internet from a phone</string>
     <string name="sharing_receive_short">Receive</string>
     <string name="sharing_host_short">Share</string>

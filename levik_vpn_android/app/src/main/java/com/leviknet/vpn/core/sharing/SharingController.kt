@@ -31,6 +31,14 @@ object SharingController {
 }
 
 object SharingNetworks {
+    /** Sticky system broadcast (TetheringManager.ACTION_TETHER_STATE_CHANGED, not public SDK). */
+    const val TETHER_STATE_CHANGED = "android.net.conn.TETHER_STATE_CHANGED"
+    private const val EXTRA_ACTIVE_TETHER = "tetherArray"
+
+    /** Best effort: false when the OS omits the extra, so callers only lose an optional hint. */
+    fun isTethering(intent: Intent?): Boolean =
+        intent?.getStringArrayListExtra(EXTRA_ACTIVE_TETHER)?.any { it.isNotBlank() } == true
+
     private val excluded = Regex("tun|tap|wg|ppp|ipsec|levik|vpn|rmnet|ccmni|pdp|clat|v4-|dummy|lo$", RegexOption.IGNORE_CASE)
     fun localAddresses(): List<String> = runCatching {
         NetworkInterface.getNetworkInterfaces().toList().filter { it.isUp && !it.isLoopback && !excluded.containsMatchIn(it.name) }
