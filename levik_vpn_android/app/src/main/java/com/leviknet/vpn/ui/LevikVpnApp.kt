@@ -243,6 +243,12 @@ fun LevikVpnApp(viewModel: AppViewModel) {
     var showLogsDialog by remember { mutableStateOf(false) }
     var showDevicesDialog by remember { mutableStateOf(false) }
     var showActivationScanner by remember { mutableStateOf(false) }
+    // Device pairing, both ways: DevicePairingUi.kt.
+    var showQrLoginChoice by remember { mutableStateOf(false) }
+    var showPairingCodeEntry by remember { mutableStateOf(false) }
+    var showConnectDevice by remember { mutableStateOf(false) }
+    var showActivationCodeEntry by remember { mutableStateOf(false) }
+    val hasCamera = remember(context) { context.hasCamera() }
     var showSharing by remember { mutableStateOf(false) }
     var showSharingScanner by remember { mutableStateOf(false) }
     val tetheringActive = !BuildConfig.IS_PLAY_DISTRIBUTION && com.leviknet.vpn.ui.sharing.rememberTetheringActive()
@@ -304,7 +310,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     snackbarHostState = snackbarHostState,
                     onTelegramLogin = viewModel::beginTelegramLogin,
                     onWebsiteLogin = viewModel::beginWebsiteLogin,
-                    onQrLogin = { showActivationScanner = true },
+                    onQrLogin = { showQrLoginChoice = true },
                     onReceiveInternet = { showSharing = true },
                     onDeviceTrial = viewModel::activateDeviceTrial,
                     onLteTrial = viewModel::activateLteTrial,
@@ -312,6 +318,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                     onOpenAgain = viewModel::openLoginUriAgain,
                     onOpenTelegram = viewModel::openLoginTelegram,
                     onRetry = viewModel::retryLogin,
+                    onOtherWay = viewModel::cancelLogin,
                     onPrivacyPolicy = viewModel::openPrivacyPolicy,
                 )
                 else -> MainContent(
@@ -365,7 +372,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                             trafficHistoryShareTitle,
                         )
                     },
-                    onScanActivation = { showActivationScanner = true },
+                    onScanActivation = { showConnectDevice = true },
                     onOpenDevices = { sub ->
                         selectedSubscriptionForDevices = sub
                         showDevicesDialog = true
@@ -978,7 +985,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
             onRevokeDevice = viewModel::revokeDevice,
             onScanActivation = {
                 showDevicesDialog = false
-                showActivationScanner = true
+                showConnectDevice = true
             },
             onOpenPlans = {
                 showDevicesDialog = false
@@ -989,6 +996,80 @@ fun LevikVpnApp(viewModel: AppViewModel) {
                 showDevicesDialog = false
                 selectedSubscriptionForDevices = null
             },
+        )
+    }
+
+    if (showQrLoginChoice) {
+        QrLoginChoiceDialog(
+            hasCamera = hasCamera,
+            onShowQr = {
+                showQrLoginChoice = false
+                viewModel.beginQrLogin()
+            },
+            onScan = {
+                showQrLoginChoice = false
+                showActivationScanner = true
+            },
+            onEnterCode = {
+                showQrLoginChoice = false
+                showPairingCodeEntry = true
+            },
+            onDismiss = { showQrLoginChoice = false },
+        )
+    }
+
+    if (showPairingCodeEntry) {
+        PairingCodeDialog(
+            title = stringResource(R.string.pairing_login_code_title),
+            description = stringResource(R.string.pairing_login_code_dialog_description),
+            groups = 3,
+            parse = com.leviknet.vpn.core.auth.ActivationCodeParser::parsePairingCode,
+            onSubmit = { code ->
+                showPairingCodeEntry = false
+                viewModel.claimPairingCode(code)
+            },
+            onDismiss = { showPairingCodeEntry = false },
+        )
+    }
+
+    if (showConnectDevice && state.session == SessionStatus.Authenticated) {
+        ConnectDeviceDialog(
+            hasCamera = hasCamera,
+            onShowQr = {
+                showConnectDevice = false
+                viewModel.showDevicePairing()
+            },
+            onScan = {
+                showConnectDevice = false
+                showActivationScanner = true
+            },
+            onEnterCode = {
+                showConnectDevice = false
+                showActivationCodeEntry = true
+            },
+            onDismiss = { showConnectDevice = false },
+        )
+    }
+
+    if (showActivationCodeEntry && state.session == SessionStatus.Authenticated) {
+        PairingCodeDialog(
+            title = stringResource(R.string.pairing_connect_code_title),
+            description = stringResource(R.string.pairing_connect_code_dialog_description),
+            groups = 4,
+            parse = com.leviknet.vpn.core.auth.ActivationCodeParser::parseTyped,
+            onSubmit = { code ->
+                showActivationCodeEntry = false
+                viewModel.authorizeActivation(code)
+            },
+            onDismiss = { showActivationCodeEntry = false },
+        )
+    }
+
+    state.devicePairing?.takeIf { state.session == SessionStatus.Authenticated }?.let { pairing ->
+        DevicePairingDialog(
+            state = pairing,
+            onRefresh = viewModel::showDevicePairing,
+            onDismiss = viewModel::closeDevicePairing,
         )
     }
 
@@ -1042,7 +1123,7 @@ fun LevikVpnApp(viewModel: AppViewModel) {
             onAction = { action ->
                 viewModel.dismissProblem()
                 when (action) {
-                    ProblemAction.SCAN_QR -> { showActivationScanner = true }
+                    ProblemAction.SCAN_QR -> { showQrLoginChoice = true }
                     ProblemAction.RETRY -> viewModel.retryProblem(problem)
                     ProblemAction.DEVICES -> {
                         selectedSubscriptionForDevices = subscription
@@ -1167,6 +1248,7 @@ private fun LoginScreen(
     onOpenAgain: () -> Unit,
     onOpenTelegram: () -> Unit,
     onRetry: () -> Unit,
+    onOtherWay: () -> Unit,
     onPrivacyPolicy: () -> Unit,
 ) {
     var showTrialChoice by remember { mutableStateOf(false) }
@@ -1417,15 +1499,24 @@ private fun LoginScreen(
                             fontWeight = FontWeight.SemiBold,
                         )
                     }
+                    // A TV that shows its QR can still be signed in another way.
+                    TextButton(onClick = onOtherWay, modifier = Modifier.fillMaxWidth()) {
+                        Text(stringResource(R.string.login_other_way))
+                    }
                 }
-                LoginUiState.Expired -> Button(
-                    onClick = onRetry,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = LevikDimensions.ButtonHeight),
-                    shape = RoundedCornerShape(14.dp),
-                ) {
-                    Text(stringResource(R.string.login_retry), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                LoginUiState.Expired -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(
+                        onClick = onRetry,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = LevikDimensions.ButtonHeight),
+                        shape = RoundedCornerShape(14.dp),
+                    ) {
+                        Text(stringResource(R.string.login_retry), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    TextButton(onClick = onOtherWay, modifier = Modifier.fillMaxWidth()) {
+                        Text(stringResource(R.string.login_other_way))
+                    }
                 }
                 LoginUiState.Idle -> {
                     Button(

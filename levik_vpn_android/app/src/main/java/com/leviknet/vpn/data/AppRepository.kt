@@ -2,7 +2,10 @@ package com.leviknet.vpn.data
 
 import android.os.Build
 import com.leviknet.vpn.BuildConfig
+import com.leviknet.vpn.core.auth.ActivationCodeParser
+import com.leviknet.vpn.core.auth.DeepLinkRouter
 import com.leviknet.vpn.core.auth.LoginApproval
+import com.leviknet.vpn.core.auth.PairingSecret
 import com.leviknet.vpn.core.auth.PendingApproval
 import com.leviknet.vpn.core.network.ApiException
 import com.leviknet.vpn.core.network.AuthChallengeRequest
@@ -10,7 +13,10 @@ import com.leviknet.vpn.core.network.AuthChallengeResponse
 import com.leviknet.vpn.core.network.AuthStatusRequest
 import com.leviknet.vpn.core.network.CatalogResponse
 import com.leviknet.vpn.core.network.CreateOrderRequest
+import com.leviknet.vpn.core.network.CreatedDevicePairing
 import com.leviknet.vpn.core.network.DevicePairingRequest
+import com.leviknet.vpn.core.network.DevicePairingsRequest
+import com.leviknet.vpn.core.network.DevicePairingsResponse
 import com.leviknet.vpn.core.network.DeviceTrialActivationRequest
 import com.leviknet.vpn.core.network.OrderSummary
 import com.leviknet.vpn.core.network.LoginState
@@ -280,14 +286,18 @@ class AppRepository(
         return copy(numberMatchSupported = true, accountHint = hint)
     }
 
-    suspend fun claimDevicePairing(pairingToken: String): Unit = authMutex.withLock {
-        require(pairingToken.matches(Regex("[A-Za-z0-9_-]{43}"))) { "Invalid pairing token" }
+    internal suspend fun claimDevicePairing(secret: PairingSecret): Unit = authMutex.withLock {
+        when (secret) {
+            is PairingSecret.Token -> require(secret.value.matches(Regex("[A-Za-z0-9_-]{43}"))) { "Invalid pairing token" }
+            is PairingSecret.Code -> require(ActivationCodeParser.parsePairingCode(secret.value) == secret.value) { "Invalid pairing code" }
+        }
         if (readToken() != null) {
             throw ApiException.Rejected("pairing_requires_sign_out", false, 409)
         }
         val request = withContext(Dispatchers.IO) {
             DevicePairingRequest(
-                pairingToken = pairingToken,
+                pairingToken = (secret as? PairingSecret.Token)?.value,
+                pairingCode = (secret as? PairingSecret.Code)?.value,
                 publicKeySpki = deviceIdentity.publicKeySpkiBase64Url(),
                 deviceLabel = deviceLabel(),
                 deviceModel = Build.MODEL.sanitized(MAX_DEVICE_FIELD_LENGTH),
@@ -654,6 +664,29 @@ class AppRepository(
     suspend fun authorizeActivation(code: String) {
         val token = requireToken()
         apiClient.authorizeActivation(token, code)
+    }
+
+    /** A QR and code that sign a new device in to this account; valid for five minutes. */
+    suspend fun createDevicePairing(): CreatedDevicePairing {
+        val response = apiClient.devicePairings(requireToken(), DevicePairingsRequest(op = "create"))
+        val pairing = requireNotNull(response.pairing) { "Mobile API returned no pairing" }
+        require(
+            DeepLinkRouter.pairingToken(pairing.uri) != null &&
+                ActivationCodeParser.parsePairingCode(pairing.code) == pairing.code &&
+                PAIRING_ID.matches(pairing.id),
+        ) { "Mobile API returned an invalid pairing" }
+        return pairing
+    }
+
+    /** pending, connected or expired, with the name of the device that signed in. */
+    suspend fun devicePairingStatus(id: String): DevicePairingsResponse {
+        require(PAIRING_ID.matches(id)) { "Invalid pairing" }
+        return apiClient.devicePairings(requireToken(), DevicePairingsRequest(op = "status", id = id))
+    }
+
+    suspend fun cancelDevicePairing(id: String) {
+        require(PAIRING_ID.matches(id)) { "Invalid pairing" }
+        apiClient.devicePairings(requireToken(), DevicePairingsRequest(op = "cancel", id = id))
     }
 
     suspend fun fetchFreeProxyLink(): String {
@@ -1137,6 +1170,7 @@ class AppRepository(
             .ifBlank { "Android device" }
 
     companion object {
+        private val PAIRING_ID = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
         private const val MAX_DEVICE_FIELD_LENGTH = 96
         private const val MAX_LOGIN_TOKEN_LENGTH = 512
         private const val MAX_ACCESS_TOKEN_LENGTH = 4096

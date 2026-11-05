@@ -19,6 +19,8 @@ import com.leviknet.vpn.core.auth.ChallengeAuthorization
 import com.leviknet.vpn.core.auth.DeepLinkDestination
 import com.leviknet.vpn.core.auth.DeepLinkRouter
 import com.leviknet.vpn.core.auth.LoginApproval
+import com.leviknet.vpn.core.auth.PairingSecret
+import com.leviknet.vpn.core.network.CreatedDevicePairing
 import com.leviknet.vpn.core.auth.PendingApproval
 import com.leviknet.vpn.core.logger.AppLogger
 import com.leviknet.vpn.core.logger.LogEntry
@@ -186,7 +188,9 @@ class AppViewModel(
         check(refreshSubscriptionNow(showErrors = false)) { "Profile refresh failed" }
     }
     private var cabinetJob: Job? = null
-    private var pendingPairingToken: String? = null
+    /** A scanned QR or a typed code of a signed-in device, claimed once onboarding allows. */
+    private var pendingPairing: PairingSecret? = null
+    private var devicePairingJob: Job? = null
     private var pendingOnboardingAction: OnboardingAction? = null
     private var connectionPending = false
     private var pendingSharingInvitation: String? = null
@@ -669,20 +673,43 @@ class AppViewModel(
     fun claimPairingUri(rawUri: String) {
         val token = DeepLinkRouter.pairingToken(rawUri) ?: return
         if (mutableState.value.login is LoginUiState.Loading) return
-        pendingPairingToken = token
+        pendingPairing = PairingSecret.Token(token)
         beginOnboarding(OnboardingAction.DEVICE_PAIRING)
     }
 
-    private fun startDevicePairing() {
-        val token = pendingPairingToken ?: return
+    /** The code a signed-in device shows under its QR, typed here (TV, no camera). False if malformed. */
+    fun claimPairingCode(rawCode: String): Boolean {
+        val code = com.leviknet.vpn.core.auth.ActivationCodeParser.parsePairingCode(rawCode) ?: return false
+        if (mutableState.value.login is LoginUiState.Loading) return true
+        loginPollJob?.cancel()
+        mutableState.update { it.copy(login = LoginUiState.Idle) }
+        pendingPairing = PairingSecret.Code(code)
+        beginOnboarding(OnboardingAction.DEVICE_PAIRING)
+        return true
+    }
+
+    /** «Показать QR-код»: a signed-in device scans this one, or types the code under it. */
+    fun beginQrLogin() = beginOnboarding(OnboardingAction.QR_LOGIN)
+
+    /** Leaves a sign-in that waits on another device, to choose another way. */
+    fun cancelLogin() {
+        val login = mutableState.value.login
+        if (login !is LoginUiState.Waiting && login != LoginUiState.Expired) return
+        loginPollJob?.cancel()
+        pendingOnboardingAction = null
+        mutableState.update { it.copy(login = LoginUiState.Idle) }
+    }
+
+    private fun claimPendingPairing() {
+        val secret = pendingPairing ?: return
         loginPollJob?.cancel()
         loginPollJob = viewModelScope.launch {
             mutableState.update { it.copy(login = LoginUiState.Loading, message = null, problem = null) }
             try {
                 // Cold-start App Links wait for local session restoration before claiming.
                 repository.session.first { it != SessionStatus.Loading }
-                repository.claimDevicePairing(token)
-                pendingPairingToken = null
+                repository.claimDevicePairing(secret)
+                pendingPairing = null
                 pendingOnboardingAction = null
                 val account = repository.refreshAccount()
                 reconcileAuthenticatedProfile(
@@ -694,14 +721,14 @@ class AppViewModel(
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
                 if (error is ApiException.Rejected && error.code == "pairing_requires_sign_out") {
-                    pendingPairingToken = null
+                    pendingPairing = null
                     pendingOnboardingAction = null
                     mutableState.update { it.copy(login = LoginUiState.Idle, message = UiMessage.PAIRING_ALREADY_SIGNED_IN) }
                     return@launch
                 }
                 mutableState.update {
                     it.copy(login = LoginUiState.Idle, problem = error.toAppProblem(
-                        if (pendingPairingToken == null) ProblemOperation.ACCOUNT else ProblemOperation.LOGIN,
+                        if (pendingPairing == null) ProblemOperation.ACCOUNT else ProblemOperation.LOGIN,
                     ))
                 }
             }
@@ -770,7 +797,12 @@ class AppViewModel(
                 activateLteTrialAfterLogin = false,
                 showQr = false,
             )
-            OnboardingAction.DEVICE_PAIRING -> startDevicePairing()
+            OnboardingAction.QR_LOGIN -> startLogin(
+                accountActivationSupported = true,
+                activateLteTrialAfterLogin = false,
+                showQr = true,
+            )
+            OnboardingAction.DEVICE_PAIRING -> claimPendingPairing()
         }
     }
 
@@ -887,7 +919,7 @@ class AppViewModel(
 
     fun declineAppDataDisclosure() {
         pendingOnboardingAction = null
-        pendingPairingToken = null
+        pendingPairing = null
         mutableState.update { it.copy(showAppDataDisclosure = false) }
     }
 
@@ -2043,6 +2075,7 @@ class AppViewModel(
             vpnController.disconnect()
             loginStartJob?.cancel()
             loginPollJob?.cancel()
+            closeDevicePairing()
             try {
                 appPlatform?.withdrawPresence()
                 appPlatform?.drop?.beforeSignOut()
@@ -2846,6 +2879,68 @@ class AppViewModel(
         }
     }
 
+    /** «Подключить устройство» → «Показать QR-код»: a new device scans it or types its code. */
+    fun showDevicePairing() {
+        if (repository.session.value != SessionStatus.Authenticated) return
+        devicePairingJob?.cancel()
+        devicePairingJob = viewModelScope.launch {
+            mutableState.update { it.copy(devicePairing = DevicePairingUiState()) }
+            val pairing = try {
+                repository.createDevicePairing()
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                AppLogger.w("AppViewModel", "Device pairing failed to start")
+                mutableState.update { it.copy(devicePairing = DevicePairingUiState(status = DevicePairingStatus.FAILED)) }
+                return@launch
+            }
+            val expiresAt = runCatching { Instant.parse(pairing.expiresAt).toEpochMilli() }
+                .getOrDefault(System.currentTimeMillis() + DEVICE_PAIRING_FALLBACK_MS)
+            mutableState.update {
+                it.copy(devicePairing = DevicePairingUiState(pairing, expiresAt, DevicePairingStatus.PENDING))
+            }
+            while (System.currentTimeMillis() < expiresAt) {
+                delay(DEVICE_PAIRING_POLL_MS)
+                val status = try {
+                    repository.devicePairingStatus(pairing.id)
+                } catch (error: Throwable) {
+                    if (error is CancellationException) throw error
+                    // A dropped request is retried until the code expires.
+                    continue
+                }
+                when (status.state) {
+                    "connected" -> {
+                        mutableState.update {
+                            it.copy(devicePairing = DevicePairingUiState(
+                                pairing, expiresAt, DevicePairingStatus.CONNECTED,
+                                deviceName = status.deviceName?.trim()?.take(120)?.takeIf(String::isNotEmpty),
+                            ))
+                        }
+                        return@launch
+                    }
+                    "expired" -> break
+                }
+            }
+            mutableState.update { it.copy(devicePairing = DevicePairingUiState(pairing, expiresAt, DevicePairingStatus.EXPIRED)) }
+        }
+    }
+
+    /** The QR leaves the screen; a code nobody used stops working at once. */
+    fun closeDevicePairing() {
+        val current = mutableState.value.devicePairing
+        devicePairingJob?.cancel()
+        devicePairingJob = null
+        mutableState.update { it.copy(devicePairing = null) }
+        val id = current?.pairing?.id?.takeIf { current.status == DevicePairingStatus.PENDING } ?: return
+        viewModelScope.launch {
+            try {
+                repository.cancelDevicePairing(id)
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                // It expires by itself within five minutes.
+            }
+        }
+    }
+
     fun requestActivation(rawValue: String) {
         val code = com.leviknet.vpn.core.auth.ActivationCodeParser.parse(rawValue) ?: return
         mutableState.update { it.copy(pendingActivationCode = code) }
@@ -3221,6 +3316,8 @@ class AppViewModel(
 
     companion object {
         private const val MIN_POLL_SECONDS = 2
+        private const val DEVICE_PAIRING_POLL_MS = 2_000L
+        private const val DEVICE_PAIRING_FALLBACK_MS = 300_000L
         private const val MAX_POLL_SECONDS = 10
         private const val SERVER_PING_INTERVAL_MS = 30_000L
         private const val MAINTENANCE_MARK_INTERVAL_MS = 30_000L
@@ -3393,6 +3490,8 @@ data class AppUiState(
     val pingingServers: Boolean = false,
     val login: LoginUiState = LoginUiState.Idle,
     val pendingActivationCode: String? = null,
+    /** «Подключить устройство» → «Показать QR-код» is open. */
+    val devicePairing: DevicePairingUiState? = null,
     val tab: AppTab = AppTab.HOME,
     val refreshing: Boolean = false,
     val showAppDataDisclosure: Boolean = false,
@@ -3534,6 +3633,7 @@ private enum class OnboardingAction {
     TELEGRAM_LOGIN,
     TELEGRAM_LTE_TRIAL,
     WEBSITE_LOGIN,
+    QR_LOGIN,
     DEVICE_PAIRING,
 }
 
@@ -3546,6 +3646,16 @@ private sealed interface PendingAllowlistAction {
     data object Connect : PendingAllowlistAction
     data class SelectServer(val serverId: String) : PendingAllowlistAction
 }
+
+enum class DevicePairingStatus { CREATING, PENDING, CONNECTED, EXPIRED, FAILED }
+
+data class DevicePairingUiState(
+    val pairing: CreatedDevicePairing? = null,
+    val expiresAtMillis: Long = 0L,
+    val status: DevicePairingStatus = DevicePairingStatus.CREATING,
+    /** The device that signed in, when connected. */
+    val deviceName: String? = null,
+)
 
 sealed interface LoginUiState {
     data object Idle : LoginUiState

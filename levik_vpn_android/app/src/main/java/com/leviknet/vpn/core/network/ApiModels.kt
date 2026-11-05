@@ -20,7 +20,10 @@ data class AuthChallengeRequest(
 
 @Serializable
 data class DevicePairingRequest(
-    val pairingToken: String,
+    /** From a scanned QR; null when the code was typed. */
+    val pairingToken: String? = null,
+    /** XXXX-XXXX-XXXX typed on a device without a camera; null when scanned. */
+    val pairingCode: String? = null,
     val publicKeySpki: String,
     val deviceLabel: String,
     val deviceModel: String,
@@ -406,6 +409,32 @@ data class WebHandoffResponse(
 @Serializable
 data class MobileAuthorizeActivationRequest(
     val code: String,
+)
+
+/** A signed-in app shows a QR for a new device and follows it, docs/app-platform.md "Device pairing". */
+@Serializable
+data class DevicePairingsRequest(
+    val op: String,
+    val id: String? = null,
+)
+
+@Serializable
+data class CreatedDevicePairing(
+    val id: String,
+    /** The website's /activate?pair= link, drawn as the QR. */
+    val uri: String,
+    /** Typed instead of scanning: XXXX-XXXX-XXXX. */
+    val code: String,
+    val expiresAt: String,
+)
+
+@Serializable
+data class DevicePairingsResponse(
+    val ok: Boolean,
+    val pairing: CreatedDevicePairing? = null,
+    /** pending, connected or expired. */
+    val state: String? = null,
+    val deviceName: String? = null,
 )
 
 @Serializable

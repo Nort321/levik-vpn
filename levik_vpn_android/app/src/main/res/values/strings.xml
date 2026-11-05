@@ -17,7 +17,7 @@
     <string name="login_website">Sign in to your account</string>
     <string name="login_qr">Sign in with QR code</string>
     <string name="login_qr_code_description">QR code for signing in</string>
-    <string name="login_qr_caption">If you are already signed in on another device, scan this QR code with the Levik VPN app for quick sign-in</string>
+    <string name="login_qr_caption">On a device where you are signed in, open Levik VPN → Connect a device → Scan QR code. Without a camera, choose Enter code there and type the code above.</string>
     <string name="login_waiting_qr">Sign in with QR code</string>
     <string name="login_waiting_qr_description">Scan this code from a device where you are already signed in. This screen updates automatically.</string>
     <string name="login_waiting_telegram">Confirm in the Telegram bot</string>
@@ -439,7 +439,7 @@
     <string name="device_revoke_failed">Failed to revoke device: %1$s</string>
     <string name="devices_empty">No active devices recorded for this subscription</string>
     <string name="devices_manage_btn">Manage Devices</string>
-    <string name="activation_scan_button">Link device with QR</string>
+    <string name="activation_scan_button">Connect a device</string>
     <string name="activation_scan_title">Scan QR code</string>
     <string name="activation_camera_permission">Camera access is needed to scan the activation QR code.</string>
     <string name="activation_camera_permission_button">Allow camera access</string>
@@ -1030,4 +1030,38 @@
     <string name="drop_paused_lan">Paused: local network required. Switching to the server requires your action.</string>
     <string name="drop_upgrade_required">Update Levik on the receiving device for this transfer.</string>
     <string name="drop_relay_limits">Server transfers allow up to 20 files and 2 GB. Check the daily quota or connect both devices to the same local network.</string>
+    <!-- Device pairing, docs/app-platform.md "Device pairing" -->
+    <string name="pairing_login_choice_description">Sign in with a device where Levik VPN is already open with your account.</string>
+    <string name="pairing_show_qr">Show QR code</string>
+    <string name="pairing_scan_qr">Scan QR code</string>
+    <string name="pairing_enter_code">Enter code</string>
+    <string name="pairing_login_show_description">A QR code appears on this screen. Scan it on a device where you are signed in. Handy for TVs.</string>
+    <string name="pairing_login_scan_description">Point the camera at the QR code in Levik VPN on another device (Connect a device) or in your account on the website.</string>
+    <string name="pairing_login_code_description">No camera? Enter the code shown under the QR code on the other device.</string>
+    <string name="pairing_connect_title">Connect a device</string>
+    <string name="pairing_connect_description">Sign in to Levik VPN on a new device using this one.</string>
+    <string name="pairing_connect_show_description">The new device scans the QR code with its camera or enters the code under it.</string>
+    <string name="pairing_connect_scan_description">If the new device (a TV, for example) shows a QR code, scan it.</string>
+    <string name="pairing_connect_code_description">Enter the code shown under the QR code on the new device.</string>
+    <string name="pairing_code_label">Code</string>
+    <string name="pairing_code_invalid">Enter the code as %1$s</string>
+    <string name="pairing_code_submit">Continue</string>
+    <string name="pairing_login_code_title">Code from another device</string>
+    <string name="pairing_login_code_dialog_description">On a device where you are signed in, open Connect a device → Show QR code and enter the code shown under the QR code.</string>
+    <string name="pairing_connect_code_title">New device code</string>
+    <string name="pairing_connect_code_dialog_description">Enter the code shown under the QR code on the new device\'s screen.</string>
+    <string name="pairing_failed">Could not create a QR code. Check your connection and try again.</string>
+    <string name="pairing_connected">%1$s is signed in</string>
+    <string name="pairing_device_fallback">New device</string>
+    <string name="pairing_connected_description">Subscriptions and servers are already available there.</string>
+    <string name="pairing_qr_description">QR code for signing in on a new device</string>
+    <string name="pairing_or_enter_code">Or enter the code</string>
+    <string name="pairing_show_steps">On the new device, open Levik VPN → Sign in with QR code, then scan the code or choose Enter code.</string>
+    <string name="pairing_waiting">Waiting for the new device · %1$s</string>
+    <string name="pairing_expired">The code has expired</string>
+    <string name="pairing_warning">Do not show the code to others: it signs in to your account.</string>
+    <string name="pairing_connect_another">Connect another</string>
+    <string name="pairing_new_code">New code</string>
+    <string name="pairing_done">Done</string>
+    <string name="login_other_way">Another way to sign in</string>
 </resources>

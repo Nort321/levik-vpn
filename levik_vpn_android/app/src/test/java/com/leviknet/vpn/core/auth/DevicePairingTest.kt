@@ -51,6 +51,31 @@ class DevicePairingTest {
     }
 
     @Test
+    fun `a typed pairing code is regrouped and kept apart from activation codes`() {
+        listOf("ABCD-EFGH-JK23", " abcd efgh jk23 ", "abcdefghjk23").forEach { typed ->
+            assertEquals(typed, "ABCD-EFGH-JK23", ActivationCodeParser.parsePairingCode(typed))
+        }
+        listOf("ABCD-EFGH", "ABCD-EFGH-JK2O", "ABCD-EFGH-JK23-MN45", "АБВГ-EFGH-JK23").forEach { typed ->
+            assertNull(typed, ActivationCodeParser.parsePairingCode(typed))
+        }
+        assertEquals("ABCD-EFGH-JK23-MN45", ActivationCodeParser.parseTyped("abcd efgh jk23 mn45"))
+        assertNull(ActivationCodeParser.parseTyped("ABCD-EFGH-JK23"))
+    }
+
+    @Test
+    fun `a typed code is sent instead of the token, never both`() {
+        val json = Json { explicitNulls = false; encodeDefaults = true }
+        val fields = json.parseToJsonElement(json.encodeToString(DevicePairingRequest(
+            pairingCode = "ABCD-EFGH-JK23", publicKeySpki = "public-key", deviceLabel = "Android TV",
+            deviceModel = "BRAVIA", deviceOs = "Android 12", appVersion = "2.9.0",
+            requestSigningAlgorithm = "PS256", profileEncryptionAlgorithm = "RSA-OAEP-256+A256GCM",
+        ))).jsonObject
+        assertEquals("ABCD-EFGH-JK23", fields.getValue("pairingCode").jsonPrimitive.content)
+        assertFalse(fields.containsKey("pairingToken"))
+        assertEquals("/api/mobile/v1/devices/pairings", MobileApiClient.DEVICE_PAIRINGS_PATH)
+    }
+
+    @Test
     fun `pairs through the device-bound mobile route without caller supplied account or device ID`() {
         assertEquals("/api/mobile/v1/devices/pair", MobileApiClient.DEVICE_PAIRING_PATH)
         val encoded = Json.encodeToString(DevicePairingRequest(

@@ -54,6 +54,18 @@ class MobileApiClient(
         return response
     }
 
+    /** Shows a QR for a new device ("create"), follows it ("status") or takes it back ("cancel"). */
+    suspend fun devicePairings(accessToken: String, request: DevicePairingsRequest): DevicePairingsResponse {
+        val response = post<DevicePairingsRequest, DevicePairingsResponse>(
+            path = DEVICE_PAIRINGS_PATH,
+            request = request,
+            accessToken = accessToken,
+            requiresIntegrity = false,
+        )
+        checkSuccess(response.ok)
+        return response
+    }
+
     suspend fun pollStatus(request: AuthStatusRequest): AuthStatusResponse {
         val response = post<AuthStatusRequest, AuthStatusResponse>(
             path = AUTH_STATUS_PATH,
@@ -782,6 +794,7 @@ class MobileApiClient(
 
     companion object {
         internal const val DEVICE_PAIRING_PATH = "/api/mobile/v1/devices/pair"
+        internal const val DEVICE_PAIRINGS_PATH = "/api/mobile/v1/devices/pairings"
         private const val AUTH_CHALLENGE_PATH = "/api/mobile/v1/auth/challenge"
         private const val AUTH_STATUS_PATH = "/api/mobile/v1/auth/status"
         private const val AUTH_LOGOUT_PATH = "/api/mobile/v1/auth/logout"

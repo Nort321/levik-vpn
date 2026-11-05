@@ -996,6 +996,39 @@ Apps that are not on the screen post one notification per request. On
 Android, number matching is part of the direct build; Google Play builds sign
 in with the activation code and the website as before.
 
+## Device pairing
+
+Every app (not iOS) signs a device in from another one **both ways**, so a
+device without a camera (TV, computer) is never stuck:
+
+| New device | Signed-in device |
+| --- | --- |
+| «Вход по QR-коду» → «Показать QR-код»: shows the activation QR and code (`/auth/challenge`, above) | «Подключить устройство» → «Отсканировать QR-код» (camera) or «Ввести код» (16 characters) → `POST /api/mobile/v1/activation/authorize` |
+| «Вход по QR-коду» → «Отсканировать QR-код» (camera) or «Ввести код» (12 characters) | «Подключить устройство» → «Показать QR-код», or the website's «Добавить устройство» |
+
+A signed-in app shows a pairing QR with the signed
+`POST /api/mobile/v1/devices/pairings`:
+
+- `{ "op": "create" }` → `201 { ok, pairing: { id, uri, code, expiresAt, expiresIn } }`.
+  `uri` is `https://leviknet.com/activate?pair=<43-character token>` and is
+  drawn as the QR; `code` is `XXXX-XXXX-XXXX` to type instead. Both work once,
+  for five minutes, and stop working when the app's session ends. A new QR
+  replaces the app's previous one. 20 per account in ten minutes;
+- `{ "op": "status", "id": "<uuid>" }` → `{ ok, state: "pending" | "expired" | "connected", deviceName? }`,
+  followed every two seconds while the QR is on screen;
+- `{ "op": "cancel", "id": "<uuid>" }` → `{ ok }` when the QR leaves the screen.
+
+The website's `POST /api/account/v1/devices/pairings` now also returns `code`.
+
+The new device claims the pairing with `POST /api/mobile/v1/devices/pair`
+(registration fields as in `/auth/challenge`) and **either** `"pairingToken"`
+from the scanned QR **or** `"pairingCode"` typed by the user, never both →
+`{ ok, state: "authenticated", accessToken, expiresAt }`. Errors:
+`pairing_expired` (unknown, used up or expired), `pairing_used` (claimed by
+another device). The device is recorded with the platform of its client
+header. A pairing code is one group shorter than an activation code, so an
+app tells the user which device a mistyped code belongs on.
+
 ## Signing in to the website from an app
 
 `POST /api/mobile/v1/web-handoff` with `{ "target": "/dashboard…" }`, where
