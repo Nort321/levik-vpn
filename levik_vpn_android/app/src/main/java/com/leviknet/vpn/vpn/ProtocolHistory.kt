@@ -43,10 +43,10 @@ data class ProtocolHistory(
     fun winner(networkKey: String): String? = winners[networkKey]
 
     /** Legacy winners without a time/configuration stay useful to recovery but never skip startup selection. */
-    fun recentWinner(networkKey: String, contexts: Map<String, String>, nowMs: Long): String? {
+    fun recentWinner(networkKey: String, contexts: Map<String, String>, nowMs: Long, maxAgeMs: Long = STARTUP_WINNER_TTL_MS): String? {
         val winner = winners[networkKey] ?: return null
         val atMs = winnerRecordedAtMs[networkKey] ?: return null
-        if (nowMs - atMs !in 0 until STARTUP_WINNER_TTL_MS) return null
+        if (nowMs - atMs !in 0 until maxAgeMs.coerceIn(0L, HANDOVER_HINT_TTL_MS)) return null
         val context = winnerContexts[networkKey] ?: return null
         return winner.takeIf { contexts[it] == context }
     }
@@ -122,6 +122,8 @@ data class ProtocolHistory(
 
     companion object {
         const val STARTUP_WINNER_TTL_MS = 10 * 60_000L
+        /** A network-specific starting hint only; handover must verify traffic on the new connection. */
+        const val HANDOVER_HINT_TTL_MS = 24 * 60 * 60_000L
         const val BLOCK_AFTER_NODES = 2
         const val BLOCK_TTL_MS = 24 * 60 * 60_000L
         const val SUSPECT_TTL_MS = 6 * 60 * 60_000L

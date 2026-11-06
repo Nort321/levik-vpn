@@ -100,4 +100,21 @@ class SmartAutoLivePolicyTest {
         assertEquals("b", policy.initialChoice("a", mapOf("a" to metric(100.0), "b" to metric(40.0)), emptyMap(), false, false))
         assertEquals("b", policy.initialChoice("a", mapOf("a" to SmartRouteMeasurement(emptyList(), 4), "b" to metric(150.0)), emptyMap(), true, false))
     }
+
+    @Test fun `large body proof prevents slow light probes from declaring the current route dead`() {
+        val policy = SmartAutoLivePolicy()
+        val values = mapOf("a" to SmartRouteMeasurement(emptyList(), 4), "b" to metric(150.0))
+        repeat(4) { round ->
+            assertNull(policy.consider("a", values, emptyMap(), round * 2_000L,
+                optimizationAllowed = false, currentDataVerified = true))
+        }
+        assertNull(policy.initialChoice("a", values, emptyMap(), true, false, currentDataVerified = true))
+    }
+
+    @Test fun `partial light responses cannot mask a failed real data transfer at startup`() {
+        val policy = SmartAutoLivePolicy()
+        val partial = metric(20.0).copy(successfulTargets = setOf("one.example"))
+        assertEquals("b", policy.initialChoice("a", mapOf("a" to partial, "b" to metric(150.0)), emptyMap(), true, true))
+        assertNull(policy.initialChoice("a", mapOf("a" to partial, "b" to partial), emptyMap(), true, true))
+    }
 }

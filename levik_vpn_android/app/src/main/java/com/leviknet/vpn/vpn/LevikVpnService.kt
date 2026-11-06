@@ -1670,8 +1670,8 @@ class LevikVpnService : VpnService() {
         )
     }
 
-    private suspend fun persistLiveMain(owner: HotSwitchMainOwner, id: String): Boolean = connectionMutex.withLock {
-        if (hotSwitchOwner === owner && owner.certain && owner.currentId == id && coreRunning && currentServer?.id == id) {
+    private suspend fun persistLiveMain(owner: HotSwitchMainOwner, id: String, canPersist: () -> Boolean = { true }): Boolean = connectionMutex.withLock {
+        if (canPersist() && hotSwitchOwner === owner && owner.certain && owner.currentId == id && coreRunning && currentServer?.id == id) {
             try { container.repository.selectServer(id); true }
             catch (error: CancellationException) { throw error }
             catch (_: Exception) { AppLogger.w(LOG_TAG, "HotSwitch selection could not be saved"); false }
@@ -1782,7 +1782,16 @@ class LevikVpnService : VpnService() {
             metered = { getSystemService(ConnectivityManager::class.java)?.getNetworkCapabilities(network)
                 ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) != true },
             probeTargets = { SmartRouteProber.targets(container.allowlistProbes.current()) },
-            onDataVerified = { freezeDetector.checkPassed() },
+            onDataVerified = {
+                freezeDetector.checkPassed()
+                val owner = hotSwitchOwner
+                val id = currentServer?.id
+                val intent = hotSwitchIntent.get()
+                if (owner != null && id != null && enabled()) serviceScope.launch {
+                    // A handover uses a scoped target before startup; save only the actual verified main.
+                    persistLiveMain(owner, id) { enabled() && intent == hotSwitchIntent.get() }
+                }
+            },
             refreshLoad = { container.appPlatform.refreshNodeLoad(maxAgeMs = 15_000L, waitMs = 1_200L) },
             readTraffic = { control -> if (serviceRouteConfig != null) serviceRouteRuntime?.tunTrafficCounters() else control?.tunTrafficCounters() },
             mainHealth = { healthy -> if (enabled()) serviceRouteRuntime?.automaticMainHealth(healthy) },
@@ -2381,8 +2390,27 @@ class LevikVpnService : VpnService() {
         reconnectJob?.cancel()
         connectionJob?.cancel()
         val reconnect = serviceScope.launch(start = CoroutineStart.LAZY) {
+            var target: RequiredConnectionTarget? = null
             connectionMutex.withLock {
                 if (!networkChanges.current(revision) || !serviceCommands.permitsAutomaticConnection(generation)) return@launch
+                val physical = currentNetwork
+                val source = currentServer ?: connectingServer ?: handoverServer
+                if (physical != null && source?.isSmartAutoCandidate() == true && container.settings.automaticServer.value) {
+                    val profile = readPreparedProfile()
+                    if (currentSubscriptionId == null || currentSubscriptionId == profile.subscriptionId) {
+                        val policy = serviceRouteConfig?.policy ?: container.repository.activeServiceRoutes.value ?: profile.serviceRoutes
+                        val pool = networkHandoverCandidates(profile.servers, policy)
+                            .filterNot { container.appPlatform.underMaintenance(it) }
+                        container.appPlatform.smartAuto.handoverWinner(pool, physical)?.let { id ->
+                            target = RequiredConnectionTarget(profile.subscriptionId, id)
+                            pool.firstOrNull { it.id == id }?.let { chosen ->
+                                AppLogger.i(LOG_TAG, "Smart Auto: new physical network starts with ${chosen.smartProtocol()}")
+                            }
+                        }
+                    }
+                    coroutineContext.ensureActive()
+                    if (!networkChanges.current(revision) || networkMonitor.activeNetwork(source.networkRequirement) != physical) return@launch
+                }
                 tunInterface?.let { tun ->
                     // A new established TUN supersedes the older barrier, if any.
                     handoverTun.getAndSet(tun)?.takeIf { it !== tun }?.let { runCatching { it.close() } }
@@ -2391,7 +2419,8 @@ class LevikVpnService : VpnService() {
             }
             stopConnection(stopService = false, preserveNetworkMonitoring = true)
             coroutineContext.ensureActive()
-            if (networkChanges.current(revision) && serviceCommands.permitsAutomaticConnection(generation)) connect()
+            if (networkChanges.current(revision) && serviceCommands.permitsAutomaticConnection(generation) &&
+                (target == null || container.settings.automaticServer.value)) connect(required = target)
         }
         connectionJob = reconnect
         serviceCommands.trackReconnect(generation, reconnect)

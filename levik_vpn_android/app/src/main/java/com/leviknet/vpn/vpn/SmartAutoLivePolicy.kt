@@ -15,9 +15,9 @@ internal class SmartAutoLivePolicy {
         private set
     val needsFastRecheck: Boolean get() = failures > 0
 
-    fun consider(current: String, measurements: Map<String, SmartRouteMeasurement>, resources: Map<String, SmartRouteResource>, nowMs: Long, optimizationAllowed: Boolean = true, dataFailed: Boolean = false): String? {
+    fun consider(current: String, measurements: Map<String, SmartRouteMeasurement>, resources: Map<String, SmartRouteResource>, nowMs: Long, optimizationAllowed: Boolean = true, dataFailed: Boolean = false, currentDataVerified: Boolean = false): String? {
         val incumbent = measurements[current]
-        failures = if (incumbent != null && incumbent.samplesMs.isEmpty()) failures + 1 else 0
+        failures = if (!currentDataVerified && incumbent != null && incumbent.samplesMs.isEmpty()) failures + 1 else 0
         fullRounds = if (resources[current]?.overloaded == true) fullRounds + 1 else 0
         recovering = dataFailed || failures >= 2
         val emergency = recovering || fullRounds >= 2
@@ -33,11 +33,11 @@ internal class SmartAutoLivePolicy {
     }
 
     /** Startup gets one bounded comparison, never a gratuitous move between near-equal routes. */
-    fun initialChoice(current: String, measurements: Map<String, SmartRouteMeasurement>, resources: Map<String, SmartRouteResource>, busy: Boolean, dataFailed: Boolean): String? {
+    fun initialChoice(current: String, measurements: Map<String, SmartRouteMeasurement>, resources: Map<String, SmartRouteResource>, busy: Boolean, dataFailed: Boolean, currentDataVerified: Boolean = false): String? {
         val incumbent = measurements[current] ?: return null
         val candidates = measurements.filter { (id, value) -> id != current && value.confirmed && resources[id]?.overloaded != true }
         val best = SmartRouteSelection.order(candidates, resources).firstOrNull() ?: return null
-        val failed = dataFailed || incumbent.samplesMs.isEmpty() && incumbent.attempts >= 2
+        val failed = dataFailed || !currentDataVerified && incumbent.samplesMs.isEmpty() && incumbent.attempts >= 2
         return best.takeIf { failed || !busy && better(incumbent, candidates.getValue(best)) }
     }
 

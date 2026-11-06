@@ -55,6 +55,16 @@ class ServiceRoutesTest {
     }
 
     @Test
+    fun `network ranking cannot select a disabled exit unmapped endpoint or mobile alias`() {
+        val mobileAlias = main.copy(id = "mobile", category = TunnelServerCategory.MOBILE)
+        val disabled = policy.copy(exits = exits.map { if (it.exitId == "de") it.copy(state = "disabled") else it })
+        assertEquals(listOf(main), networkHandoverCandidates(listOf(main, de, mobileAlias, lteOnSameHost), disabled))
+        val draining = disabled.copy(exits = disabled.exits.map { if (it.exitId == "main") it.copy(state = "draining") else it })
+        assertTrue(networkHandoverCandidates(listOf(main, de, mobileAlias, lteOnSameHost), draining).isEmpty())
+        assertEquals(listOf(main), networkHandoverCandidates(listOf(main, mobileAlias), null))
+    }
+
+    @Test
     fun `country selection stays sticky then uses same country then explicit main fallback`() {
         val selector = ServiceRouteSelection(policy, "main")
         assertEquals("de2", selector.select(rule, setOf("de2", "main")).exitId)

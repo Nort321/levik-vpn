@@ -24,4 +24,17 @@ class SmartAutoProbeScheduleTest {
         assertEquals(2, SmartAutoProbeSchedule.failedRounds(1, partial, true))
         assertEquals(2, SmartAutoProbeSchedule.failedRounds(1, SmartRouteMeasurement(emptyList(), 4), false))
     }
+
+    @Test fun `unconfirmed handover never enters the healthy metered sleep and eventually backs off`() {
+        assertEquals(2_000L, SmartAutoProbeSchedule.intervalMs(0, false, false, true, unconfirmedRounds = 1))
+        assertEquals(10_000L, SmartAutoProbeSchedule.intervalMs(0, false, false, true, unconfirmedRounds = 4))
+        assertEquals(30_000L, SmartAutoProbeSchedule.intervalMs(0, false, false, true, unconfirmedRounds = 100))
+        assertEquals(90_000L, SmartAutoProbeSchedule.intervalMs(0, false, false, true, unconfirmedRounds = 0))
+    }
+
+    @Test fun `a real body transfer supersedes short probe timeouts without hiding a data failure`() {
+        val timedOut = SmartRouteMeasurement(emptyList(), 4)
+        assertEquals(0, SmartAutoProbeSchedule.failedRounds(3, timedOut, false, dataVerified = true))
+        assertEquals(4, SmartAutoProbeSchedule.failedRounds(3, timedOut, true, dataVerified = true))
+    }
 }

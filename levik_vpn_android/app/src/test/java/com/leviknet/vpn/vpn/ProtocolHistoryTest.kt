@@ -130,6 +130,19 @@ class ProtocolHistoryTest {
     }
 
     @Test
+    fun `handover keeps a bounded network hint across a release build without calling it fresh proof`() {
+        val history = ProtocolHistory().recordSuccess("lte", "vless-xhttp", 100L, "lte-server", context = "config|route-a")
+        val contexts = mapOf("lte-server" to "config|route-a")
+        val later = 100L + 30 * 60_000L
+        assertEquals(null, history.recentWinner("lte", contexts, later))
+        assertEquals("lte-server", history.recentWinner("lte", contexts, later, ProtocolHistory.HANDOVER_HINT_TTL_MS))
+        assertEquals(null, history.recentWinner("wifi", contexts, later, ProtocolHistory.HANDOVER_HINT_TTL_MS))
+        assertEquals(null, history.recentWinner("lte", mapOf("lte-server" to "config|route-b"), later, ProtocolHistory.HANDOVER_HINT_TTL_MS))
+        assertEquals(null, history.recentWinner("lte", contexts, 100L + ProtocolHistory.HANDOVER_HINT_TTL_MS, Long.MAX_VALUE))
+        assertEquals(null, history.forgetWinner("lte", "lte-server").recentWinner("lte", contexts, later, ProtocolHistory.HANDOVER_HINT_TTL_MS))
+    }
+
+    @Test
     fun `a failed route drops only its startup promise without inventing a protocol block`() {
         val history = ProtocolHistory().recordSuccess("wifi", "tuic", 100L, "a", context = "config-a")
             .recordSuccess("lte", "tuic", 100L, "b", context = "config-b")

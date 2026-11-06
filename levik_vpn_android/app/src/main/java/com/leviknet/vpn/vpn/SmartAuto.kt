@@ -119,6 +119,29 @@ class SmartAuto(
         return snapshot.recentWinner(key, proven.associate { it.id to startupContext(it) }, now)
     }
 
+    /** Re-rank for the actual new network; yesterday's success is a hint, never live traffic proof. */
+    fun handoverWinner(servers: List<TunnelServer>, network: Network): String? {
+        val view = loadView()
+        val resources = routeResources(servers)
+        val measurements = routeMeasurements(servers, network)
+        val full = view.full.associateWith { 1.0 }
+        val available = servers.filter {
+            resources[it.id]?.overloaded != true && FavoriteNodes.load(full, it) == null &&
+                measurements[it.id]?.samplesMs?.isEmpty() != true
+        }
+        if (available.isEmpty()) return null
+        startupWinner(available, network)?.let { return it }
+        val key = networkKey(network)
+        val snapshot = history.current()
+        val now = clock()
+        if (key != null) {
+            val proven = available.filter { snapshot.verdict(key, it.smartProtocol(), now) == ProtocolVerdict.WORKS }
+            snapshot.recentWinner(key, proven.associate { it.id to startupContext(it) }, now,
+                ProtocolHistory.HANDOVER_HINT_TTL_MS)?.let { return it }
+        }
+        return rank(available, emptyMap(), network).firstOrNull()?.id
+    }
+
 
     /** A failed route cannot remain a fast-start promise; offline evidence alone does not condemn its protocol. */
     fun forgetStartupWinner(serverId: String, network: Network) {

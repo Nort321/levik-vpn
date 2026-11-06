@@ -30,5 +30,9 @@ internal class SmartAutoLiveEvidence(initial: Map<String, SmartRouteMeasurement>
     @Synchronized fun verified(id: String, nowMs: Long) { entries[id] = (entries[id] ?: Entry(null)).copy(proofAt = nowMs) }
     @Synchronized fun failed(id: String) { entries[id]?.let { entries[id] = Entry(it.routeId) } }
 
-    companion object { const val TTL_MS = 5 * 60_000L }
+    companion object {
+        const val TTL_MS = 5 * 60_000L
+        /** Missing optional load metadata is unknown; a known changed route invalidates proof. */
+        fun routeStillMatches(expected: String?, observed: String?): Boolean = observed == null || observed == expected
+    }
 }

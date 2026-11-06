@@ -9,6 +9,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SmartAutoLiveEvidenceTest {
+    @Test fun `temporary load outage permits current proof but a known route change rejects it`() {
+        assertTrue(SmartAutoLiveEvidence.routeStillMatches("old", null))
+        assertTrue(SmartAutoLiveEvidence.routeStillMatches("old", "old"))
+        assertTrue(SmartAutoLiveEvidence.routeStillMatches(null, null))
+        assertFalse(SmartAutoLiveEvidence.routeStillMatches("old", "new"))
+        assertFalse(SmartAutoLiveEvidence.routeStillMatches(null, "new"))
+    }
+
     private val metric = SmartRouteMeasurement(listOf(50.0, 50.0), 2, 100.0, 30.0, successfulTargets = setOf("one", "two"))
     private fun route(suffix: Char) = SmartRouteResource("r1" + suffix.toString().repeat(20), true, 1.0, "healthy", 0.1, 0.9)
 

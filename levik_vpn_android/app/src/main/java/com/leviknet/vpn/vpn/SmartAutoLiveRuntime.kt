@@ -11,6 +11,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.channels.Channel
 import java.util.concurrent.atomic.AtomicBoolean
@@ -48,6 +50,7 @@ internal class SmartAutoLiveRuntime(
     private var lastSpeedMs = System.currentTimeMillis()
     private var failedHealthRounds = 0
     private var goodHealthRounds = 0
+    private var unconfirmedHealthRounds = 1
     private var rememberedId: String? = null
     private var rememberedAtMs = 0L
 
@@ -62,12 +65,14 @@ internal class SmartAutoLiveRuntime(
         job = scope.launch(Dispatchers.IO) {
             try { if (initialRound) measureAll() else compare() } catch (error: CancellationException) { throw error } catch (_: Exception) {
                 // The incumbent stays installed; the regular rounds below keep comparing.
+                unconfirmedHealthRounds = (unconfirmedHealthRounds + 1).coerceAtMost(8)
             }
             waitForNextRound()
             while (isActive && !closed.get()) {
                 if (!enabled()) break
                 try { compare() } catch (error: CancellationException) { throw error } catch (_: Exception) {
                     // The incumbent and every established stream stay installed on measurement/control failure.
+                    unconfirmedHealthRounds = (unconfirmedHealthRounds + 1).coerceAtMost(8)
                 }
                 waitForNextRound()
             }
@@ -78,7 +83,7 @@ internal class SmartAutoLiveRuntime(
     private suspend fun waitForNextRound() {
         val next = SmartAutoProbeSchedule.intervalMs(
             failedHealthRounds, policy.needsFastRecheck || currentId()?.let(dataFailed::contains) == true,
-            policy.pendingId != null, metered(),
+            policy.pendingId != null, metered(), unconfirmedHealthRounds,
         )
         withTimeoutOrNull(next) { wake.receive() }
     }
@@ -92,7 +97,7 @@ internal class SmartAutoLiveRuntime(
         config.originals.firstOrNull { it.id == id }?.let {
             // Verification suspends: never stamp old-core evidence with a newly changed profile/path.
             if (!enabled() || contexts[id] != smartAuto.measurementContext(it) ||
-                smartAuto.routeResources(listOf(it))[id]?.id != evidence.routeIds()[id]
+                !SmartAutoLiveEvidence.routeStillMatches(evidence.routeIds()[id], smartAuto.routeResources(listOf(it))[id]?.id)
             ) return
             smartAuto.recordSuccess(it, network)
             rememberedId = id
@@ -100,25 +105,29 @@ internal class SmartAutoLiveRuntime(
         }
     }
 
-    private suspend fun confirmCurrent(current: String, measured: SmartRouteMeasurement?) {
-        if (measured?.confirmed != true) return
-        val source = config.originals.firstOrNull { it.id == current } ?: return
+    private suspend fun confirmCurrent(current: String, measured: SmartRouteMeasurement?, initialProof: Boolean? = null): Boolean? {
+        val source = config.originals.firstOrNull { it.id == current } ?: return null
         val expectedRoute = evidence.routeIds()[current]
         fun stillCurrent() = enabled() && currentId() == current &&
             contexts[current] == smartAuto.measurementContext(source) &&
-            smartAuto.routeResources(listOf(source))[current]?.id == expectedRoute
-        if (!stillCurrent()) return
-        if (!evidence.proven(current, System.currentTimeMillis()) || current in dataFailed) {
-            val candidate = config.candidates.firstOrNull { it.id == current } ?: return
-            val verified = withTimeoutOrNull(5_500L) { prober(listOf(candidate)).use { it.verifyData(current, measured.successfulTargets) } } == true
-            if (!stillCurrent()) return
-            if (!verified) { evidence.failed(current); dataFailed += current; forgetSuccess(current); return }
+            SmartAutoLiveEvidence.routeStillMatches(expectedRoute, smartAuto.routeResources(listOf(source))[current]?.id)
+        if (!stillCurrent()) return null
+        if (initialProof != null || measured?.confirmed != true || !evidence.proven(current, System.currentTimeMillis()) || current in dataFailed) {
+            val candidate = config.candidates.firstOrNull { it.id == current } ?: return null
+            val verified = initialProof ?: (withTimeoutOrNull(5_500L) {
+                prober(listOf(candidate)).use { it.verifyData(current, measured?.successfulTargets.orEmpty()) }
+            } == true)
+            if (!stillCurrent()) return null
+            if (!verified) { evidence.failed(current); dataFailed += current; forgetSuccess(current); return false }
             evidence.verified(current, System.currentTimeMillis())
             AppLogger.i(TAG, "Current route verified: 65536 bytes through VPN")
             onDataVerified()
         }
         dataFailed.remove(current)
-        rememberSuccess(current)
+        // One large response proves current traffic, but cannot promote a startup winner
+        // until an independent target has also answered through this authenticated route.
+        if (measured?.confirmed == true) rememberSuccess(current)
+        return true
     }
 
     /** TUN send-without-receive is a reason to check promptly, not proof of a bad route. */
@@ -149,6 +158,8 @@ internal class SmartAutoLiveRuntime(
     }
 
     private suspend fun compare() {
+        // Early exits for changed configuration/metadata must also back off instead of polling at 2s forever.
+        unconfirmedHealthRounds = (unconfirmedHealthRounds + 1).coerceAtMost(8)
         refreshLoad()
         currentCoroutineContext().ensureActive()
         if (!enabled()) return
@@ -197,16 +208,17 @@ internal class SmartAutoLiveRuntime(
         val fresh = measured.filterKeys { id -> id !in changed && valid.firstOrNull { it.id == id }?.let { contexts[id] == smartAuto.measurementContext(it) } == true }
         fresh.forEach { (id, value) -> valid.firstOrNull { it.id == id }?.let { smartAuto.recordRouteMeasurement(it, network, value, contexts.getValue(id), roundRoutes[id]) } }
         if (current in changed) return
-        confirmCurrent(current, fresh[current])
+        val dataVerified = confirmCurrent(current, fresh[current]) ?: return
         if (!enabled() || currentId() != current) return
         val currentHealth = fresh[current]
-        failedHealthRounds = SmartAutoProbeSchedule.failedRounds(failedHealthRounds, currentHealth, current in dataFailed)
+        failedHealthRounds = SmartAutoProbeSchedule.failedRounds(failedHealthRounds, currentHealth, current in dataFailed, dataVerified)
+        unconfirmedHealthRounds = if (currentHealth?.confirmed == true && dataVerified) 0 else (unconfirmedHealthRounds + 1).coerceAtMost(8)
         goodHealthRounds = if (currentHealth?.confirmed == true && current !in dataFailed) goodHealthRounds + 1 else 0
         if (failedHealthRounds >= 2) { forgetSuccess(current); mainHealth(false) }
         else if (goodHealthRounds >= 2) mainHealth(true)
         val optimizationAllowed = refreshActivity()
         val selection = if (current in dataFailed) fresh + (current to (fresh[current] ?: SmartRouteMeasurement(emptyList(), 1)).copy(samplesMs = emptyList())) else fresh
-        val winner = policy.consider(current, selection, smartAuto.routeResources(valid), System.currentTimeMillis(), optimizationAllowed, current in dataFailed) ?: return
+        val winner = policy.consider(current, selection, smartAuto.routeResources(valid), System.currentTimeMillis(), optimizationAllowed, current in dataFailed, dataVerified) ?: return
         val recovering = policy.recovering
         val candidate = config.candidates.first { it.id == winner }
         if (!evidence.proven(winner, System.currentTimeMillis())) {
@@ -225,7 +237,7 @@ internal class SmartAutoLiveRuntime(
             }
         }
         if (enabled() && install(candidate, control, canInstall)) {
-            policy.installed(System.currentTimeMillis()); failedHealthRounds = 0; goodHealthRounds = 0
+            policy.installed(System.currentTimeMillis()); failedHealthRounds = 0; goodHealthRounds = 0; unconfirmedHealthRounds = 0
             rememberSuccess(winner)
         }
     }
@@ -250,10 +262,19 @@ internal class SmartAutoLiveRuntime(
         val candidates = config.candidates.filter { it.id in shortlist }
         val measured = java.util.concurrent.ConcurrentHashMap<String, SmartRouteMeasurement>()
         AppLogger.d(TAG, "initial measurement begin")
-        withTimeoutOrNull(INITIAL_ROUND_MS) {
-            prober(candidates).use { prober ->
-                prober.measureLatency(light = true, rounds = 4) { id, value -> measured[id] = value }
+        // Prove the incumbent while the shortlist is screened. Slow light probes must not
+        // defer its real-data check, and cancelling the round owns/cancels both socket sets.
+        val initialProof = coroutineScope {
+            val incumbent = config.candidates.first { it.id == current }
+            val proof = async {
+                withTimeoutOrNull(5_500L) { prober(listOf(incumbent)).use { it.verifyData(current) } } == true
             }
+            withTimeoutOrNull(INITIAL_ROUND_MS) {
+                prober(candidates).use { prober ->
+                    prober.measureLatency(light = true, rounds = 4) { id, value -> measured[id] = value }
+                }
+            }
+            proof.await()
         }
         AppLogger.d(TAG, "initial measurement end")
         currentCoroutineContext().ensureActive()
@@ -262,10 +283,13 @@ internal class SmartAutoLiveRuntime(
         val changed = evidence.refresh(latestResources)
         val fresh = measured.filterKeys { id -> id !in changed && valid.firstOrNull { it.id == id }?.let { contexts[id] == smartAuto.measurementContext(it) } == true }
         fresh.forEach { (id, value) -> valid.firstOrNull { it.id == id }?.let { smartAuto.recordRouteMeasurement(it, network, value, contexts.getValue(id), roundRoutes[id]) } }
-        confirmCurrent(current, fresh[current])
+        if (current in changed) return
+        val dataVerified = confirmCurrent(current, fresh[current], initialProof) ?: return
         if (!enabled() || currentId() != current) return
-        failedHealthRounds = SmartAutoProbeSchedule.failedRounds(failedHealthRounds, fresh[current], current in dataFailed)
-        val winner = policy.initialChoice(current, fresh, latestResources, heavyTraffic(), current in dataFailed) ?: return
+        failedHealthRounds = SmartAutoProbeSchedule.failedRounds(failedHealthRounds, fresh[current], current in dataFailed, dataVerified)
+        unconfirmedHealthRounds = if (fresh[current]?.confirmed == true && dataVerified) 0 else unconfirmedHealthRounds.coerceAtLeast(1)
+        AppLogger.i(TAG, "Initial route check: candidates=${candidates.size}, independentTargets=${fresh[current]?.successfulTargets?.size ?: 0}, dataVerified=$dataVerified")
+        val winner = policy.initialChoice(current, fresh, latestResources, heavyTraffic(), current in dataFailed, dataVerified) ?: return
         val candidate = config.candidates.first { it.id == winner }
         if (!evidence.proven(winner, System.currentTimeMillis())) {
             val verified = withTimeoutOrNull(5_500L) { prober(listOf(candidate)).use { it.verifyData(winner, fresh[winner]?.successfulTargets.orEmpty()) } } == true
@@ -282,6 +306,7 @@ internal class SmartAutoLiveRuntime(
         if (enabled() && install(candidate, control, canInstall)) {
             policy.installed(System.currentTimeMillis())
             failedHealthRounds = 0
+            unconfirmedHealthRounds = 0
             rememberSuccess(winner)
         }
     }
