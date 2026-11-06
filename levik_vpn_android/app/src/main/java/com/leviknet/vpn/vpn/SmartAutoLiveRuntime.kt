@@ -114,6 +114,7 @@ internal class SmartAutoLiveRuntime(
             if (!stillCurrent()) return
             if (!verified) { evidence.failed(current); dataFailed += current; forgetSuccess(current); return }
             evidence.verified(current, System.currentTimeMillis())
+            AppLogger.i(TAG, "Current route verified: 65536 bytes through VPN")
             onDataVerified()
         }
         dataFailed.remove(current)

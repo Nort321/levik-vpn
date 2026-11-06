@@ -204,13 +204,13 @@ class NetworkMonitor(
         }
     }
 
-    fun start() {
+    @Synchronized fun start() {
         if (started) return
         connectivityManager.registerNetworkCallback(request, callback)
         started = true
     }
 
-    fun stop(releaseCellular: Boolean = true) {
+    @Synchronized fun stop(releaseCellular: Boolean = true) {
         if (releaseCellular) releaseCellularNetwork()
         if (started) {
             runCatching { connectivityManager.unregisterNetworkCallback(callback) }

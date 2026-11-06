@@ -41,6 +41,20 @@ class ServiceRoutesTest {
     }
 
     @Test
+    fun `network handover reuses only the admitted owner subscription and exact endpoint`() {
+        val cached = com.leviknet.vpn.data.AppRepository.CachedServiceRoutes("subscription", "owner", policy)
+        assertEquals(policy, cached.forReconnect("subscription", "owner", main))
+        assertNull(cached.forReconnect("other-subscription", "owner", main))
+        assertNull(cached.forReconnect("subscription", "new-login", main))
+        // A shared hostname does not allow LTE or an unissued port to inherit ordinary rules.
+        assertTrue(runCatching { cached.forReconnect("subscription", "owner", lteOnSameHost) }.isFailure)
+        val ambiguous = cached.copy(policy = policy.copy(exits = exits + exit("duplicate", "US", main)))
+        assertTrue(runCatching { ambiguous.forReconnect("subscription", "owner", main) }.isFailure)
+        val invalid = cached.copy(policy = policy.copy(revision = -1))
+        assertTrue(runCatching { invalid.forReconnect("subscription", "owner", main) }.isFailure)
+    }
+
+    @Test
     fun `country selection stays sticky then uses same country then explicit main fallback`() {
         val selector = ServiceRouteSelection(policy, "main")
         assertEquals("de2", selector.select(rule, setOf("de2", "main")).exitId)

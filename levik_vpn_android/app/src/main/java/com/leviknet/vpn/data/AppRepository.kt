@@ -799,7 +799,13 @@ class AppRepository(
         apiClient.accountRules(requireToken())
 
     /** Called only after the selected endpoint is known. Never fetches or applies on relay/LTE/Game. */
-    suspend fun prepareServiceRoutes(profile: PreparedTunnelProfile, selected: TunnelServer, enabled: Boolean): PreparedTunnelProfile {
+    suspend fun prepareServiceRoutes(
+        profile: PreparedTunnelProfile,
+        selected: TunnelServer,
+        enabled: Boolean,
+        reuseExisting: Boolean = false,
+    ): PreparedTunnelProfile {
+        val preparationStarted = System.nanoTime()
         val token = requireToken()
         val owner = serviceRouteOwner(token)
         sessionCacheMutex.withLock {
@@ -825,12 +831,40 @@ class AppRepository(
         val port = selected.syncPort() ?: return profile.copy(serviceRoutes = null)
         val protocol = if (selected.engine == TunnelEngineKind.LEVIK_TUIC) "tuic" else
             (selected.outbound["protocol"] as? JsonPrimitive)?.content ?: return profile.copy(serviceRoutes = null)
-        val cached = withContext(Dispatchers.IO) { readServiceRoutes(profile.subscriptionId, owner) }
+        // During handover the previous TUN remains a traffic barrier but its core is stopped.
+        // This app intentionally enters that TUN too; a control-plane fetch here would wait on
+        // the very VPN it is preventing from starting. Keep the already admitted account policy.
+        val existing = if (reuseExisting) sessionCacheMutex.withLock {
+            requireCurrentServiceRouteScope(token, profile.subscriptionId)
+            pendingServiceRoutes?.takeIf { it.belongsTo(profile.subscriptionId, owner) }
+        } else null
+        val stored = withContext(Dispatchers.IO) { readServiceRoutes(profile.subscriptionId, owner) }
+        val cached = existing?.policy?.takeIf { stored == null || it.revision >= stored.revision } ?: stored
         if (!enabled && cached == null) return profile.copy(serviceRoutes = null)
         sessionCacheMutex.withLock {
             requireCurrentServiceRouteScope(token, profile.subscriptionId)
             pendingServiceRoutes = cached?.let { CachedServiceRoutes(profile.subscriptionId, owner, it) }
             _serviceRouteState.value = "pending"
+        }
+        if (reuseExisting) {
+            requireCurrentServiceRouteScope(token, profile.subscriptionId)
+            if (selected.engine == TunnelEngineKind.LEVIK_TUIC && cached?.rules?.isNotEmpty() == true) {
+                sessionCacheMutex.withLock {
+                    requireCurrentServiceRouteScope(token, profile.subscriptionId)
+                    _serviceRouteState.value = "unsupported"
+                }
+                return profile.copy(serviceRoutes = null)
+            }
+            val reused = cached?.let {
+                CachedServiceRoutes(profile.subscriptionId, owner, it)
+                    .forReconnect(profile.subscriptionId, owner, selected)
+            }
+            if (reused == null) sessionCacheMutex.withLock {
+                requireCurrentServiceRouteScope(token, profile.subscriptionId)
+                _serviceRouteState.value = "disabled"
+            }
+            AppLogger.i("AppRepository", "Service routes reconnect: reused=${reused != null}, elapsedMs=${(System.nanoTime() - preparationStarted) / 1_000_000}")
+            return profile.copy(serviceRoutes = reused, serviceRouteOwner = owner.takeIf { reused != null })
         }
         val response = try {
             apiClient.serviceRouteProfile(token, com.leviknet.vpn.core.network.ServiceRouteProfileRequest(
@@ -960,6 +994,14 @@ class AppRepository(
     @Serializable
     internal data class CachedServiceRoutes(val subscriptionId: String, val owner: String, val policy: ServiceRouteProfile) {
         fun belongsTo(subscription: String, sessionOwner: String): Boolean = subscriptionId == subscription && owner == sessionOwner
+
+        /** Never silently discard an existing policy because its endpoint registry changed. */
+        fun forReconnect(subscription: String, sessionOwner: String, selected: TunnelServer): ServiceRouteProfile? {
+            if (!belongsTo(subscription, sessionOwner)) return null
+            policy.validate()
+            require(policy.exitFor(selected) != null) { "Service route registry is unavailable for this endpoint" }
+            return policy
+        }
     }
 
     @Serializable

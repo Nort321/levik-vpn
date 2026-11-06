@@ -106,6 +106,12 @@ class LevikVpnService : VpnService() {
     })
     private val serviceCommands = VpnServiceCommands(serviceScope)
     private val connectionMutex = Mutex()
+    private data class NetworkChangeTarget(val network: Network?, val dns: String?, val returnToRegular: Boolean)
+    private val networkChanges = NetworkChangeCoordinator<NetworkChangeTarget>()
+    @Volatile private var connectingServer: TunnelServer? = null
+    @Volatile private var handoverServer: TunnelServer? = null
+    // Kept across superseding handovers; a cancelled old attempt must not remove the traffic barrier.
+    private val handoverTun = AtomicReference<ParcelFileDescriptor?>(null)
     private val mobileEvaluationMutex = Mutex()
     private val mobileSwitchPolicy = MobileServerSwitchPolicy()
     private val tunnelHealthPolicy = TunnelHealthPolicy(
@@ -527,9 +533,15 @@ class LevikVpnService : VpnService() {
             ACTION_SWITCH_SERVER -> if (intent?.getBooleanExtra(EXTRA_HOT_SWITCH, false) != true &&
                 intent?.getBooleanExtra(EXTRA_FORCE_RECONNECT, false) != true) serviceCommands.requestConnection(true)
         }
+        if (action == ACTION_SWITCH_SERVER || action == ACTION_RECONFIGURE || action == ACTION_PAUSE) {
+            networkChanges.reset()
+            handoverServer = null
+        }
         AppLogger.d(LOG_TAG, "onStartCommand action: $action")
         when (action) {
             ACTION_DISCONNECT -> {
+                networkChanges.reset()
+                handoverServer = null
                 clearSharing()
                 retireHotSwitch()
                 val endBy = EndBy.entries.firstOrNull { it.wire == intent?.getStringExtra(EXTRA_END_BY) }
@@ -568,6 +580,8 @@ class LevikVpnService : VpnService() {
                 }
             }
             ACTION_PAUSE -> {
+                connectionJob?.cancel()
+                reconnectJob?.cancel()
                 val minutes = intent?.getIntExtra(EXTRA_PAUSE_MINUTES, 15) ?: 15
                 val home = intent?.getStringExtra(EXTRA_PAUSE_HOME)?.trim()?.takeIf { it.isNotEmpty() && it.length <= MAX_HOME_NAME }
                 serviceScope.launch {
@@ -677,6 +691,8 @@ class LevikVpnService : VpnService() {
     override fun onRevoke() {
         retireHotSwitch()
         serviceCommands.requestConnection(false)
+        networkChanges.reset()
+        handoverServer = null
         connectionJob?.cancel()
         reconnectJob?.cancel()
         AppLogger.w(LOG_TAG, "VPN permission revoked by system/user")
@@ -705,6 +721,9 @@ class LevikVpnService : VpnService() {
         clearSharing()
         retireHotSwitch()
         serviceCommands.requestConnection(false)
+        networkChanges.reset()
+        handoverServer = null
+        runCatching { handoverTun.getAndSet(null)?.close() }
         container.appPlatform.smartAuto.liveSessionStopped(coreOwner)
         smartAutoLiveRuntime?.close()
         smartAutoLiveRuntime = null
@@ -771,6 +790,7 @@ class LevikVpnService : VpnService() {
         currentEngineAttempt = null
         currentEngine = null
         currentServer = null
+        connectingServer = null
         currentSubscriptionId = null
         currentServerName = null
         currentNetwork = null
@@ -919,6 +939,8 @@ class LevikVpnService : VpnService() {
                 )
             }
 
+            connectingServer = selected
+            handoverServer = selected
             AppLogger.i(LOG_TAG, "Establishing VPN connection")
 
             progress.reach(AttemptStage.TUN, "unreachable")
@@ -936,6 +958,11 @@ class LevikVpnService : VpnService() {
             prepareTelemetryNetwork(network)
             var bootstrapDnsServer = resolveBootstrapDnsServer(selected, network)
             currentBootstrapDnsServer = bootstrapDnsServer
+            // Keep observing physical changes during startup, not only after the core is ready.
+            lifecycleGate.withLock {
+                check(!destroyed.get()) { "VPN service was destroyed during startup" }
+                networkMonitor.start()
+            }
             progress.reach(AttemptStage.CORE, "config_invalid")
             val dnsProvider = container.settings.dnsProvider.value
             val primaryDns = if (dnsProvider == DnsProvider.CUSTOM) {
@@ -960,7 +987,8 @@ class LevikVpnService : VpnService() {
             // Smart Auto connects at once to the ranked choice (cached full-route measurements first)
             // and measures every route afterwards through the running core, see SmartAutoLiveRuntime.
             // Load endpoint-specific routing only after the actual complete route has been chosen.
-            profile = container.repository.prepareServiceRoutes(profile, selected, container.appPlatform.flagEnabled("service_routes"))
+            profile = container.repository.prepareServiceRoutes(profile, selected, container.appPlatform.flagEnabled("service_routes"),
+                reuseExisting = handoverTun.get() != null || attemptCause == AttemptCause.NETWORK_CHANGE)
             val routes = ServiceRouteConfig.prepare(profile, selected, filesDir, container.settings.autoFallbackServer.value)
             serviceRouteConfig = routes
             telemetry.record { it.attempt(selected.name, selected.telemetryProtocol(), attemptCause) }
@@ -1273,7 +1301,8 @@ class LevikVpnService : VpnService() {
             // Back on a regular server: the way back from allowlists is done.
             if (!selected.isMobileServer()) container.secureStore.remove(SecureFileStore.ALLOWLIST_RETURN_SERVER)
             val published = lifecycleGate.withLock {
-                if (destroyed.get() || !serviceCommands.permitsConnection(generation)) return@withLock false
+                if (destroyed.get() || !coroutineContext.isActive || !serviceCommands.permitsConnection(generation) ||
+                    networkMonitor.activeNetwork(selected.networkRequirement) != network) return@withLock false
                 pendingRegularNetwork = null
                 networkMonitor.start()
                 startStats()
@@ -1302,9 +1331,14 @@ class LevikVpnService : VpnService() {
                 true
             }
             if (!published) {
+                preserveHandoverBarrier()
                 stopCoreAndTun()
+                if (serviceCommands.permitsAutomaticConnection(generation)) handleUnderlyingNetworkChange()
                 return@connection
             }
+            runCatching { handoverTun.getAndSet(null)?.close() }
+            connectingServer = null
+            handoverServer = null
             acquireWakeLock()
             sharingHost?.let { host ->
                 SharingStateStore.update { it.copy(busy = false, error = null, host = host.snapshot(ready = true)) }
@@ -1315,9 +1349,11 @@ class LevikVpnService : VpnService() {
             telemetry.flushSoon()
             AppLogger.i(LOG_TAG, "VPN interface and core started; end-to-end connectivity is monitored separately")
         } catch (error: CancellationException) {
+            preserveHandoverBarrier()
             stopCoreAndTun()
             throw error
         } catch (error: Throwable) {
+            preserveHandoverBarrier()
             stopCoreAndTun()
             coroutineContext.ensureActive()
             if (!serviceCommands.permitsConnection(generation)) return@connection
@@ -1444,6 +1480,7 @@ class LevikVpnService : VpnService() {
         stopService: Boolean,
         preserveError: Boolean = false,
         stopStartId: Int? = null,
+        preserveNetworkMonitoring: Boolean = false,
     ) = connectionMutex.withLock {
         if (stopService) clearSharing()
         lockdownActive = false
@@ -1472,8 +1509,12 @@ class LevikVpnService : VpnService() {
         mobileNetworkEvaluationJob = null
         trafficCheckJob?.cancel()
         trafficCheckJob = null
-        networkMonitor.stop(releaseCellular = false)
+        if (!preserveNetworkMonitoring) networkMonitor.stop(releaseCellular = false)
         stopCoreAndTun()
+        if (stopService) {
+            handoverServer = null
+            runCatching { handoverTun.getAndSet(null)?.close() }
+        }
         runCatching { container.trafficHistoryStore.flush() }
         // onStartCommand and this final decision must run on the same thread: an old OFF
         // must neither remove a newer foreground notification nor stop a newer ON request.
@@ -1486,6 +1527,15 @@ class LevikVpnService : VpnService() {
             if (stopService) {
                 if (stopStartId != null) stopSelfResult(stopStartId) else stopSelf()
             }
+        }
+    }
+
+    /** A newly established TUN supersedes the previous Android interface even before publication. */
+    private fun preserveHandoverBarrier() {
+        if (handoverTun.get() == null || serviceCommands.connectionGeneration == null || destroyed.get()) return
+        tunInterface?.let { tun ->
+            handoverTun.getAndSet(tun)?.takeIf { it !== tun }?.let { runCatching { it.close() } }
+            tunInterface = null
         }
     }
 
@@ -1525,6 +1575,7 @@ class LevikVpnService : VpnService() {
         currentEngineAttempt = null
         currentEngine = null
         currentServer = null
+        connectingServer = null
         currentSubscriptionId = null
         currentServerName = null
         currentNetwork = null
@@ -2218,37 +2269,42 @@ class LevikVpnService : VpnService() {
         handleUnderlyingNetworkChange()
     }
 
+    @Synchronized
     private fun handleUnderlyingNetworkChange() {
-        if (sharingGuest != null) return
+        if (sharingGuest != null || destroyed.get()) return
         val generation = serviceCommands.connectionGeneration ?: return
-        serviceScope.launch {
-            if (sharingGuest != null || !serviceCommands.permitsAutomaticConnection(generation)) return@launch
-            val requirement = currentServer?.networkRequirement ?: return@launch
-            val preferred = networkMonitor.activeNetwork()
-            val returningToRegular = preferred != null && shouldReturnToRegularNetwork(preferred)
-            if (returningToRegular && pendingRegularNetwork == preferred && connectionJob?.isActive == true) return@launch
-            val selected = networkMonitor.activeNetwork(requirement)
-            val selectedDns = selected?.takeIf { currentServer?.engine == TunnelEngineKind.XRAY || smartAutoLiveConfig != null }
-                ?.let(networkMonitor::bootstrapDnsServer)
-            if (!returningToRegular && selected == currentNetwork && selectedDns == currentBootstrapDnsServer &&
-                (coreRunning || reconnectJob?.isActive == true)
-            ) {
-                return@launch
-            }
-            // Interrupt an in-flight handshake before waiting for the connection lock. Otherwise
-            // a lost Wi-Fi network can leave the old handshake blocking the LTE callback.
-            serviceCommands.interruptReconnect(generation)
-            cancelManualHotSwitch()
-            smartAutoLiveRuntime?.close()
-            smartAutoLiveRuntime = null
-            serviceRouteRuntime?.close()
-            serviceRouteRuntime = null
+        if (!serviceCommands.permitsAutomaticConnection(generation)) return
+        val source = currentServer ?: connectingServer ?: handoverServer ?: return
+        val preferred = networkMonitor.activeNetwork()
+        val returningToRegular = preferred != null && shouldReturnToRegularNetwork(preferred)
+        val selected = networkMonitor.activeNetwork(source.networkRequirement)
+        val selectedDns = selected?.takeIf { source.engine == TunnelEngineKind.XRAY || smartAutoLiveConfig != null }
+            ?.let(networkMonitor::bootstrapDnsServer)
+        if (!returningToRegular && selected == currentNetwork && selectedDns == currentBootstrapDnsServer &&
+            (coreRunning || reconnectJob?.isActive == true || connectionJob?.isActive == true)) return
+        val target = networkHandoverTarget(selected, preferred, returningToRegular)
+        val revision = networkChanges.begin(generation, NetworkChangeTarget(target, selectedDns, returningToRegular)) ?: return
+        handoverServer = source
+        // The full SmartAuto startup is a connectionJob, unlike a legacy reconnectJob.
+        // Cancel both before waiting for the connection lock held by their preparation.
+        connectionJob?.cancel()
+        serviceCommands.interruptReconnect(generation)
+        val change = serviceScope.launch(start = CoroutineStart.LAZY) {
+            if (!networkChanges.current(revision) || sharingGuest != null || !serviceCommands.permitsAutomaticConnection(generation)) return@launch
             connectionMutex.withLock {
-                if (destroyed.get() || !serviceCommands.permitsAutomaticConnection(generation)) return@withLock
-                val server = currentServer ?: return@withLock
+                if (destroyed.get() || !networkChanges.current(revision) || !serviceCommands.permitsAutomaticConnection(generation)) return@withLock
+                val server = currentServer ?: connectingServer ?: handoverServer ?: return@withLock
+                fun retireNetworkRuntime() {
+                    cancelManualHotSwitch()
+                    smartAutoLiveRuntime?.close()
+                    smartAutoLiveRuntime = null
+                    serviceRouteRuntime?.close()
+                    serviceRouteRuntime = null
+                }
                 val preferredNetwork = networkMonitor.activeNetwork()
                 if (preferredNetwork != null && shouldReturnToRegularNetwork(preferredNetwork)) {
                     if (pendingRegularNetwork != preferredNetwork || connectionJob?.isActive != true) {
+                        retireNetworkRuntime()
                         pendingRegularNetwork = preferredNetwork
                         mobileNetworkEvaluationJob?.cancel()
                         mobileAutomationJob?.cancel()
@@ -2263,7 +2319,7 @@ class LevikVpnService : VpnService() {
                         pendingAutoFallback = null
                         automaticRollbackServerId = null
                         automaticTargetServerId = null
-                        leaveCellularOnlyServer(server, preferredNetwork)
+                        leaveCellularOnlyServer(server, preferredNetwork, revision)
                     }
                     return@withLock
                 }
@@ -2273,9 +2329,9 @@ class LevikVpnService : VpnService() {
                 if (replacement == currentNetwork && replacementDns == currentBootstrapDnsServer && coreRunning) {
                     return@withLock
                 }
-                if (replacement != null && !setUnderlyingNetworks(arrayOf(replacement))) {
-                    return@withLock
-                }
+                if (replacement != null && (tunInterface != null || handoverTun.get() != null) &&
+                    !setUnderlyingNetworks(arrayOf(replacement))) return@withLock
+                retireNetworkRuntime()
                 currentNetwork = replacement
                 currentBootstrapDnsServer = replacementDns
                 underlyingNetwork.set(replacement)
@@ -2289,8 +2345,9 @@ class LevikVpnService : VpnService() {
                 if (replacement != null) {
                     AppLogger.i(LOG_TAG, "Underlying network changed, triggering reconnect")
                     telemetry.record { it.network(networkType(replacement), NetworkState.CHANGED) }
-                    if (container.settings.automaticServer.value && server.isSmartAutoCandidate()) {
-                        reconnectMeasuredNetwork(generation)
+                    if (!coreRunning || currentEngineRequest == null ||
+                        container.settings.automaticServer.value && server.isSmartAutoCandidate()) {
+                        reconnectMeasuredNetwork(generation, revision)
                         return@withLock
                     }
                     if (moveToNetworkWinner(server, replacement)) return@withLock
@@ -2300,7 +2357,7 @@ class LevikVpnService : VpnService() {
                 val otherNetwork = networkMonitor.activeNetwork()
                     ?.takeIf { server.networkRequirement != TunnelNetworkRequirement.ANY }
                 if (otherNetwork != null) {
-                    leaveCellularOnlyServer(server, otherNetwork)
+                    leaveCellularOnlyServer(server, otherNetwork, revision)
                     return@withLock
                 }
                 VpnStateStore.update(coreOwner) { state ->
@@ -2313,28 +2370,37 @@ class LevikVpnService : VpnService() {
                 showForeground(VpnConnectionState.RECONNECTING, currentServerName)
             }
         }
+        networkChanges.track(revision, change)
+        change.start()
     }
 
     /** Retain the old TUN as a traffic barrier while the new physical network is measured. */
-    private fun reconnectMeasuredNetwork(generation: Long) {
+    private fun reconnectMeasuredNetwork(generation: Long, revision: Long) {
         nextAttemptCause = AttemptCause.NETWORK_CHANGE
         pendingAutoFallback = null
         reconnectJob?.cancel()
         connectionJob?.cancel()
-        connectionJob = serviceScope.launch {
-            val retainedTun = connectionMutex.withLock {
-                if (!serviceCommands.permitsAutomaticConnection(generation)) return@launch
-                tunInterface.also { tunInterface = null }
+        val reconnect = serviceScope.launch(start = CoroutineStart.LAZY) {
+            connectionMutex.withLock {
+                if (!networkChanges.current(revision) || !serviceCommands.permitsAutomaticConnection(generation)) return@launch
+                tunInterface?.let { tun ->
+                    // A new established TUN supersedes the older barrier, if any.
+                    handoverTun.getAndSet(tun)?.takeIf { it !== tun }?.let { runCatching { it.close() } }
+                    tunInterface = null
+                }
             }
-            try {
-                stopConnection(stopService = false)
-                connect()
-            } finally { runCatching { retainedTun?.close() } }
+            stopConnection(stopService = false, preserveNetworkMonitoring = true)
+            coroutineContext.ensureActive()
+            if (networkChanges.current(revision) && serviceCommands.permitsAutomaticConnection(generation)) connect()
         }
+        connectionJob = reconnect
+        serviceCommands.trackReconnect(generation, reconnect)
+        networkChanges.track(revision, reconnect)
+        reconnect.start()
     }
 
     private fun shouldReturnToRegularNetwork(network: Network): Boolean = shouldReturnFromMobileServer(
-        currentServerIsMobile = currentServer?.isMobileServer() == true,
+        currentServerIsMobile = (currentServer ?: connectingServer ?: handoverServer)?.isMobileServer() == true,
         preferredNetworkIsCellular = networkMonitor.isCellular(network),
         preferredNetworkIsValidated = networkMonitor.isValidated(network),
         automaticServer = container.settings.automaticServer.value,
@@ -2346,10 +2412,10 @@ class LevikVpnService : VpnService() {
      * retains cellular. Also recovers a mobile-only server when cellular disappears entirely.
      * The previous regular server takes over, else Smart Auto's best.
      */
-    private fun leaveCellularOnlyServer(current: TunnelServer, network: Network) {
+    private fun leaveCellularOnlyServer(current: TunnelServer, network: Network, revision: Long) {
         reconnectJob?.cancel()
         connectionJob?.cancel()
-        connectionJob = serviceScope.launch {
+        val handover = serviceScope.launch(start = CoroutineStart.LAZY) {
             val generation = serviceCommands.connectionGeneration ?: return@launch
             val validatedHandover = pendingRegularNetwork == network
             val profile = runCatching { readPreparedProfile() }.getOrNull()
@@ -2393,9 +2459,13 @@ class LevikVpnService : VpnService() {
             )
             AppLogger.i(LOG_TAG, "Leaving mobile server for the preferred physical network")
             nextAttemptCause = AttemptCause.NETWORK_CHANGE
-            stopConnection(stopService = false)
-            connect()
+            stopConnection(stopService = false, preserveNetworkMonitoring = true)
+            if (networkChanges.current(revision)) connect()
         }
+        connectionJob = handover
+        serviceCommands.connectionGeneration?.let { serviceCommands.trackReconnect(it, handover) }
+        networkChanges.track(revision, handover)
+        handover.start()
     }
 
     /**
@@ -3485,6 +3555,9 @@ class LevikVpnService : VpnService() {
     }
 
     private suspend fun pauseConnection(minutes: Int, home: String? = null) = connectionMutex.withLock {
+        networkChanges.reset()
+        handoverServer = null
+        runCatching { handoverTun.getAndSet(null)?.close() }
         telemetry.record { it.pause() }
         pendingAutoFallback = null
         tunnelHealthPolicy.reset()
