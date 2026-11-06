@@ -183,10 +183,10 @@ import com.leviknet.vpn.vpn.HotSwitchPhase
 import com.leviknet.vpn.vpn.countryFlag
 import com.leviknet.vpn.vpn.SmartSwitchReason
 import com.leviknet.vpn.vpn.smartProtocolLabel
-import com.leviknet.vpn.vpn.effectiveCategory
 import com.leviknet.vpn.vpn.TunnelEngineKind
 import com.leviknet.vpn.vpn.createYandexGuestIntent
 import com.leviknet.vpn.vpn.isMobileServer
+import com.leviknet.vpn.vpn.hasUnlimitedTraffic
 import com.leviknet.vpn.vpn.CountryServerGroup
 import com.leviknet.vpn.vpn.CountryServerNode
 import com.leviknet.vpn.vpn.ServerProtocolGroup
@@ -1758,11 +1758,13 @@ private fun MainContent(
             )
             AppTab.SERVERS -> ServersScreen(
                 modifier = contentModifier,
+                mobileTraffic = state.lteTraffic ?: state.mobileSubscriptionTraffic(),
                 profile = state.profile,
                 selectedServerId = displayedServerId(state),
                 vpn = state.vpn,
                 onReconnectAll = onReconnectAll,
                 loading = state.refreshing,
+                selectingAutomatic = state.selectingAutomatic,
                 canRefresh = state.session == SessionStatus.Authenticated,
                 onRefresh = onRefresh,
                 onServerSelected = onServerSelected,
@@ -3226,11 +3228,13 @@ private fun flagDescription(countryCode: String?): String =
 @Composable
 private fun ServersScreen(
     modifier: Modifier,
+    mobileTraffic: TrafficSummary?,
     profile: PreparedTunnelProfile?,
     selectedServerId: String?,
     vpn: VpnSnapshot,
     onReconnectAll: () -> Unit,
     loading: Boolean,
+    selectingAutomatic: Boolean,
     canRefresh: Boolean,
     onRefresh: () -> Unit,
     onServerSelected: (String) -> Unit,
@@ -3424,8 +3428,12 @@ private fun ServersScreen(
             Spacer(Modifier.height(10.dp))
         }
 
+        if (loading && !profile?.servers.isNullOrEmpty()) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        }
+
         when {
-            loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            showInitialServerLoading(loading, !profile?.servers.isNullOrEmpty()) -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }
             servers.isEmpty() -> Box(
@@ -3501,11 +3509,16 @@ private fun ServersScreen(
                                             fontWeight = FontWeight.Bold,
                                         )
                                         Text(
-                                            text = if (pingingServers) {
-                                                stringResource(R.string.server_ping_checking)
-                                             } else {
-                                                stringResource(R.string.server_automatic_description)
+                                            text = if (!automaticServer) stringResource(R.string.server_automatic_description)
+                                            else when (smartAutoUiStatus(vpn, selectingAutomatic)) {
+                                                SmartAutoUiStatus.READY -> stringResource(R.string.smart_auto_ready)
+                                                SmartAutoUiStatus.PREPARING -> stringResource(R.string.smart_auto_preparing)
+                                                SmartAutoUiStatus.CONNECTING -> stringResource(R.string.smart_auto_connecting)
+                                                SmartAutoUiStatus.CONNECTED -> stringResource(R.string.smart_auto_connected)
+                                                SmartAutoUiStatus.RECOVERING -> stringResource(R.string.smart_auto_recovering)
+                                                SmartAutoUiStatus.PAUSED -> stringResource(R.string.smart_auto_paused)
                                             },
+                                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             style = MaterialTheme.typography.bodySmall,
                                         )
@@ -3538,20 +3551,11 @@ private fun ServersScreen(
                                 )
                             }
                         }
-                    } else if (filterType == ServerFilterType.ALL && searchQuery.isEmpty()) {
-                        val regularServers = filtered.filter {
-                            it.effectiveCategory() == TunnelServerCategory.REGULAR
-                        }
-                        val allowlistServers = filtered.filter {
-                            it.isMobileServer()
-                        }
-                        val categoryCount = listOf(
-                            regularServers,
-                            allowlistServers,
-                        ).count(List<TunnelServer>::isNotEmpty)
-
-                        if (categoryCount > 1) {
-                            if (regularServers.isNotEmpty()) {
+                    } else {
+                        val regularServers = filtered.filter { !it.isMobileServer() }
+                        val allowlistServers = filtered.filter(TunnelServer::isMobileServer)
+                        if (regularServers.isNotEmpty()) {
+                            if (allowlistServers.isNotEmpty()) {
                                 item(key = "section_regular_header") {
                                     ServerCategoryHeader(
                                         title = R.string.servers_category_regular,
@@ -3559,52 +3563,8 @@ private fun ServersScreen(
                                         topPadding = 8,
                                     )
                                 }
-                                items(groupByCountry(regularServers), key = CountryServerGroup::id) { country ->
-                                    CountryServerCard(
-                                        country = country,
-                                        switchSnapshot = vpn,
-                                        onCountrySelected = onCountrySelected,
-                                        automaticServer = automaticServer,
-                                        selectedServerId = selectedServerId,
-                                        favoriteServerIds = favoriteServerIds,
-                                        serverPings = serverPings,
-                                        serverMaintenance = serverMaintenance,
-                                        serverLoad = serverLoad,
-                                        pingingServers = pingingServers,
-                                        isDark = isDark,
-                                        onServerSelected = onServerSelection,
-                                        onYandexSetup = if (yandexAvailable) onYandexSetup else null,
-                                        onToggleFavorite = onToggleFavorite,
-                                    )
-                                }
                             }
-                            if (allowlistServers.isNotEmpty()) {
-                                item(key = "section_mobile_allowlist_header") {
-                                    ServerCategoryHeader(
-                                        title = R.string.servers_category_mobile_allowlist,
-                                        description = R.string.servers_category_mobile_allowlist_desc,
-                                        badge = R.string.server_badge_mobile_allowlist,
-                                        accent = if (isDark) Color(0xFF60A5FA) else LevikBlue,
-                                    )
-                                }
-                                items(allowlistServers, key = TunnelServer::id) { server ->
-                                    ServerItemCard(
-                                        server = server,
-                                        switchSnapshot = vpn,
-                                        selected = !automaticServer && server.id == selectedServerId,
-                                        isFav = favoriteServerIds.contains(server.id),
-                                        pingValue = serverPings[server.id],
-                                        maintenanceEndsAt = serverMaintenance[server.id],
-                                        pingingServers = pingingServers,
-                                        isDark = isDark,
-                                        onServerSelected = onServerSelection,
-                                        onYandexSetup = if (yandexAvailable) onYandexSetup else null,
-                                        onToggleFavorite = onToggleFavorite,
-                                    )
-                                }
-                            }
-                        } else {
-                            items(groupByCountry(filtered), key = CountryServerGroup::id) { country ->
+                            items(groupByCountry(regularServers), key = CountryServerGroup::id) { country ->
                                 CountryServerCard(
                                     country = country,
                                     switchSnapshot = vpn,
@@ -3623,30 +3583,72 @@ private fun ServersScreen(
                                 )
                             }
                         }
-                    } else {
-                        items(groupByCountry(filtered), key = CountryServerGroup::id) { country ->
-                            CountryServerCard(
-                                country = country,
-                                switchSnapshot = vpn,
-                                onCountrySelected = onCountrySelected,
-                                automaticServer = automaticServer,
-                                selectedServerId = selectedServerId,
-                                favoriteServerIds = favoriteServerIds,
-                                serverPings = serverPings,
-                                serverMaintenance = serverMaintenance,
-                                serverLoad = serverLoad,
-                                pingingServers = pingingServers,
-                                isDark = isDark,
-                                onServerSelected = onServerSelection,
-                                onYandexSetup = if (yandexAvailable) onYandexSetup else null,
-                                onToggleFavorite = onToggleFavorite,
-                            )
+                        if (allowlistServers.isNotEmpty()) {
+                            item(key = "section_mobile_allowlist_header") {
+                                ServerCategoryHeader(
+                                    title = R.string.servers_category_mobile_allowlist,
+                                    description = R.string.servers_category_mobile_allowlist_desc,
+                                    accent = if (isDark) Color(0xFF60A5FA) else LevikBlue,
+                                )
+                            }
+                            // All metered nodes spend the same mobile subscription allowance.
+                            listOf(false, true).forEach { unlimited ->
+                                val trafficServers = allowlistServers.filter { it.hasUnlimitedTraffic() == unlimited }
+                                if (trafficServers.isNotEmpty()) {
+                                    item(key = "section_mobile_traffic_$unlimited") {
+                                        ServerCategoryHeader(
+                                            title = if (unlimited) {
+                                                R.string.servers_traffic_unlimited
+                                            } else {
+                                                R.string.servers_traffic_limited
+                                            },
+                                            description = if (unlimited) {
+                                                R.string.servers_traffic_unlimited_desc
+                                            } else {
+                                                R.string.servers_traffic_limited_desc
+                                            },
+                                            topPadding = 8,
+                                        )
+                                    }
+                                    items(trafficServers, key = TunnelServer::id) { server ->
+                                        ServerItemCard(
+                                            server = server,
+                                            trafficDescription = if (unlimited) {
+                                                stringResource(R.string.servers_traffic_unlimited_label)
+                                            } else {
+                                                mobileTrafficRemainingText(mobileTraffic)
+                                            },
+                                            switchSnapshot = vpn,
+                                            selected = !automaticServer && server.id == selectedServerId,
+                                            isFav = favoriteServerIds.contains(server.id),
+                                            pingValue = serverPings[server.id],
+                                            maintenanceEndsAt = serverMaintenance[server.id],
+                                            pingingServers = pingingServers,
+                                            isDark = isDark,
+                                            onServerSelected = onServerSelection,
+                                            onYandexSetup = if (yandexAvailable) onYandexSetup else null,
+                                            onToggleFavorite = onToggleFavorite,
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun mobileTrafficRemainingText(traffic: TrafficSummary?): String = when {
+    traffic == null -> stringResource(R.string.servers_traffic_unknown)
+    traffic.limitBytes <= 0L -> stringResource(R.string.servers_traffic_no_limit)
+    else -> stringResource(
+        R.string.servers_traffic_remaining,
+        formatBytes(traffic.remainingBytes()),
+        formatBytes(traffic.limitBytes),
+    )
 }
 
 @Composable
@@ -3968,6 +3970,8 @@ private fun ServerItemCard(
     title: String? = null,
     /** The server's label inside its country. */
     subtitle: String? = null,
+    /** Mobile allowance shared by all metered servers, or an unlimited relay label. */
+    trafficDescription: String? = null,
     /** False inside a country card, whose header carries the flag. */
     showFlag: Boolean = true,
     switchSnapshot: VpnSnapshot? = null,
@@ -4030,6 +4034,13 @@ private fun ServerItemCard(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    if (trafficDescription != null) {
+                        Text(
+                            text = trafficDescription,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                     if (server.isMobileServer()) {

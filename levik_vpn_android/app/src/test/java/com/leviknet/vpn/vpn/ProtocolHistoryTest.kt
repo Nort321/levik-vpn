@@ -104,4 +104,40 @@ class ProtocolHistoryTest {
         assertEquals("s${ProtocolHistory.MAX_NETWORKS}", history.winner("net-${ProtocolHistory.MAX_NETWORKS}"))
         assertEquals(ProtocolHistory.MAX_NETWORKS, history.winners.size)
     }
+    @Test
+    fun `startup winner requires recent evidence for the exact network and server configuration`() {
+        val history = ProtocolHistory().recordSuccess("wifi", "tuic", 100L, "a", context = "config-a")
+        assertEquals("a", history.recentWinner("wifi", mapOf("a" to "config-a"), 200L))
+        assertEquals(null, history.recentWinner("lte", mapOf("a" to "config-a"), 200L))
+        assertEquals(null, history.recentWinner("wifi", mapOf("a" to "config-new"), 200L))
+        assertEquals(null, history.recentWinner("wifi", emptyMap(), 200L))
+        assertEquals(null, history.recentWinner("wifi", mapOf("a" to "config-a"), 99L))
+        assertEquals(null, history.recentWinner("wifi", mapOf("a" to "config-a"), 100L + ProtocolHistory.STARTUP_WINNER_TTL_MS))
+        val failed = history.recordFailure("wifi", "tuic", "node-a", 200L, failedServerId = "a")
+        assertEquals(null, failed.recentWinner("wifi", mapOf("a" to "config-a"), 300L))
+    }
+
+    @Test
+    fun `legacy history and protocol only success cannot renew a stale startup winner`() {
+        val legacy = ProtocolHistory(winners = mapOf("wifi" to "a"))
+        assertEquals(null, legacy.recentWinner("wifi", mapOf("a" to "config-a"), 200L))
+        val history = ProtocolHistory().recordSuccess("wifi", "tuic", 100L, "a", context = "config-a")
+            .recordSuccess("wifi", "tuic", ProtocolHistory.STARTUP_WINNER_TTL_MS)
+        assertEquals(null, history.recentWinner("wifi", mapOf("a" to "config-a"), 100L + ProtocolHistory.STARTUP_WINNER_TTL_MS))
+        val json = Json { ignoreUnknownKeys = true }
+        val decoded = json.decodeFromString(ProtocolHistory.serializer(), json.encodeToString(ProtocolHistory.serializer(), history))
+        assertEquals(history, decoded)
+    }
+
+    @Test
+    fun `a failed route drops only its startup promise without inventing a protocol block`() {
+        val history = ProtocolHistory().recordSuccess("wifi", "tuic", 100L, "a", context = "config-a")
+            .recordSuccess("lte", "tuic", 100L, "b", context = "config-b")
+        assertEquals(history, history.forgetWinner("wifi", "other"))
+        val forgotten = history.forgetWinner("wifi", "a")
+        assertEquals(null, forgotten.recentWinner("wifi", mapOf("a" to "config-a"), 200L))
+        assertEquals("b", forgotten.recentWinner("lte", mapOf("b" to "config-b"), 200L))
+        assertEquals(ProtocolVerdict.WORKS, forgotten.verdict("wifi", "tuic", 200L))
+    }
+
 }

@@ -1681,39 +1681,18 @@ class LevikVpnService : VpnService() {
         container.settings.setAutomaticServer(true)
         smartAutoLiveRuntime?.close()
         smartAutoLiveRuntime = null
-        val owner = hotSwitchOwner ?: return
         val network = currentNetwork ?: return
         val generation = serviceCommands.connectionGeneration ?: return
-        val lease = coreLease
-        val intent = hotSwitchIntent.get()
-        val live = smartAutoLiveConfig ?: return
-        val smartAuto = container.appPlatform.smartAuto
-        val candidates = live.originals.filter { source -> source.isSmartAutoCandidate() && sourceMatchesLiveProfile(source) &&
-            (serviceRouteConfig == null || serviceRouteConfig?.policy?.exitFor(source)?.state == "enabled") }
-        val target = smartAuto.rank(candidates, emptyMap(), network).firstOrNull()?.id ?: owner.currentId
-        val targetName = live.originals.firstOrNull { it.id == target }?.name
-        VpnStateStore.update(coreOwner) { it.copy(mainSelectionCertain = owner.certain,
-            hotSwitch = HotSwitchSnapshot(HotSwitchPhase.PREPARING, target, targetName)) }
-        hotSwitchJob = serviceScope.launch {
-            // Serialize with a cancelled manual RPC and its compensation before
-            // the automatic policy can make a fresh decision.
-            val result = owner.select(target, canCommit = {
-                coreRunning && coreLease == lease && hotSwitchOwner === owner && currentNetwork == network &&
-                    intent == hotSwitchIntent.get() && container.settings.automaticServer.value &&
-                    serviceCommands.permitsAutomaticConnection(generation) &&
-                    candidates.firstOrNull { it.id == target }?.let(::sourceMatchesLiveProfile) == true
-            })
-            if (intent != hotSwitchIntent.get() || hotSwitchOwner !== owner || coreLease != lease) return@launch
-            val saved = result.outcome != HotSwitchMainOwner.Outcome.APPLIED || persistLiveMain(owner, result.serverId)
-            if (intent != hotSwitchIntent.get() || hotSwitchOwner !== owner || coreLease != lease) return@launch
-            VpnStateStore.update(coreOwner) { it.copy(mainSelectionCertain = owner.certain,
-                hotSwitch = when (result.outcome) {
-                    HotSwitchMainOwner.Outcome.UNCERTAIN -> HotSwitchSnapshot(HotSwitchPhase.UNCERTAIN, target, targetName)
-                    HotSwitchMainOwner.Outcome.APPLIED -> HotSwitchSnapshot(HotSwitchPhase.APPLIED, result.serverId, currentServerName, saved)
-                    HotSwitchMainOwner.Outcome.FAILED -> HotSwitchSnapshot(HotSwitchPhase.FAILED, target, targetName)
-                    else -> null
-                }) }
-            startSmartAutoLive(network, generation)
+        if (!coreRunning || !serviceCommands.permitsAutomaticConnection(generation)) return
+        // Enabling Auto adopts the working main. A measured improvement or a confirmed failure,
+        // rather than a rank of empty pings, is what permits the runtime to change it.
+        if (hotSwitchOwner != null && smartAutoLiveConfig != null) {
+            startSmartAutoLive(network, generation, initialRound = false)
+        } else {
+            // Native/manual sessions without a hot-switch pool keep running and acquire the
+            // existing recovery path. Service routes already own their individual exit health.
+            currentServer?.let { startTrafficCheck(it, network) }
+            startAutoHealing()
         }
     }
 
@@ -1749,6 +1728,10 @@ class LevikVpnService : VpnService() {
             enabled = ::enabled,
             currentId = { currentServer?.id },
             heavyTraffic = { VpnStateStore.state.value.let { it.downloadBytesPerSecond + it.uploadBytesPerSecond > 512 * 1024 } },
+            metered = { getSystemService(ConnectivityManager::class.java)?.getNetworkCapabilities(network)
+                ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) != true },
+            probeTargets = { SmartRouteProber.targets(container.allowlistProbes.current()) },
+            onDataVerified = { freezeDetector.checkPassed() },
             refreshLoad = { container.appPlatform.refreshNodeLoad(maxAgeMs = 15_000L, waitMs = 1_200L) },
             readTraffic = { control -> if (serviceRouteConfig != null) serviceRouteRuntime?.tunTrafficCounters() else control?.tunTrafficCounters() },
             mainHealth = { healthy -> if (enabled()) serviceRouteRuntime?.automaticMainHealth(healthy) },
@@ -3208,6 +3191,11 @@ class LevikVpnService : VpnService() {
 
     /** The stats saw a tunnel that sends but hardly receives: check it the same way. */
     private fun onFreezeSuspected() {
+        smartAutoLiveRuntime?.let { live ->
+            live.checkSoon()
+            wakeAllowlistProbe()
+            return
+        }
         if (serviceRouteConfig != null) return
         if (trafficCheckJob?.isActive == true) return
         val server = currentServer ?: return

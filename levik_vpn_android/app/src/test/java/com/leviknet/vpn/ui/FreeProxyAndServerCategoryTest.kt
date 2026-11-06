@@ -209,5 +209,6 @@ class FreeProxyAndServerCategoryTest {
 
         assertTrue(relay.hasUnlimitedTraffic())
         assertFalse(relay.isStandardMobileServer())
+        assertTrue(relay.copy(engine = TunnelEngineKind.LEVIK_YANDEX).hasUnlimitedTraffic())
     }
 }

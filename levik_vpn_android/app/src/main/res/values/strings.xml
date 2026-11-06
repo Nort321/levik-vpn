@@ -88,8 +88,8 @@
     <string name="hot_switch_uncertain_desc">The current route could not be confirmed. Reconnect or repeat your selection.</string>
     <string name="hot_switch_reconnect_all">Reconnect everything</string>
     <string name="hot_switch_reconnect_desc">Closes existing connections and starts a fresh VPN connection through the selected server.</string>
-    <string name="server_automatic_description">Connect to the lowest-latency server, prioritizing regular servers outside Russia. Allow-list bypass servers without VK sign-in also participate in automatic selection.</string>
-    <string name="server_ping_checking">Checking all servers…</string>
+    <string name="server_automatic_description">Automatically chooses a reliable route for your network and adapts when conditions change.</string>
+    <string name="server_ping_checking">Updating connection quality…</string>
     <string name="server_ping_checking_short">…</string>
     <string name="server_ping_unavailable">Could not measure server latency. The previous available server was kept.</string>
     <string name="whitelist_active_banner">Allow-list mode is active — choose a server from the Allow-list category.</string>
@@ -374,6 +374,14 @@
     <string name="servers_category_regular_desc">Unlimited traffic for all your devices</string>
     <string name="servers_category_mobile_allowlist">Allow-list bypass</string>
     <string name="servers_category_mobile_allowlist_desc">For networks where your provider only allows selected websites and apps. Availability depends on your network.</string>
+    <string name="servers_traffic_limited">Limited</string>
+    <string name="servers_traffic_limited_desc">One traffic allowance shared by all servers in this group for the current billing period.</string>
+    <string name="servers_traffic_unlimited">Unlimited</string>
+    <string name="servers_traffic_unlimited_desc">Traffic through these servers does not use the limited group’s allowance.</string>
+    <string name="servers_traffic_unlimited_label">Unlimited traffic</string>
+    <string name="servers_traffic_remaining">%1$s of %2$s remaining this billing period</string>
+    <string name="servers_traffic_unknown">Remaining traffic unavailable. Refresh the list.</string>
+    <string name="servers_traffic_no_limit">No traffic limit set for this subscription</string>
     <string name="server_badge_mobile_allowlist">ALLOW-LIST</string>
     <string name="server_badge_regular">Unlimited</string>
     <string name="selected_server_mobile_allowlist">Allow-list bypass</string>
@@ -1064,4 +1072,10 @@
     <string name="pairing_new_code">New code</string>
     <string name="pairing_done">Done</string>
     <string name="login_other_way">Another way to sign in</string>
+    <string name="smart_auto_ready">Selected. The best known route will be used when you connect.</string>
+    <string name="smart_auto_preparing">Checking your network before connecting…</string>
+    <string name="smart_auto_connecting">Connecting and checking the route…</string>
+    <string name="smart_auto_connected">Connected. Connection quality is monitored in the background.</string>
+    <string name="smart_auto_recovering">Restoring the connection using an available route…</string>
+    <string name="smart_auto_paused">Paused. Automatic selection resumes with your VPN.</string>
 </resources>

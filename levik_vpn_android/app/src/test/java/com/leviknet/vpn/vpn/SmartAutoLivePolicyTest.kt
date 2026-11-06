@@ -65,4 +65,39 @@ class SmartAutoLivePolicyTest {
         val full = SmartRouteResource("r1" + "a".repeat(20), true, 1.0, "overloaded", 1.0, 0.0)
         repeat(4) { assertNull(policy.consider("a", values, mapOf("a" to full), it * 30_000L)) }
     }
+
+    @Test fun `confirmed failure recovers during traffic and cooldown without an idle window`() {
+        val policy = SmartAutoLivePolicy()
+        policy.installed(0L)
+        val values = mapOf("a" to SmartRouteMeasurement(emptyList(), 4), "b" to metric(150.0))
+        assertNull(policy.consider("a", values, emptyMap(), 1_000L, optimizationAllowed = false))
+        assertEquals("b", policy.consider("a", values, emptyMap(), 3_000L, optimizationAllowed = false))
+        org.junit.Assert.assertTrue(policy.recovering)
+    }
+
+    @Test fun `failed data transfer recovers promptly but requires independent challenger evidence`() {
+        val policy = SmartAutoLivePolicy()
+        policy.installed(0L)
+        val partial = metric(40.0).copy(successfulTargets = setOf("one.example"))
+        assertNull(policy.consider("a", mapOf("a" to metric(10.0), "b" to partial), emptyMap(), 1_000L,
+            optimizationAllowed = false, dataFailed = true))
+        assertEquals("b", policy.consider("a", mapOf("a" to metric(10.0), "b" to metric(40.0)), emptyMap(), 2_000L,
+            optimizationAllowed = false, dataFailed = true))
+    }
+
+    @Test fun `offline networks and busy overload never authorize an automatic move`() {
+        val policy = SmartAutoLivePolicy()
+        val failed = SmartRouteMeasurement(emptyList(), 4)
+        repeat(5) { assertNull(policy.consider("a", mapOf("a" to failed, "b" to failed), emptyMap(), it * 2_000L, false, true)) }
+        val full = SmartRouteResource("r1" + "a".repeat(20), true, 1.0, "overloaded", 1.0, 0.0)
+        repeat(5) { assertNull(policy.consider("a", mapOf("a" to metric(50.0), "b" to metric(30.0)), mapOf("a" to full), it * 2_000L, false)) }
+    }
+
+    @Test fun `initial shortlist keeps near equal or busy working routes but restores broken ones`() {
+        val policy = SmartAutoLivePolicy()
+        assertNull(policy.initialChoice("a", mapOf("a" to metric(50.0), "b" to metric(45.0)), emptyMap(), false, false))
+        assertNull(policy.initialChoice("a", mapOf("a" to metric(100.0), "b" to metric(40.0)), emptyMap(), true, false))
+        assertEquals("b", policy.initialChoice("a", mapOf("a" to metric(100.0), "b" to metric(40.0)), emptyMap(), false, false))
+        assertEquals("b", policy.initialChoice("a", mapOf("a" to SmartRouteMeasurement(emptyList(), 4), "b" to metric(150.0)), emptyMap(), true, false))
+    }
 }

@@ -20,7 +20,10 @@ class SmartRouteProberTest {
             if (bytes >= 64 * 1024) null else SmartRouteExchange(40.0, 100.0)
         }
         SmartRouteProber(candidates, transport).use { prober ->
-            prober.measureLatency(light = true) { _, _ -> }
+            prober.measureLatency(light = true) { _, value ->
+                // A tiny RTT response must never seed the 64 KiB cached data-proof path.
+                org.junit.Assert.assertNull(value.screeningMbps)
+            }
             assertEquals(3 * 6 * 1024, downloaded)
             assertTrue(!prober.verifyData(candidates.first().id))
         }
@@ -91,5 +94,40 @@ class SmartRouteProberTest {
             prober.measureBandwidth(measured.toMap()) { id, value -> measured[id] = value }
         }
         assertTrue(measured.values.all { it.hasBandwidth && !it.confirmed && it.successfulTargets.size == 1 })
+    }
+
+    @Test fun `four small rounds tolerate one failing provider and retain independent evidence`() = runTest {
+        val measured = mutableMapOf<String, SmartRouteMeasurement>()
+        var downloaded = 0
+        val targets = listOf("https://one.example/test", "https://two.example/test", "https://three.example/test")
+        SmartRouteProber(candidates, SmartRouteProbeTransport { _, request, bytes, _ ->
+            downloaded += bytes
+            if (request.url.host == "one.example") null else SmartRouteExchange(40.0, 100.0)
+        }, targets).use { prober ->
+            prober.measureLatency(light = true, rounds = 4) { id, value -> measured[id] = value }
+        }
+        assertTrue(measured.values.all { it.confirmed })
+        assertEquals(3 * 4 * 1024, downloaded)
+    }
+
+    @Test fun `data verification races independent targets and cancels a blackholed provider`() = runTest {
+        var cancelled = 0
+        var completed = 0
+        val targets = listOf("https://two.example/test", "https://three.example/test")
+        SmartRouteProber(candidates, SmartRouteProbeTransport { _, request, bytes, _ ->
+            assertEquals(64 * 1024, bytes)
+            if (request.url.host == "speed.cloudflare.com") {
+                try { delay(100_000); null } finally { cancelled++ }
+            } else { delay(10); completed++; SmartRouteExchange(40.0, 100.0) }
+        }, targets).use { prober -> assertTrue(prober.verifyData("r0")) }
+        assertEquals(1, completed)
+        assertEquals(1, cancelled)
+    }
+
+    @Test fun `signed catalog targets exclude domestic sites and bound unique hosts`() {
+        val targets = SmartRouteProber.targets(com.leviknet.vpn.core.network.AllowlistProbeCatalog.BUILT_IN)
+        assertEquals(4, targets.size)
+        assertEquals(targets.size, targets.map { java.net.URI(it).host }.distinct().size)
+        assertTrue(targets.none { it.contains("ozon.ru") || it.contains("ya.ru") || it.contains("vk.com") })
     }
 }

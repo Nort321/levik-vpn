@@ -43,6 +43,9 @@ sealed interface LiveLoadAnswer {
 
     /** An older website without the endpoint: the configuration's node load still works. */
     data object Unsupported : LiveLoadAnswer
+
+    /** Preserve the previous observation without making its age fresh. */
+    data class RetryLater(val delayMs: Long) : LiveLoadAnswer
 }
 
 /** What Smart Auto ranks with: the newest load the app has, its age, full nodes and quality. */
@@ -59,6 +62,16 @@ data class NodeLoadView(
 }
 
 object LiveLoadPolicy {
+    fun retryAfterMs(value: String?, nowMs: Long): Long {
+        val raw = value?.trim().orEmpty()
+        val seconds = raw.toLongOrNull()?.takeIf { it >= 0 }
+        val delay = if (seconds != null) seconds.coerceAtMost(3600L) * 1000L else runCatching {
+            java.time.ZonedDateTime.parse(raw, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME)
+                .toInstant().toEpochMilli() - nowMs
+        }.getOrNull() ?: 60_000L
+        return delay.coerceIn(1_000L, 3_600_000L)
+    }
+
     /** A load answer is asked for again after this. */
     const val MAX_AGE_MS = 30_000L
 
@@ -109,7 +122,7 @@ object LiveLoadPolicy {
 
     /** The next state after an answer; [throughTunnel] answers keep the previous quality. */
     fun merge(previous: LiveLoad?, answer: LiveLoadAnswer, nowMs: Long, throughTunnel: Boolean): LiveLoad? = when (answer) {
-        LiveLoadAnswer.Unsupported -> previous
+        LiveLoadAnswer.Unsupported, is LiveLoadAnswer.RetryLater -> previous
         LiveLoadAnswer.Same -> previous?.copy(fetchedAtMs = nowMs, routes = previous.routes.mapValues { (_, route) ->
             route.copy(ageSeconds = route.ageSeconds?.plus((nowMs - previous.fetchedAtMs).coerceAtLeast(0L) / 1000.0))
         })

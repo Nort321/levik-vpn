@@ -1,5 +1,6 @@
 package com.leviknet.vpn.vpn
 
+import com.leviknet.vpn.core.network.AllowlistProbeCatalog
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Proxy
@@ -7,6 +8,8 @@ import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
@@ -35,7 +38,9 @@ internal data class SmartRouteExchange(val responseMs: Double, val transferMs: D
 internal class SmartRouteProber(
     private val candidates: List<SmartRouteProbeConfig.Candidate>,
     private val transport: SmartRouteProbeTransport? = null,
+    targets: List<String> = DEFAULT_TARGETS,
 ) : AutoCloseable {
+    private val targets = targets.distinctBy { java.net.URI(it).host }.take(4).ifEmpty { DEFAULT_TARGETS }
     private val sockets = if (transport != null) emptyMap() else candidates.associate {
         it.id to PrivateUnixSocketFactory(it.path)
     }
@@ -46,21 +51,20 @@ internal class SmartRouteProber(
         .connectTimeout(2, TimeUnit.SECONDS).readTimeout(3, TimeUnit.SECONDS).writeTimeout(3, TimeUnit.SECONDS)
         .callTimeout(4, TimeUnit.SECONDS).build() }
 
-    suspend fun measureLatency(light: Boolean = false, onMeasurement: (String, SmartRouteMeasurement) -> Unit) = coroutineScope {
+    suspend fun measureLatency(light: Boolean = false, rounds: Int = 6, onMeasurement: (String, SmartRouteMeasurement) -> Unit) = coroutineScope {
         val limit = Semaphore(8)
         val samples = candidates.associate { it.id to mutableListOf<Double>() }
         val attempts = candidates.associate { it.id to java.util.concurrent.atomic.AtomicInteger() }
         val screening = java.util.concurrent.ConcurrentHashMap<String, Double>()
-        val targets = candidates.associate { it.id to mutableSetOf<String>() }
+        val successfulTargets = candidates.associate { it.id to mutableSetOf<String>() }
         // Reserve time for sequential finalist transfers even when some routes blackhole.
         withTimeoutOrNull(6_000L) {
-            repeat(6) { round ->
+            repeat(rounds.coerceIn(2, 6)) { round ->
                 candidates.map { candidate -> async {
-                    if (attempts.getValue(candidate.id).get() >= 2 && samples.getValue(candidate.id).isEmpty()) return@async
+                    if (attempts.getValue(candidate.id).get() >= targets.size && samples.getValue(candidate.id).isEmpty()) return@async
                     limit.withPermit {
-                        val target = LATENCY_TARGETS[round % LATENCY_TARGETS.size]
-                        val bytes = if (round == 0 && !light) 64 * 1024 else target.second
-                        val url = if (round == 0) "https://speed.cloudflare.com/__down?bytes=$bytes" else target.first
+                        val bytes = if (round == 0 && !light) 64 * 1024 else 1024
+                        val url = if (round == 0 && !light) DEFAULT_DATA_TARGET else targets[round % targets.size]
                         ensureActive()
                         val attempt = attempts.getValue(candidate.id).incrementAndGet()
                         val reply = withTimeoutOrNull(1_200L) {
@@ -70,10 +74,10 @@ internal class SmartRouteProber(
                         }
                         val values = samples.getValue(candidate.id)
                         reply?.responseMs?.let(values::add)
-                        if (reply != null) targets.getValue(candidate.id).add(java.net.URI(url).host)
-                        if (round == 0 && reply != null) screening[candidate.id] = reply.mbps(bytes)
+                        if (reply != null) successfulTargets.getValue(candidate.id).add(java.net.URI(url).host)
+                        if (round == 0 && !light && reply != null) screening[candidate.id] = reply.mbps(bytes)
                         val measured = SmartRouteMeasurement(values.toList(), attempt, screeningMbps = screening[candidate.id],
-                            successfulTargets = targets.getValue(candidate.id).toSet())
+                            successfulTargets = successfulTargets.getValue(candidate.id).toSet())
                         onMeasurement(candidate.id, measured)
                     }
                 } }.awaitAll()
@@ -98,10 +102,31 @@ internal class SmartRouteProber(
         }
     }
 
-    suspend fun verifyData(id: String): Boolean {
-        val bytes = 64 * 1024
-        return exchange(id, Request.Builder().url("https://speed.cloudflare.com/__down?bytes=$bytes")
-            .header("Accept-Encoding", "identity").header("Cache-Control", "no-store").build(), bytes) != null
+    /** A dead test provider must not prevent a healthy authenticated route from recovering. */
+    suspend fun verifyData(id: String, preferredHosts: Set<String> = emptySet()): Boolean = coroutineScope {
+        val answers = Channel<Boolean>(Channel.UNLIMITED)
+        val limit = Semaphore(2)
+        // Keep two known large bodies: catalog reachability pages may legitimately be only 16 KiB.
+        val fixed = listOf(DEFAULT_DATA_TARGET, DEFAULT_DATA_BACKUP)
+        val fixedHosts = fixed.mapTo(mutableSetOf()) { java.net.URI(it).host }
+        val dynamic = targets.filter { java.net.URI(it).host !in fixedHosts }
+            .sortedByDescending { java.net.URI(it).host in preferredHosts }.take(2)
+        val jobs = (fixed + dynamic).sortedByDescending { java.net.URI(it).host in preferredHosts }.map { url -> launch {
+            val passed = limit.withPermit {
+                withTimeoutOrNull(2_500L) {
+                    exchange(id, Request.Builder().url(url)
+                        .header("Accept-Encoding", "identity").header("Cache-Control", "no-store")
+                        .header("Range", "bytes=0-65535").build(), 64 * 1024) != null
+                } == true
+            }
+            answers.send(passed)
+        } }
+        try {
+            repeat(jobs.size) { if (answers.receive()) return@coroutineScope true }
+            false
+        } finally {
+            jobs.forEach { it.cancel() }
+        }
     }
 
     private suspend fun exchange(id: String, request: Request, bytes: Int, uploadBytes: Int = 0): SmartRouteExchange? {
@@ -171,9 +196,17 @@ internal class SmartRouteProber(
     companion object {
         private const val DOWNLOAD_BYTES = 512 * 1024
         private const val UPLOAD_BYTES = 128 * 1024
-        private val LATENCY_TARGETS = listOf(
-            "https://speed.cloudflare.com/__down?bytes=1024" to 1024,
-            "https://proof.ovh.net/files/1Mb.dat" to 1024,
+        private const val DEFAULT_DATA_BACKUP = "https://proof.ovh.net/files/1Mb.dat"
+        private const val DEFAULT_DATA_TARGET = "https://speed.cloudflare.com/__down?bytes=65536"
+        private val DEFAULT_TARGETS = listOf(
+            "https://speed.cloudflare.com/__down?bytes=1024",
+            "https://proof.ovh.net/files/1Mb.dat",
         )
+
+        /** Catalog verification, expiry and URL validation stay owned by its existing signed store. */
+        fun targets(catalog: AllowlistProbeCatalog): List<String> = catalog.probesFor(null)
+            .filter { !it.domestic && it.minBytes >= 16 * 1024 }
+            .map { it.url }.distinctBy { java.net.URI(it).host }.take(4)
+            .ifEmpty { DEFAULT_TARGETS }
     }
 }

@@ -308,4 +308,14 @@ class SmartServerRankingTest {
         )
         assertEquals(listOf("direct", "cascade"), ranked.map(RankedServer::id))
     }
+    @Test
+    fun `cold startup considers unmeasured TCP and follows operator advice instead of forcing UDP`() {
+        val tcp = candidate("tcp", latencyMs = null).copy(probeObserved = false)
+        val udp = candidate("udp", protocol = "tuic", latencyMs = null, silenceMeansDown = false).copy(probeObserved = false)
+        val advice = ProtocolAdvice(preferred = listOf("vless-reality"), avoid = listOf("tuic"))
+        assertEquals(listOf("tcp", "udp"), SmartServerRanking.rank(listOf(tcp, udp), advice).map(RankedServer::id))
+        // A completed, silent TCP probe remains a real failure, even if operator advice prefers it.
+        assertEquals(listOf("udp"), SmartServerRanking.rank(listOf(tcp.copy(probeObserved = true), udp), advice).map(RankedServer::id))
+    }
+
 }

@@ -21,6 +21,8 @@ data class SmartCandidate(
     val quality: Double? = null,
     /** The node stayed full: no new automatic connections while others remain. */
     val full: Boolean = false,
+    /** Absent cached evidence is unknown, not a failed TCP probe. */
+    val probeObserved: Boolean = true,
 )
 
 data class RankedServer(val id: String, val protocol: String, val score: Double)
@@ -109,7 +111,7 @@ object SmartServerRanking {
      * not all land on it at once.
      */
     fun rank(candidates: List<SmartCandidate>, advice: ProtocolAdvice?, spread: Double? = null): List<RankedServer> {
-        val reachable = candidates.filter { it.latencyMs != null || !it.silenceMeansDown }
+        val reachable = candidates.filter { !it.probeObserved || it.latencyMs != null || !it.silenceMeansDown }
         val allowed = reachable.filter { it.verdict != ProtocolVerdict.BLOCKED }
         // Everything blocked or silent: better to try something than nothing.
         val pool = allowed.ifEmpty { reachable }.ifEmpty { candidates }

@@ -37,8 +37,26 @@ data class ProtocolHistory(
     val networks: Map<String, Map<String, ProtocolRecord>> = emptyMap(),
     /** Network key → the server that last carried traffic there. */
     val winners: Map<String, String> = emptyMap(),
+    val winnerRecordedAtMs: Map<String, Long> = emptyMap(),
+    val winnerContexts: Map<String, String> = emptyMap(),
 ) {
     fun winner(networkKey: String): String? = winners[networkKey]
+
+    /** Legacy winners without a time/configuration stay useful to recovery but never skip startup selection. */
+    fun recentWinner(networkKey: String, contexts: Map<String, String>, nowMs: Long): String? {
+        val winner = winners[networkKey] ?: return null
+        val atMs = winnerRecordedAtMs[networkKey] ?: return null
+        if (nowMs - atMs !in 0 until STARTUP_WINNER_TTL_MS) return null
+        val context = winnerContexts[networkKey] ?: return null
+        return winner.takeIf { contexts[it] == context }
+    }
+
+    fun forgetWinner(networkKey: String, serverId: String): ProtocolHistory =
+        if (winners[networkKey] != serverId) this else copy(
+            winners = winners - networkKey,
+            winnerRecordedAtMs = winnerRecordedAtMs - networkKey,
+            winnerContexts = winnerContexts - networkKey,
+        )
 
     fun verdict(networkKey: String?, protocol: String, nowMs: Long): ProtocolVerdict {
         val record = networkKey?.let { networks[it]?.get(protocol) } ?: return ProtocolVerdict.UNKNOWN
@@ -57,10 +75,14 @@ data class ProtocolHistory(
         return record.failedNodes.isNotEmpty() && nowMs - record.lastFailureAtMs < windowMs
     }
 
-    fun recordSuccess(networkKey: String, protocol: String, nowMs: Long, serverId: String? = null): ProtocolHistory {
+    fun recordSuccess(networkKey: String, protocol: String, nowMs: Long, serverId: String? = null, context: String? = null): ProtocolHistory {
         val next = update(networkKey, protocol) { ProtocolRecord(lastSuccessAtMs = nowMs, lastFailureAtMs = it.lastFailureAtMs) }
         if (serverId == null) return next
-        return next.copy(winners = next.winners + (networkKey to serverId))
+        return next.copy(
+            winners = next.winners + (networkKey to serverId),
+            winnerRecordedAtMs = next.winnerRecordedAtMs + (networkKey to nowMs),
+            winnerContexts = if (context == null) next.winnerContexts - networkKey else next.winnerContexts + (networkKey to context),
+        )
     }
 
     /**
@@ -82,7 +104,7 @@ data class ProtocolHistory(
         }.let { next ->
             // A protocol that stopped working here no longer names the network's winner.
             if (failedServerId != null && next.winners[networkKey] == failedServerId) {
-                next.copy(winners = next.winners - networkKey)
+                next.copy(winners = next.winners - networkKey, winnerRecordedAtMs = next.winnerRecordedAtMs - networkKey, winnerContexts = next.winnerContexts - networkKey)
             } else {
                 next
             }
@@ -94,10 +116,12 @@ data class ProtocolHistory(
         // Re-inserting moves the network to the end; the oldest ones are forgotten.
         val all = (networks - networkKey) + (networkKey to next.entries.take(MAX_PROTOCOLS).associate { it.toPair() })
         val kept = all.entries.toList().takeLast(MAX_NETWORKS).associate { it.toPair() }
-        return ProtocolHistory(kept, winners.filterKeys(kept::containsKey))
+        return ProtocolHistory(kept, winners.filterKeys(kept::containsKey),
+            winnerRecordedAtMs.filterKeys(kept::containsKey), winnerContexts.filterKeys(kept::containsKey))
     }
 
     companion object {
+        const val STARTUP_WINNER_TTL_MS = 10 * 60_000L
         const val BLOCK_AFTER_NODES = 2
         const val BLOCK_TTL_MS = 24 * 60 * 60_000L
         const val SUSPECT_TTL_MS = 6 * 60 * 60_000L

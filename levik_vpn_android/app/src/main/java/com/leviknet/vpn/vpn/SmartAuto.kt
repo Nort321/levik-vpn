@@ -106,6 +106,30 @@ class SmartAuto(
     /** The server that last carried traffic on this network; reconnecting there skips the search. */
     fun lastWinner(network: Network?): String? = networkKey(network)?.let(history.current()::winner)
 
+    /** Fresh full-route evidence first, then a recent success for this exact network and configuration. */
+    fun startupWinner(servers: List<TunnelServer>, network: Network? = null): String? {
+        val physical = network ?: physicalNetwork()
+        val eligible = eligibleRoutes(servers)
+        val measurements = routeMeasurements(eligible, physical).filterValues { it.confirmed }
+        SmartRouteSelection.order(measurements, routeResources(eligible)).firstOrNull()?.let { return it }
+        val key = networkKey(physical) ?: return null
+        val snapshot = history.current()
+        val now = clock()
+        val proven = eligible.filter { snapshot.verdict(key, it.smartProtocol(), now) == ProtocolVerdict.WORKS }
+        return snapshot.recentWinner(key, proven.associate { it.id to startupContext(it) }, now)
+    }
+
+
+    /** A failed route cannot remain a fast-start promise; offline evidence alone does not condemn its protocol. */
+    fun forgetStartupWinner(serverId: String, network: Network) {
+        val key = networkKey(network) ?: return
+        history.update { it.forgetWinner(key, serverId) }
+        measuredRoutes.remove(serverId)
+    }
+
+    private fun startupContext(server: TunnelServer): String =
+        "${measurementContext(server)}|${routeResources(listOf(server))[server.id]?.id ?: "unknown-route"}"
+
     /**
      * Mobile servers under allowlists, best first: the relays the user is
      * signed in to, the ordinary ones, then the other relays, see
@@ -132,6 +156,7 @@ class SmartAuto(
                     protocol = server.smartProtocol(),
                     latencyMs = latencies[server.id],
                     silenceMeansDown = ServerPinger.silenceMeansDown(server),
+                    probeObserved = server.id in latencies,
                     load = SmartServerRanking.agedLoad(FavoriteNodes.load(view.load, server), view.ageMs),
                     verdict = snapshot.verdict(key, record, now),
                 ),
@@ -201,6 +226,7 @@ class SmartAuto(
             protocol = protocol,
             latencyMs = SmartServerRanking.rankingLatency(latencies[server.id], server.endpointHost() in relays),
             silenceMeansDown = ServerPinger.silenceMeansDown(server),
+            probeObserved = server.id in latencies,
             load = SmartServerRanking.agedLoad(FavoriteNodes.load(view.load, server), view.ageMs),
             verdict = snapshot.verdict(key, protocol, now),
             quality = FavoriteNodes.nodeId(server)?.let(view.quality::get),
@@ -210,7 +236,7 @@ class SmartAuto(
 
     fun recordSuccess(server: TunnelServer, network: Network?) {
         val key = networkKey(network) ?: return
-        history.update { it.recordSuccess(key, server.smartProtocol(), clock(), serverId = server.id) }
+        history.update { it.recordSuccess(key, server.smartProtocol(), clock(), serverId = server.id, context = startupContext(server)) }
     }
 
     fun recordFailure(server: TunnelServer, network: Network?) {

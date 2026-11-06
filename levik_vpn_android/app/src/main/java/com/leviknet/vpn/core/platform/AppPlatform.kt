@@ -121,6 +121,7 @@ class AppPlatform(
 
     @Volatile
     private var liveLoadUnsupportedUntilMs = 0L
+    @Volatile private var liveLoadRetry: Pair<Long?, Long>? = null
     private var liveLoadJob: Deferred<Unit>? = null
     private val liveLoadLock = Any()
 
@@ -392,6 +393,10 @@ class AppPlatform(
      * asked for again instead, as before.
      */
     suspend fun refreshNodeLoad(maxAgeMs: Long = LiveLoadPolicy.MAX_AGE_MS, waitMs: Long = NODE_LOAD_WAIT_MS) {
+        val networkHandle = directNetwork()?.networkHandle
+        liveLoadRetry?.let { (network, until) ->
+            if (network == networkHandle && android.os.SystemClock.elapsedRealtime() < until) return
+        }
         val now = System.currentTimeMillis()
         val refresh = if (now < liveLoadUnsupportedUntilMs) {
             if (now - (stored?.fetchedAtMs ?: 0L) < NODE_LOAD_MAX_AGE_MS) return
@@ -408,8 +413,17 @@ class AppPlatform(
     private suspend fun fetchLiveLoad() {
         val etag = liveLoad?.etag
         // The phone's own network first: the website then sees the operator and answers with its quality.
-        val physical = directNetwork()?.let { configClient.load(it, etag) }
-        val answer = physical ?: configClient.load(null, etag) ?: return
+        val network = directNetwork()
+        val physical = network?.let { configClient.load(it, etag) }
+        val answer = physical ?: configClient.load(null, etag)
+        // Operator quality and backoff belong to the network that made the request.
+        if (network != directNetwork()) return
+        if (answer == null || answer is LiveLoadAnswer.RetryLater) {
+            val delayMs = answer?.delayMs ?: 15_000L
+            liveLoadRetry = network?.networkHandle to (android.os.SystemClock.elapsedRealtime() + delayMs + Random.nextLong(1_001L))
+            return
+        }
+        liveLoadRetry = null
         val throughTunnel = physical == null && vpnController.state.value.state !in INACTIVE_TUNNEL
         val now = System.currentTimeMillis()
         if (answer == LiveLoadAnswer.Unsupported) {
@@ -1269,6 +1283,9 @@ class RemoteConfigClient(private val version: String) {
                 ?: continue
             val (status, text) = reply
             if (status == 304) return@withContext LiveLoadAnswer.Same
+            if (status == 429 || status == 503 && reply.retryAfter != null) return@withContext LiveLoadAnswer.RetryLater(
+                LiveLoadPolicy.retryAfterMs(reply.retryAfter, System.currentTimeMillis()),
+            )
             // An older website: the configuration's node load still works meanwhile.
             if (status == 404) return@withContext LiveLoadAnswer.Unsupported
             if (status in 400..499) return@withContext null
@@ -1292,7 +1309,7 @@ class RemoteConfigClient(private val version: String) {
         null
     }
 
-    private data class Reply(val status: Int, val text: String?, val etag: String? = null)
+    private data class Reply(val status: Int, val text: String?, val etag: String? = null, val retryAfter: String? = null)
 
     private fun request(
         url: URL,
@@ -1316,7 +1333,7 @@ class RemoteConfigClient(private val version: String) {
                 headers.forEach(::setRequestProperty)
             }
             val status = connection.responseCode
-            if (status != 200) return Reply(status, null)
+            if (status != 200) return Reply(status, null, retryAfter = connection.getHeaderField("Retry-After"))
             val text = connection.inputStream.use { input ->
                 val buffer = ByteArray(maxResponseBytes + 1)
                 var size = 0

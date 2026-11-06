@@ -9,6 +9,7 @@ import android.net.Network
 import android.net.TrafficStats
 import android.os.Build
 import android.os.Process
+import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -103,6 +104,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -119,6 +121,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -202,12 +206,16 @@ class AppViewModel(
     private var connectionPreparationJob: Job? = null
     private var connectionStartJob: Job? = null
     private var manualSelectionJob: Job? = null
+    private var automaticNetworkWarmup: Job? = null
     private var pendingLteAction: PendingLteAction? = null
     private var pendingAllowlistAction: PendingAllowlistAction? = null
     private var pendingRelayIntroduction: PendingRelayIntroduction? = null
     private val explainedRelayServerIds = mutableSetOf<String>()
     private var pendingWifiAutoConnect = false
+    private val selectionPersistenceMutex = Mutex()
     private val serverPingMutex = Mutex()
+    private val serverPingCache = ServerPingCache()
+    private var automaticSelectionEpoch = 0L
     private val appIconSelectionMutex = Mutex()
     private val perAppBaselineMutex = Mutex()
     private val lteTrafficAccumulator = LteTrafficAccumulator()
@@ -584,6 +592,7 @@ class AppViewModel(
                         selectBestServer(profile)
                     }
                 } catch (error: Throwable) {
+                    if (error is CancellationException) throw error
                     syncCachedProfile()
                     mutableState.update { it.copy(problem = error.toAppProblem()) }
                 }
@@ -1099,12 +1108,8 @@ class AppViewModel(
             it.id == (vpn.serverId ?: state.selectedServerId)
         } ?: return null
         if (!server.isStandardMobileServer()) return null
-        val account = state.account ?: return null
         val subscriptionId = state.profile.subscriptionId
-        val subscription = account.subscriptions.firstOrNull {
-            it.uuid == subscriptionId
-        } ?: return null
-        val traffic = subscription.components?.mobile?.traffic ?: subscription.traffic
+        val traffic = state.mobileSubscriptionTraffic() ?: return null
         if (traffic.limitBytes <= 0L) return null
         val sessionBytes = saturatingAdd(
             vpn.downloadedBytes.coerceAtLeast(0L),
@@ -1329,7 +1334,18 @@ class AppViewModel(
         }
     }
 
+    private fun invalidateAutomaticSelection() {
+        automaticSelectionEpoch++
+        mutableState.update { it.copy(selectingAutomatic = false) }
+    }
+
+    private suspend fun persistServerSelection(serverId: String) = selectionPersistenceMutex.withLock {
+        currentCoroutineContext().ensureActive()
+        repository.selectServer(serverId)
+    }
+
     private fun cancelPendingConnection() {
+        invalidateAutomaticSelection()
         manualSelectionJob?.cancel()
         connectionPreparationJob?.cancel()
         connectionStartJob?.cancel()
@@ -1487,6 +1503,8 @@ class AppViewModel(
         subscriptionId: String? = null,
     ) {
         if (mutableState.value.refreshing) return
+        invalidateAutomaticSelection()
+        manualSelectionJob?.cancel()
         connectionPreparationJob = viewModelScope.launch {
             val account = mutableState.value.account
             val storedProfile = repository.cachedTunnel()
@@ -1724,6 +1742,7 @@ class AppViewModel(
     }
 
     fun selectServer(serverId: String) {
+        invalidateAutomaticSelection()
         manualSelectionJob?.cancel()
         if (serverId == "yandex:telemost" || serverId == "yandex:document") selectYandexTransport(serverId == "yandex:telemost")
         else selectServer(serverId, showIntroduction = true)
@@ -1734,6 +1753,7 @@ class AppViewModel(
      * A server of the country that is already the user's choice stays.
      */
     fun selectCountry(countryCode: String) {
+        invalidateAutomaticSelection()
         val profile = mutableState.value.profile ?: return
         val servers = countryServers(profile.servers, countryCode)
         if (servers.isEmpty()) return
@@ -1746,7 +1766,7 @@ class AppViewModel(
             val known = mutableState.value.serverPings
             val measured = if (servers.all { it.id in known }) known else {
                 measureServers(servers).also { fresh ->
-                    mutableState.update { it.copy(serverPings = it.serverPings + fresh, pingingServers = false) }
+                    mutableState.update { if (it.profile === profile) it.copy(serverPings = it.serverPings + fresh, pingingServers = false) else it }
                 }
             }
             val candidates = withoutMaintenance(profile, servers.mapTo(mutableSetOf(), TunnelServer::id))
@@ -1820,7 +1840,7 @@ class AppViewModel(
                     vpnController.switchServer(serverId, hotSwitch = true)
                     return@launch
                 }
-                repository.selectServer(serverId)
+                persistServerSelection(serverId)
                 ensureActive()
                 mutableState.update { current ->
                     current.copy(
@@ -1874,33 +1894,33 @@ class AppViewModel(
 
     fun selectAutomaticServer() {
         val profile = mutableState.value.profile ?: return
-        if (mutableState.value.refreshing) return
+        if (mutableState.value.refreshing || settings.automaticServer.value) return
+        invalidateAutomaticSelection()
         manualSelectionJob?.cancel()
+        // Selecting a mode never waits for probes or hides the existing catalog.
+        mutableState.update { it.copy(automaticServer = true, message = null) }
         manualSelectionJob = viewModelScope.launch {
-            if (vpnController.state.value.let { it.state == VpnConnectionState.CONNECTED && it.hotSwitchServerIds.isNotEmpty() }) {
-                try {
-                    settings.setAutomaticServer(true)
-                    ensureActive()
-                    vpnController.refreshAutomaticSelection()
-                } catch (error: Throwable) {
-                    if (error is CancellationException) throw error
-                    mutableState.update { it.copy(problem = error.toAppProblem()) }
-                }
-                return@launch
-            }
-            mutableState.update { it.copy(refreshing = true, message = null) }
             try {
                 settings.setAutomaticServer(true)
-                val selected = selectBestServer(profile)
-                mutableState.update { it.copy(selectedServerId = selected) }
-                if (mutableState.value.vpn.state == VpnConnectionState.CONNECTED) {
-                    vpnController.switchServer(selected)
+                ensureActive()
+                if (vpnController.state.value.state == VpnConnectionState.CONNECTED) {
+                    // The service keeps the current route and resumes background comparison.
+                    vpnController.refreshAutomaticSelection()
+                } else if (vpnController.state.value.state in PINGABLE_STATES) {
+                    val selected = quickAutomaticServer(profile, cachedServerPings(profile.servers))
+                    persistServerSelection(selected)
+                    ensureActive()
+                    if (mutableState.value.profile === profile && settings.automaticServer.value) {
+                        mutableState.update { it.copy(selectedServerId = selected, pingMs = it.serverPings[selected]) }
+                    }
                 }
+                // Connection preparation may cancel this selection job. The shared warmup must
+                // finish publishing its bounded detector cache instead of spawning duplicate probes.
+                prewarmAutomaticNetwork()
+                appPlatform?.refreshNodeLoad(waitMs = 0L)
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
-                mutableState.update { it.copy(problem = error.toAppProblem()) }
-            } finally {
-                mutableState.update { it.copy(refreshing = false) }
+                mutableState.update { it.copy(automaticServer = settings.automaticServer.value, problem = error.toAppProblem()) }
             }
         }
     }
@@ -2364,7 +2384,7 @@ class AppViewModel(
             ?.takeIf { id -> profile.servers.any { it.id == id } }
             ?: profile.servers.firstOrNull(TunnelServer::isEligibleForAutomaticSelection)?.id
             ?: error("No server is eligible for automatic selection")
-        repository.selectServer(selected)
+        persistServerSelection(selected)
         viewModelScope.launch {
             runCatching {
                 val measured = measureServers(profile.servers)
@@ -2383,44 +2403,60 @@ class AppViewModel(
     }
 
     private suspend fun selectBestServer(profile: PreparedTunnelProfile): String {
-        // Fresh server load arrives while the servers are measured.
-        val loadRefresh = viewModelScope.async { appPlatform?.refreshNodeLoad() }
-        val allowlistNetwork = viewModelScope.async { allowlistMobileNetwork() }
-        val measured = measureServers(profile.servers)
-        loadRefresh.await()
-        val allowlistServers = allowlistNetwork.await()?.let { network ->
-            automaticAllowlistServers(profile).takeIf { it.isNotEmpty() }?.let { network to it }
-        }
-        val selected = if (allowlistServers != null) {
-            // Mobile data under allowlists: a regular server would connect and carry nothing.
-            val (network, pool) = allowlistServers
-            appPlatform?.smartAuto?.rankAllowlist(pool, measured, network)?.firstOrNull()?.id
-                ?: pool.first().id
-        } else {
-            val preferredServerIds = automaticServerIds(profile)
-            require(preferredServerIds.isNotEmpty()) {
-                "No server is eligible for automatic selection"
+        val epoch = automaticSelectionEpoch
+        mutableState.update { it.copy(selectingAutomatic = true) }
+        try {
+            // The API and full catalog pings are advisory, never prerequisites for starting the VPN.
+            appPlatform?.refreshNodeLoad(waitMs = 0L)
+            val allowlistNetwork = allowlistMobileNetwork()
+            val measured = cachedServerPings(profile.servers)
+            currentCoroutineContext().ensureActive()
+            if (epoch != automaticSelectionEpoch || !settings.automaticServer.value) {
+                throw CancellationException("Automatic selection superseded")
             }
-            rankAutomatic(profile, preferredServerIds, measured).firstOrNull()?.id
-                ?: repository.selectedServerId()
-                    ?.takeIf(preferredServerIds::contains)
-                ?: profile.servers.first { it.id in preferredServerIds }.id
+            val pool = allowlistNetwork?.let { automaticAllowlistServers(profile) }.orEmpty()
+            val selected = if (pool.isNotEmpty()) {
+                appPlatform?.smartAuto?.rankAllowlist(pool, measured, allowlistNetwork)?.firstOrNull()?.id
+                    ?: pool.first().id
+            } else quickAutomaticServer(profile, measured)
+            persistServerSelection(selected)
+            currentCoroutineContext().ensureActive()
+            if (epoch != automaticSelectionEpoch || !settings.automaticServer.value) {
+                throw CancellationException("Automatic selection superseded")
+            }
+            mutableState.update { current ->
+                current.copy(selectedServerId = selected, pingMs = measured[selected],
+                    serverPings = current.serverPings + measured)
+            }
+            return selected
+        } finally {
+            if (epoch == automaticSelectionEpoch) mutableState.update { it.copy(selectingAutomatic = false) }
         }
-        repository.selectServer(selected)
-        mutableState.update { state ->
-            state.copy(
-                selectedServerId = selected,
-                pingMs = measured[selected],
-                serverPings = measured,
-                pingingServers = false,
-                message = if (measured.values.none { it != null }) {
-                    UiMessage.SERVER_PING_UNAVAILABLE
-                } else {
-                    state.message
-                },
-            )
-        }
-        return selected
+    }
+
+    private fun quickAutomaticServer(profile: PreparedTunnelProfile, measured: Map<String, Long?>): String {
+        val ids = automaticServerIds(profile)
+        require(ids.isNotEmpty()) { "No server is eligible for automatic selection" }
+        val servers = profile.servers.filter { it.id in ids }
+        return appPlatform?.smartAuto?.startupWinner(servers)
+            ?: rankAutomatic(profile, ids, measured).firstOrNull()?.id
+            ?: profile.servers.first { it.id in ids }.id
+    }
+
+    private fun pingNetworkKey(): String? = whitelistDetector?.directNetwork()?.let { network ->
+        "${network.networkHandle}|${appPlatform?.smartAuto?.networkKey(network).orEmpty()}"
+    }
+
+    private fun pingFingerprints(servers: List<TunnelServer>): Map<String, String> = servers.associate { server ->
+        server.id to (appPlatform?.smartAuto?.measurementContext(server) ?: "${server.engine}|${server.outbound}")
+    }
+
+    private fun cachedServerPings(servers: List<TunnelServer>): Map<String, Long?> =
+        serverPingCache.read(pingNetworkKey(), pingFingerprints(servers), SystemClock.elapsedRealtime())
+
+    private fun prewarmAutomaticNetwork() {
+        if (automaticNetworkWarmup?.isActive == true) return
+        automaticNetworkWarmup = viewModelScope.launch { allowlistMobileNetwork() }
     }
 
     /** The physical mobile network when it has allowlists on; null on Wi-Fi or when unknown. */
@@ -2433,6 +2469,7 @@ class AppViewModel(
             if (error is CancellationException) throw error
             WhitelistMode.UNKNOWN
         }
+        if (network != detector.directNetwork()) return null
         if (mode != WhitelistMode.UNKNOWN) mutableState.update { it.copy(whitelistMode = mode) }
         return network.takeIf { mode == WhitelistMode.ACTIVE }
     }
@@ -2503,18 +2540,27 @@ class AppViewModel(
 
     private suspend fun measureServers(servers: List<TunnelServer>): Map<String, Long?> =
         serverPingMutex.withLock {
+            val network = pingNetworkKey()
+            val fingerprints = pingFingerprints(servers)
+            val cached = serverPingCache.read(network, fingerprints, SystemClock.elapsedRealtime())
+            val missing = servers.filter { it.id !in cached }
+            if (missing.isEmpty()) return@withLock cached
             mutableState.update { it.copy(pingingServers = true) }
-            supervisorScope {
-                servers.map { server ->
-                    async(Dispatchers.IO) {
-                        server.id to ServerPinger.measure(server)
-                    }
-                }.awaitAll().toMap().let { entryPings ->
-                    val routes = appPlatform?.smartAuto?.routeMeasurements(servers).orEmpty()
-                    entryPings.mapValues { (id, entry) -> routes[id]?.samplesMs?.sorted()?.let { values ->
-                        values.getOrNull(values.size / 2)?.toLong()
-                    } ?: entry }
+            try {
+                val limit = Semaphore(4)
+                val entryPings = supervisorScope {
+                    missing.map { server ->
+                        async(Dispatchers.IO) { limit.withPermit { server.id to ServerPinger.measure(server) } }
+                    }.awaitAll().toMap()
                 }
+                if (network != pingNetworkKey()) return@withLock emptyMap()
+                serverPingCache.store(network, fingerprints, entryPings, SystemClock.elapsedRealtime())
+                val routes = appPlatform?.smartAuto?.routeMeasurements(servers).orEmpty()
+                (cached + entryPings).mapValues { (id, entry) -> routes[id]?.samplesMs?.sorted()?.let { values ->
+                    values.getOrNull(values.size / 2)?.toLong()
+                } ?: entry }
+            } finally {
+                mutableState.update { it.copy(pingingServers = false) }
             }
         }
 
@@ -2532,40 +2578,23 @@ class AppViewModel(
                 while (true) {
                     val snapshot = mutableState.value
                     val profile = snapshot.profile
+                    val network = pingNetworkKey()
                     if (profile != null && !snapshot.refreshing) {
-                        val measured = measureServers(profile.servers)
-                        // The same choice as on connect, so the next round does not undo it.
-                        val ranked = rankAutomatic(profile, automaticServerIds(profile), measured)
-                        val best = ranked.firstOrNull()
-                        val currentScore = ranked.firstOrNull { it.id == snapshot.selectedServerId }?.score
-                        val bestServerId = best?.id?.takeIf {
-                            SmartServerRanking.worthSwitching(currentScore, best.score)
-                        }
-                        if (snapshot.automaticServer &&
-                            bestServerId != null &&
-                            snapshot.vpn.state in PINGABLE_STATES
-                        ) {
-                            repository.selectServer(bestServerId)
-                        }
-                        mutableState.update { current ->
-                            if (current.profile === profile) {
-                                val selected = if (current.automaticServer && bestServerId != null &&
-                                    current.vpn.state in PINGABLE_STATES
-                                ) {
-                                    bestServerId
-                                } else {
-                                    current.selectedServerId
-                                }
-                                current.copy(
-                                    selectedServerId = selected,
-                                    pingMs = selected?.let(measured::get),
-                                    serverPings = measured,
-                                    serverLoad = serverLoad(profile),
-                                    pingingServers = false,
-                                )
-                            } else {
-                                current.copy(pingingServers = false)
-                            }
+                        // A connected SmartAuto session owns full-route probing. The UI consumes
+                        // those results instead of running a second TCP/UDP scan behind it.
+                        val measured = if (snapshot.tab == AppTab.SERVERS && snapshot.vpn.state in PINGABLE_STATES) {
+                            measureServers(profile.servers)
+                        } else cachedServerPings(profile.servers)
+                        val routes = appPlatform?.smartAuto?.routeMeasurements(profile.servers).orEmpty()
+                        val pings = measured + routes.mapNotNull { (id, route) ->
+                            route.samplesMs.sorted().let { it.getOrNull(it.size / 2)?.toLong() }?.let { id to it }
+                        }.toMap()
+                        if (network == pingNetworkKey()) mutableState.update { current ->
+                            if (current.profile === profile) current.copy(
+                                pingMs = current.selectedServerId?.let(pings::get),
+                                serverPings = pings,
+                                serverLoad = serverLoad(profile),
+                            ) else current
                         }
                     }
                     delay(SERVER_PING_INTERVAL_MS)
@@ -3520,6 +3549,7 @@ data class AppUiState(
     val useDoh: Boolean = true,
     val customDohUrl: String = "",
     val automaticServer: Boolean = true,
+    val selectingAutomatic: Boolean = false,
     val splitTunnelMode: SplitTunnelMode = SplitTunnelMode.OFF,
     val splitTunnelPackages: Set<String> = emptySet(),
     val gamePackages: Set<String> = emptySet(),

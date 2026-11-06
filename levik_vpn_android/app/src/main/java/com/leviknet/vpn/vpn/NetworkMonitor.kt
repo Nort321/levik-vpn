@@ -20,6 +20,7 @@ class NetworkMonitor(
         context.getSystemService(ConnectivityManager::class.java)
     private val cellularRequestLock = Any()
     private var started = false
+    private val knownCapabilities = java.util.concurrent.ConcurrentHashMap<Network, NetworkCapabilities>()
     private var cellularRequestCallback: ConnectivityManager.NetworkCallback? = null
     private var cellularRequestNetwork: Network? = null
     private val request = NetworkRequest.Builder()
@@ -27,14 +28,11 @@ class NetworkMonitor(
         .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
         .build()
     private val callback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) {
-            val capabilities = connectivityManager.getNetworkCapabilities(network)
-            if (capabilities.isUsableUnderlyingNetwork()) {
-                handleAvailable(network)
-            }
-        }
+        // Capabilities and link properties arrive after onAvailable. Reading them synchronously
+        // here races the framework, especially while acquiring cellular alongside Wi-Fi.
 
         override fun onLost(network: Network) {
+            knownCapabilities.remove(network)
             handleLost(network)
         }
 
@@ -42,13 +40,14 @@ class NetworkMonitor(
             network: Network,
             networkCapabilities: NetworkCapabilities,
         ) {
+            knownCapabilities[network] = NetworkCapabilities(networkCapabilities)
             if (networkCapabilities.isUsableUnderlyingNetwork()) {
                 handleAvailable(network)
             }
         }
 
         override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
-            if (connectivityManager.getNetworkCapabilities(network).isUsableUnderlyingNetwork()) {
+            if (knownCapabilities[network].isUsableUnderlyingNetwork()) {
                 handleAvailable(network)
             }
         }
@@ -96,20 +95,6 @@ class NetworkMonitor(
             .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
             .build()
         val cellularCallback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
-                if (!isCurrentCellularCallback(this)) return
-                val capabilities = connectivityManager.getNetworkCapabilities(network)
-                if (!capabilities.isUsableUnderlyingNetwork() || !isCellular(network)) return
-                synchronized(cellularRequestLock) {
-                    cellularRequestNetwork = network
-                }
-                if (completed.compareAndSet(false, true) && continuation.isActive) {
-                    continuation.resume(network)
-                } else {
-                    handleAvailable(network)
-                }
-            }
-
             override fun onCapabilitiesChanged(
                 network: Network,
                 networkCapabilities: NetworkCapabilities,
@@ -121,7 +106,11 @@ class NetworkMonitor(
                     synchronized(cellularRequestLock) {
                         cellularRequestNetwork = network
                     }
-                    handleAvailable(network)
+                    if (completed.compareAndSet(false, true) && continuation.isActive) {
+                        continuation.resume(network)
+                    } else {
+                        handleAvailable(network)
+                    }
                 }
             }
 
@@ -226,6 +215,7 @@ class NetworkMonitor(
         if (started) {
             runCatching { connectivityManager.unregisterNetworkCallback(callback) }
             started = false
+            knownCapabilities.clear()
         }
     }
 

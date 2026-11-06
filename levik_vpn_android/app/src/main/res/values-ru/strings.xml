@@ -88,8 +88,8 @@
     <string name="hot_switch_uncertain_desc">Не удалось подтвердить текущий маршрут. Переподключитесь или повторите выбор.</string>
     <string name="hot_switch_reconnect_all">Переподключить всё</string>
     <string name="hot_switch_reconnect_desc">Завершает текущие соединения и заново подключает VPN через выбранный сервер.</string>
-    <string name="server_automatic_description">Подключиться к серверу с минимальным пингом, отдавая приоритет обычным серверам вне России. Серверы обхода белых списков без входа через ВКонтакте также участвуют в выборе.</string>
-    <string name="server_ping_checking">Проверяем все серверы…</string>
+    <string name="server_automatic_description">Автоматически выбирает надёжный маршрут для вашей сети и адаптируется при изменении условий.</string>
+    <string name="server_ping_checking">Обновляем качество соединения…</string>
     <string name="server_ping_checking_short">…</string>
     <string name="server_ping_unavailable">Не удалось измерить пинг серверов. Оставлен предыдущий доступный сервер.</string>
     <string name="whitelist_active_banner">У вас сейчас активны белые списки — выберите сервер в категории «Белые списки».</string>
@@ -374,6 +374,14 @@
     <string name="servers_category_regular_desc">Безлимитный трафик для любых устройств</string>
     <string name="servers_category_mobile_allowlist">Обход белых списков</string>
     <string name="servers_category_mobile_allowlist_desc">Когда оператор оставляет доступ только к отдельным сайтам и приложениям. Доступность зависит от вашей сети.</string>
+    <string name="servers_traffic_limited">Лимитные</string>
+    <string name="servers_traffic_limited_desc">Общий пакет трафика на все серверы этой группы в текущем расчётном периоде.</string>
+    <string name="servers_traffic_unlimited">Безлимитные</string>
+    <string name="servers_traffic_unlimited_desc">Трафик через эти серверы не расходует пакет лимитной группы.</string>
+    <string name="servers_traffic_unlimited_label">Безлимитный трафик</string>
+    <string name="servers_traffic_remaining">Осталось %1$s из %2$s в текущем периоде</string>
+    <string name="servers_traffic_unknown">Остаток трафика недоступен. Обновите список.</string>
+    <string name="servers_traffic_no_limit">Лимит для текущей подписки не установлен</string>
     <string name="server_badge_mobile_allowlist">БЕЛЫЕ СПИСКИ</string>
     <string name="server_badge_regular">Безлимит</string>
     <string name="selected_server_mobile_allowlist">Обход белых списков</string>
@@ -1068,4 +1076,10 @@
     <string name="pairing_new_code">Новый код</string>
     <string name="pairing_done">Готово</string>
     <string name="login_other_way">Другой способ входа</string>
+    <string name="smart_auto_ready">Выбран. При подключении используем лучший известный маршрут.</string>
+    <string name="smart_auto_preparing">Проверяем вашу сеть перед подключением…</string>
+    <string name="smart_auto_connecting">Подключаемся и проверяем маршрут…</string>
+    <string name="smart_auto_connected">Подключено. Проверяем качество соединения в фоне.</string>
+    <string name="smart_auto_recovering">Восстанавливаем соединение через доступный маршрут…</string>
+    <string name="smart_auto_paused">Пауза. Автоматический выбор продолжится вместе с VPN.</string>
 </resources>
