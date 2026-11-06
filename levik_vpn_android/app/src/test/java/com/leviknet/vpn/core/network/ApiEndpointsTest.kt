@@ -33,7 +33,7 @@ class ApiEndpointsTest {
                     assertTrue(disconnectedSignal.await(3, TimeUnit.SECONDS))
                     throw IOException("cancelled")
                 }.also { blocked = it }
-                "leva.levikfartik.ru" -> FakeConnection(url) {
+                URL(ServiceEndpoints.ALLOWLIST_API_ORIGIN).host -> FakeConnection(url) {
                     assertTrue(blockedStarted.await(3, TimeUnit.SECONDS))
                     200
                 }
@@ -64,7 +64,7 @@ class ApiEndpointsTest {
                         assertTrue(releasePrimary.await(3, TimeUnit.SECONDS))
                         200
                     }
-                    "leva.levikfartik.ru" -> FakeConnection(url) {
+                    URL(ServiceEndpoints.ALLOWLIST_API_ORIGIN).host -> FakeConnection(url) {
                         fallbackStarted.countDown()
                         200
                     }
@@ -89,7 +89,7 @@ class ApiEndpointsTest {
     @Test(timeout = 5_000)
     fun `returns a healthy allow-list fallback as soon as ordinary probes have failed`() {
         val endpoints = ApiEndpoints(DEFAULT_API_ORIGIN, openHealthConnection = { url ->
-            FakeConnection(url, status = { if (url.host == "leva.levikfartik.ru") 200 else 503 })
+            FakeConnection(url, status = { if (url.host == URL(ServiceEndpoints.ALLOWLIST_API_ORIGIN).host) 200 else 503 })
         })
 
         assertEquals(ServiceEndpoints.ALLOWLIST_API_ORIGIN, endpoints.resolve().toString())
@@ -120,7 +120,7 @@ class ApiEndpointsTest {
             DEFAULT_API_ORIGIN,
             openHealthConnection = { url ->
                 opened.incrementAndGet()
-                FakeConnection(url, status = { if (url.host == "leva.levikfartik.ru") 200 else 503 })
+                FakeConnection(url, status = { if (url.host == URL(ServiceEndpoints.ALLOWLIST_API_ORIGIN).host) 200 else 503 })
             },
             nanoTime = { now },
         )
@@ -187,7 +187,7 @@ class ApiEndpointsTest {
                 fourStarted.countDown()
                 try {
                     assertTrue(release.await(3, TimeUnit.SECONDS))
-                    if (url.host == "leva.levikfartik.ru") 200 else 503
+                    if (url.host == URL(ServiceEndpoints.ALLOWLIST_API_ORIGIN).host) 200 else 503
                 } finally {
                     running.decrementAndGet()
                 }

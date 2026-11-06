@@ -34,10 +34,11 @@ data class ServiceEndpointsDocument(
     val webOrigin: String,
     val subscriptionOrigins: List<String>,
     val configUrls: List<String>,
+    val allowlistApiOrigin: String = ServiceEndpoints.ALLOWLIST_API_ORIGIN,
 )
 
 object ServiceEndpoints {
-    internal const val ALLOWLIST_API_ORIGIN = "https://leva.levikfartik.ru"
+    internal const val ALLOWLIST_API_ORIGIN = "https://f3ehyhb7vz.a.trbcdn.net"
 
     val BUILT_IN = ServiceEndpointsDocument(
         sequence = 0,
@@ -87,6 +88,9 @@ object ServiceEndpoints {
     /** An absolute address on the current Levik website. */
     fun webUrl(pathAndQuery: String): String = current.webOrigin + pathAndQuery
 
+    /** Only the built-in origin or a verified signed document selects this service. */
+    fun allowlistApiOrigin(): String = current.allowlistApiOrigin
+
     /** Levik website hosts: the original domains and the signed website, if it moved. */
     fun websiteHosts(): Set<String> = LEGACY_WEB_HOSTS + URI(current.webOrigin).host
 
@@ -114,12 +118,18 @@ object ServiceEndpoints {
             val apiOrigins = list(document["apiOrigins"], ::cleanOrigin)
             val webOrigin = cleanOrigin(document["webOrigin"])
             if (apiOrigins.isEmpty() || webOrigin == null) return null
+            // Older schema-1 documents do not contain this optional field.
+            // Reject an explicitly invalid value rather than silently accepting it.
+            val allowlistApiOrigin = if ("allowlistApiOrigin" in document) {
+                cleanOrigin(document["allowlistApiOrigin"]) ?: return null
+            } else ALLOWLIST_API_ORIGIN
             ServiceEndpointsDocument(
                 sequence = sequence,
                 apiOrigins = apiOrigins,
                 webOrigin = webOrigin,
                 subscriptionOrigins = list(document["subscriptionOrigins"], ::cleanOrigin),
                 configUrls = list(document["configUrls"], ::cleanConfigUrl),
+                allowlistApiOrigin = allowlistApiOrigin,
             )
         }.getOrNull()
     }
@@ -131,6 +141,7 @@ object ServiceEndpoints {
         webOrigin = document.webOrigin,
         subscriptionOrigins = (document.subscriptionOrigins + BUILT_IN.subscriptionOrigins).distinct(),
         configUrls = (document.configUrls + BUILT_IN.configUrls).distinct(),
+        allowlistApiOrigin = document.allowlistApiOrigin,
     )
 
     private fun list(value: Any?, clean: (Any?) -> String?): List<String> =

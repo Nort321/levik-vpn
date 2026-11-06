@@ -102,9 +102,56 @@ class ServiceEndpointsTest {
     fun `mobile allow-list API fallback remains available with older signed endpoints`() {
         ServiceEndpoints.use(ServiceEndpoints.verify(body, signature))
 
-        assertTrue(ServiceEndpoints.BUILT_IN.apiOrigins.contains("https://leva.levikfartik.ru"))
-        assertTrue(ServiceEndpoints.current().apiOrigins.contains("https://leva.levikfartik.ru"))
-        assertEquals(1, ServiceEndpoints.current().apiOrigins.count { it == "https://leva.levikfartik.ru" })
+        assertTrue(ServiceEndpoints.BUILT_IN.apiOrigins.contains(ServiceEndpoints.ALLOWLIST_API_ORIGIN))
+        assertTrue(ServiceEndpoints.current().apiOrigins.contains(ServiceEndpoints.ALLOWLIST_API_ORIGIN))
+        assertEquals(1, ServiceEndpoints.current().apiOrigins.count { it == ServiceEndpoints.ALLOWLIST_API_ORIGIN })
+        assertEquals("https://f3ehyhb7vz.a.trbcdn.net", ServiceEndpoints.allowlistApiOrigin())
+    }
+
+    @Test
+    fun `signed configuration changes map service independently of website and subscription`() {
+        val text = String(body, Charsets.UTF_8).replace(
+            "\"schema\": 1", "\"schema\": 1, \"allowlistApiOrigin\": \"https://map.reserve.example/\"",
+        )
+        val (bytes, signed) = signed(text)
+        val document = ServiceEndpoints.verify(bytes, signed, testKeys.public)
+        assertNotNull(document)
+        ServiceEndpoints.use(document)
+        assertEquals("https://map.reserve.example", ServiceEndpoints.allowlistApiOrigin())
+        assertEquals("https://leviknet.org", ServiceEndpoints.current().webOrigin)
+        assertEquals("https://sub.cloudnote-sync.xyz", ServiceEndpoints.current().subscriptionOrigins.first())
+        assertNull(ServiceEndpoints.verify(bytes, signed))
+        assertNull(ServiceEndpoints.verify(text.replace("map.reserve", "map.attacker").toByteArray(), signed, testKeys.public))
+        ServiceEndpoints.use(null)
+        assertEquals(ServiceEndpoints.ALLOWLIST_API_ORIGIN, ServiceEndpoints.allowlistApiOrigin())
+    }
+
+    @Test
+    fun `explicitly invalid map origins invalidate the signed document`() {
+        listOf(
+            "http://map.example", "https://map.example:8443", "https://map.example/api",
+            "https://user:password@map.example", "https://map.example?x=1", "https://map.example#fragment", "",
+        ).map(::JsonPrimitive).plus(listOf(kotlinx.serialization.json.JsonNull, JsonPrimitive(123))).forEach { origin ->
+            val original = Json.parseToJsonElement(String(body, Charsets.UTF_8)) as JsonObject
+            val (bytes, signature) = signed(JsonObject(original + ("allowlistApiOrigin" to origin)).toString())
+            assertNull(origin.toString(), ServiceEndpoints.verify(bytes, signature, testKeys.public))
+        }
+    }
+
+    @Test
+    fun `published map origin survives signed cache reload`() {
+        val mapBody = fixture("levik-config-map-v1.json")
+        val mapSignature = fixture("levik-config-map-v1.json.sig")
+        val fetcher = EndpointsFetcher { url, _ -> if (url.endsWith(".sig")) mapSignature else mapBody }
+        val file = File(Files.createTempDirectory("levik-map-endpoints").toFile(), "service-endpoints.json")
+        assertTrue(ServiceEndpointsStore(file, fetcher).refresh())
+        assertEquals(2L, ServiceEndpoints.current().sequence)
+        assertEquals("https://f3ehyhb7vz.a.trbcdn.net", ServiceEndpoints.allowlistApiOrigin())
+
+        ServiceEndpoints.use(null)
+        ServiceEndpointsStore(file, fetcher).load()
+        assertEquals(2L, ServiceEndpoints.current().sequence)
+        assertEquals("https://f3ehyhb7vz.a.trbcdn.net", ServiceEndpoints.allowlistApiOrigin())
     }
 
     @Test

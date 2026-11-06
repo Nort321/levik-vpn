@@ -11,7 +11,7 @@ anonymous HTTPS endpoint looks up its original IP locally and returns a signed
 region token that expires at the next UTC hour. The token is held in memory only
 and is discarded on network change, process restart, expiry or opt-out. Fresh
 reports may use the VPN route, but never infer geography from the VPN exit IP.
-New clients can fall back to the fixed LTE CDN service endpoints
+New clients can fall back to the LTE CDN service endpoints selected by the signed service configuration
 `/api/whitelist/service/region` and `/api/whitelist/service/report` when the website
 is blocked. Both service operations bind to the same physical cellular network.
 The region token records which channel issued it; delivery may retry once on the
@@ -43,7 +43,7 @@ for the central collector using a server-only key. Old website endpoints remain
 unchanged; old clients keep their existing behavior until upgraded.
 
 The origin validates the expected cascade peer and uses the measured rightmost
-CDN-forwarded address for approximate region lookup. CDN settings are unchanged.
+CDN-forwarded address for approximate region lookup. The CDN must pass POST requests for both service endpoints.
 This is community telemetry, not attestation: direct traffic through the same
 cascade can forge a regional observation. This cannot grant VPN/LTE access because
 there is no arbitrary proxy operation or access to the paid XHTTP handler.
@@ -56,3 +56,21 @@ HTTP attempt has an 8-second budget, at most two OS calls can remain in flight,
 and cancellation/opt-out/network changes prevent subsequent sends. The normal
 map toggle and the Play consent gate apply to both channels. No disk queue,
 GPS, SIM/operator, installation ID, or paid profile is added.
+
+## Signed service origin
+
+Android uses `https://f3ehyhb7vz.a.trbcdn.net` as its built-in map service origin.
+Schema-1 `config/levik-config-v1.json` optionally supplies `allowlistApiOrigin`.
+The entire document must pass the existing ECDSA P-256 signature and sequence
+checks. Only a clean HTTPS origin (no credentials, port, path, query or fragment)
+is accepted; an explicitly invalid field rejects the document. Older documents
+without this field keep the built-in default. Subscription hosts and report data
+cannot select a destination. The fixed region/report paths and cellular binding
+are unchanged.
+
+To move this channel again, update `allowlistApiOrigin`, increment `sequence`,
+update `issuedAt`, run `sh config/sign.sh`, and publish the JSON with its `.sig`
+to the existing configuration mirrors. The service configuration refresh is
+checked at most twice daily and cached signed bytes are verified again on load.
+Existing installed Android versions that predate this field still require an
+application update; changing the signed document alone cannot teach them the field.

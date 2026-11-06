@@ -91,9 +91,10 @@ class WhitelistMapReporter(context: Context, private val settings: AppSettings) 
         if (!settings.whitelistMapEnabled.value || !isCurrent()) return null
         val url = URL(when (channel) {
             WhitelistMapChannel.WEBSITE -> ServiceEndpoints.webUrl("/api/whitelist/${operation.path}")
-            WhitelistMapChannel.SERVICE -> ServiceEndpoints.ALLOWLIST_API_ORIGIN + "/api/whitelist/service/${operation.path}"
+            WhitelistMapChannel.SERVICE -> ServiceEndpoints.allowlistApiOrigin() + "/api/whitelist/service/${operation.path}"
         })
-        // Service origins are fixed, never a URL supplied in report data or a subscription.
+        // The service origin comes only from the built-in or signed configuration,
+        // never from report data or a subscription.
         if (channel == WhitelistMapChannel.SERVICE && network == null) return null
         val connection = AtomicReference<HttpURLConnection?>(null)
         // Android DNS can outlive socket timeouts and ignore interrupts. A timed-out
