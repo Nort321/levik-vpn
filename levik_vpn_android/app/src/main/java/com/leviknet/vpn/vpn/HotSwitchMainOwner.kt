@@ -17,8 +17,9 @@ internal class HotSwitchMainOwner(
     initialId: String,
     candidateIds: Set<String>,
     private val preflight: suspend (String) -> Boolean,
-    private val install: suspend (String, () -> Boolean) -> Unit,
+    private val install: suspend (id: String, guard: () -> Boolean, beforeWrite: () -> Unit) -> Unit,
     private val confirmed: (String) -> Unit = {},
+    private val failed: (stage: String, error: Exception) -> Unit = { _, _ -> },
 ) : AutoCloseable {
     enum class Outcome { APPLIED, FAILED, UNCERTAIN, CANCELLED, UNSUPPORTED }
     data class Result(val outcome: Outcome, val serverId: String)
@@ -54,32 +55,43 @@ internal class HotSwitchMainOwner(
                 if (!passed) return@withLock Result(Outcome.FAILED, currentId)
             }
             val previous = currentId
-            certain = false
+            var writeAttempted = false
+            val beforeWrite = {
+                writeAttempted = true
+                certain = false
+            }
             try {
                 // A cancelled request must still remember an RPC acknowledgement
                 // before its policy guard stops subsequent dependent writes.
                 withContext(NonCancellable) {
                     withTimeout(INSTALL_MS) {
                         val budget = currentCoroutineContext()[Job]
-                        install(targetId) { valid() && budget?.isActive != false }
+                        install(targetId, { valid() && budget?.isActive != false }, beforeWrite)
                     }
                 }
                 if (!permitted()) throw CancellationException("Main selection cancelled")
                 currentId = targetId; certain = true; confirmed(targetId)
                 Result(Outcome.APPLIED, targetId)
-            } catch (_: Exception) {
+            } catch (error: Exception) {
                 if (closed.get()) return@withLock Result(Outcome.CANCELLED, previous)
+                failed(if (writeAttempted) "install_main" else "before_main_write", error)
+                // A stale profile, unavailable target or cancelled lock wait can
+                // reject the switch before the core has received any mutation.
+                if (!writeAttempted && certain) return@withLock Result(if (!valid()) Outcome.CANCELLED else Outcome.FAILED, previous)
                 val restored = try {
                     withContext(NonCancellable) {
                         withTimeout(COMPENSATION_MS) {
                             val budget = currentCoroutineContext()[Job]
-                            install(previous) { !closed.get() && budget?.isActive != false }
+                            install(previous, { !closed.get() && budget?.isActive != false }, beforeWrite)
                             check(!closed.get() && budget?.isActive != false)
                         }
                     }
                     currentId = previous; certain = true; confirmed(previous)
                     true
-                } catch (_: Exception) { false }
+                } catch (error: Exception) {
+                    failed("restore_main", error)
+                    false
+                }
                 if (!restored) Result(Outcome.UNCERTAIN, previous)
                 else Result(if (!valid()) Outcome.CANCELLED else Outcome.FAILED, previous)
             }

@@ -1632,7 +1632,7 @@ class LevikVpnService : VpnService() {
             initialId = config.initial.id,
             candidateIds = config.candidates.mapTo(linkedSetOf()) { it.id },
             preflight = { id -> probeHotSwitchMain(config, id) },
-            install = { id, guard -> connectionMutex.withLock {
+            install = { id, guard, beforeWrite -> connectionMutex.withLock {
                 check(alive() && guard()) { "Live main selection changed" }
                 val candidate = config.candidates.first { it.id == id }
                 val source = config.originals.first { it.id == id }
@@ -1644,12 +1644,14 @@ class LevikVpnService : VpnService() {
                 }
                 check(alive() && guard()) { "Live main selection changed" }
                 check(sourceMatchesLiveProfile(source)) { "Installed main source changed" }
+                beforeWrite()
                 control.override(ServiceRouteConfig.MAIN, candidate.tag)
                 // Remember an acknowledged MAIN even if intent is cancelled during
                 // the RPC. The runtime then suppresses further stale policy writes.
                 if (routes != null && exit != null) routes.commitExternalMain(exit.exitId, candidate.tag) { alive() && guard() }
                 check(alive() && guard()) { "Live main selection changed" }
             } },
+            failed = { stage, error -> AppLogger.w(LOG_TAG, "HotSwitch $stage: ${error.javaClass.simpleName}") },
             confirmed = { id ->
                 if (alive()) {
                     val source = config.originals.first { it.id == id }

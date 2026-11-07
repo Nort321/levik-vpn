@@ -109,12 +109,15 @@ class HotSwitchInstrumentedTest {
                             dns = { true },
                         ), report = {}) else null
                     var failPreflight = false
+                    var staleProfile = false
                     var loseNextAck = false
                     val ownerControl = if (throughOwner) HotSwitchMainOwner("A", servers.map { it.id }.toSet(),
                         preflight = { id -> privateBody(live.candidates.first { it.id == id }.path, id) && !failPreflight },
-                        install = { id, guard ->
+                        install = { id, guard, beforeWrite ->
                             check(guard())
                             val candidate = live.candidates.first { it.id == id }
+                            check(!staleProfile) { "Installed main source changed" }
+                            beforeWrite()
                             control.override(ServiceRouteConfig.MAIN, candidate.tag)
                             if (loseNextAck) { loseNextAck = false; error("Synthetic reply lost after native MAIN applied") }
                             // Remember a real ACK even if a later guard invalidates the request.
@@ -156,6 +159,11 @@ class HotSwitchInstrumentedTest {
                                 failPreflight = true
                                 assertEquals(HotSwitchMainOwner.Outcome.FAILED, ownerSelect("A").outcome)
                                 failPreflight = false
+                                staleProfile = true
+                                assertEquals(HotSwitchMainOwner.Outcome.FAILED, ownerSelect("A").outcome)
+                                assertTrue(requireNotNull(ownerControl).certain)
+                                tcpFlow(ports[2], target).use { assertEquals("B:unchanged", it.message("unchanged")) }
+                                staleProfile = false
                                 loseNextAck = true
                                 assertEquals(HotSwitchMainOwner.Outcome.FAILED, ownerSelect("A").outcome)
                                 assertTrue(requireNotNull(ownerControl).certain)
