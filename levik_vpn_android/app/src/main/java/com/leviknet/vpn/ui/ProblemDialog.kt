@@ -84,7 +84,7 @@ internal fun ProblemDialog(
             }
         },
         confirmButton = {
-            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            DialogActionsWithClose(onDismiss) {
                 problemActions(problem, subscription).forEachIndexed { index, action ->
                     if (index == 0) {
                         Button(onClick = { onAction(action) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
@@ -96,13 +96,6 @@ internal fun ProblemDialog(
                         }
                     }
                 }
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Icon(painterResource(R.drawable.ic_close), contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text(stringResource(R.string.close))
             }
         },
     )

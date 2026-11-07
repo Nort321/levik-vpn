@@ -20,7 +20,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
@@ -214,14 +213,13 @@ internal fun RemoteControlDialog(
             }
         },
         confirmButton = {
-            if (note != null && latest != null) {
-                Button(onClick = { onOpenNote(latest.id) }, shape = RoundedCornerShape(12.dp)) {
-                    Text(stringResource(R.string.remote_open_note))
+            DialogActionsWithClose(onDismiss) {
+                if (note != null && latest != null) {
+                    Button(onClick = { onOpenNote(latest.id) }, shape = RoundedCornerShape(12.dp)) {
+                        Text(stringResource(R.string.remote_open_note))
+                    }
                 }
             }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.close)) }
         },
     )
 }

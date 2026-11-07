@@ -440,7 +440,6 @@ private fun DropShareDialog(state: DropUiState, controller: DropController, sign
                 }
             }
         },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = controller::dismissShared) { Text(stringResource(R.string.close)) } },
+        confirmButton = { TextButton(onClick = controller::dismissShared) { Text(stringResource(R.string.close)) } },
     )
 }

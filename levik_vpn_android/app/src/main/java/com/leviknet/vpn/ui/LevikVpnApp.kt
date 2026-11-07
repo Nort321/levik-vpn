@@ -6325,28 +6325,21 @@ private fun KillSwitchDialog(
             }
         },
         confirmButton = {
-            Button(
-                onClick = onOpenSettings,
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
-            ) {
-                Text(stringResource(R.string.open_vpn_settings), fontWeight = FontWeight.SemiBold)
-            }
-        },
-        dismissButton = {
-            TextButton(
-                onClick = onDismiss,
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
-            ) {
-                Text(stringResource(R.string.close), fontWeight = FontWeight.SemiBold)
+            DialogActionsWithClose(onDismiss) {
+                Button(
+                    onClick = onOpenSettings,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
+                ) {
+                    Text(stringResource(R.string.open_vpn_settings), fontWeight = FontWeight.SemiBold)
+                }
             }
         },
     )
 }
 
 @Composable
-private fun LogsViewerDialog(
+internal fun LogsViewerDialog(
     logs: List<LogEntry>,
     formattedLogs: String,
     onClear: () -> Unit,
@@ -6385,40 +6378,33 @@ private fun LogsViewerDialog(
             }
         },
         confirmButton = {
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                TextButton(
-                    onClick = onClear,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
+            DialogActionsWithClose(onDismiss) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    Text(stringResource(R.string.logs_clear_btn), fontWeight = FontWeight.SemiBold)
+                    TextButton(
+                        onClick = onClear,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
+                    ) {
+                        Text(stringResource(R.string.logs_clear_btn), fontWeight = FontWeight.SemiBold)
+                    }
+                    OutlinedButton(
+                        onClick = { onShare(formattedLogs) },
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
+                    ) {
+                        Text(stringResource(R.string.logs_share_btn), fontWeight = FontWeight.SemiBold)
+                    }
+                    Button(
+                        onClick = onSendSupport,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
+                    ) {
+                        Text(stringResource(R.string.logs_send_support), fontWeight = FontWeight.SemiBold)
+                    }
                 }
-                OutlinedButton(
-                    onClick = { onShare(formattedLogs) },
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
-                ) {
-                    Text(stringResource(R.string.logs_share_btn), fontWeight = FontWeight.SemiBold)
-                }
-                Button(
-                    onClick = onSendSupport,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
-                ) {
-                    Text(stringResource(R.string.logs_send_support), fontWeight = FontWeight.SemiBold)
-                }
-            }
-        },
-        dismissButton = {
-            TextButton(
-                onClick = onDismiss,
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
-            ) {
-                Text(stringResource(R.string.close), fontWeight = FontWeight.SemiBold)
             }
         },
     )
@@ -7055,53 +7041,46 @@ private fun DiagnosticsDialog(
             }
         },
         confirmButton = {
-            if (!running && report != null) {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    OutlinedButton(
-                        onClick = { onShare(report.toFormattedString()) },
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = LevikDimensions.ButtonHeight),
+            DialogActionsWithClose(onDismiss) {
+                if (!running && report != null) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Text(stringResource(R.string.diagnostics_share), fontWeight = FontWeight.SemiBold)
-                    }
-                    Button(
-                        onClick = onShareSupportNote,
-                        enabled = !isSharingNote,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = LevikDimensions.ButtonHeight),
-                    ) {
-                        if (isSharingNote) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                        } else {
-                            Text(stringResource(R.string.support_note_export_btn), fontWeight = FontWeight.SemiBold)
+                        OutlinedButton(
+                            onClick = { onShare(report.toFormattedString()) },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = LevikDimensions.ButtonHeight),
+                        ) {
+                            Text(stringResource(R.string.diagnostics_share), fontWeight = FontWeight.SemiBold)
+                        }
+                        Button(
+                            onClick = onShareSupportNote,
+                            enabled = !isSharingNote,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = LevikDimensions.ButtonHeight),
+                        ) {
+                            if (isSharingNote) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            } else {
+                                Text(stringResource(R.string.support_note_export_btn), fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                        Button(
+                            onClick = onSendSupport,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = LevikDimensions.ButtonHeight),
+                        ) {
+                            Text(stringResource(R.string.diagnostics_send_support), fontWeight = FontWeight.SemiBold)
                         }
                     }
-                    Button(
-                        onClick = onSendSupport,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = LevikDimensions.ButtonHeight),
-                    ) {
-                        Text(stringResource(R.string.diagnostics_send_support), fontWeight = FontWeight.SemiBold)
-                    }
                 }
-            }
-        },
-        dismissButton = {
-            TextButton(
-                onClick = onDismiss,
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
-            ) {
-                Text(stringResource(R.string.close), fontWeight = FontWeight.SemiBold)
             }
         },
     )
@@ -7700,7 +7679,7 @@ private fun SubscriptionDevicesDialog(
             }
         },
         confirmButton = {
-            Column {
+            DialogActionsWithClose(onDismiss) {
                 TextButton(onClick = onRefresh, enabled = !busy) {
                     Icon(painterResource(R.drawable.ic_refresh), contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
@@ -7710,13 +7689,6 @@ private fun SubscriptionDevicesDialog(
                     Icon(painterResource(R.drawable.ic_power), contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
                     Text(stringResource(R.string.problem_action_connect))
-                }
-                TextButton(
-                    onClick = onDismiss,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.heightIn(min = LevikDimensions.ButtonHeight),
-                ) {
-                    Text(stringResource(R.string.close), fontWeight = FontWeight.SemiBold)
                 }
             }
         },

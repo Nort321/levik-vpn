@@ -267,122 +267,127 @@ fun SharingDialog(
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, securePolicy = SecureFlagPolicy.SecureOn)) {
         Surface(Modifier.fillMaxWidth().padding(16.dp).heightIn(max = 760.dp), shape = RoundedCornerShape(24.dp)) {
-            Column(Modifier.padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(
+                    modifier = Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
                     Text(stringResource(R.string.sharing_title), style = MaterialTheme.typography.titleLarge)
-                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.sharing_close)) }
-                }
-                if (snapshot.guest == null && snapshot.host == null) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { receive = false }, enabled = !snapshot.busy) { Text(stringResource(R.string.sharing_host_short)) }
-                        OutlinedButton(onClick = { receive = true }, enabled = !snapshot.busy) { Text(stringResource(R.string.sharing_receive_short)) }
-                    }
-                }
-                (localError ?: snapshot.error)?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                if (snapshot.busy) Text(stringResource(R.string.sharing_preparing))
-
-                val guest = snapshot.guest
-                val host = snapshot.host
-                when {
-                    guest != null -> {
-                        Text(stringResource(R.string.sharing_guest_active, guest.name), style = MaterialTheme.typography.titleMedium)
-                        Text(stringResource(if (guest.connected) R.string.sharing_guest_connected else R.string.sharing_guest_waiting))
-                        Text(stringResource(R.string.sharing_until, time(guest.expiresAt)))
-                        Text(stringResource(R.string.sharing_guest_limit), style = MaterialTheme.typography.bodySmall)
-                        Button(onClick = { act { SharingController.disconnectGuest(context) } }) { Text(stringResource(R.string.sharing_leave)) }
-                    }
-                    host != null -> {
-                        Text(stringResource(if (host.ready) R.string.sharing_ready else R.string.sharing_not_ready), fontWeight = FontWeight.SemiBold)
-                        Text(stringResource(R.string.sharing_until, time(host.expiresAt)))
+                    if (snapshot.guest == null && snapshot.host == null) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick = { showProxy = true }) { Text(stringResource(R.string.sharing_without_app)) }
-                            OutlinedButton(onClick = { showProxy = false }) { Text(stringResource(R.string.sharing_with_app)) }
+                            OutlinedButton(onClick = { receive = false }, enabled = !snapshot.busy) { Text(stringResource(R.string.sharing_host_short)) }
+                            OutlinedButton(onClick = { receive = true }, enabled = !snapshot.busy) { Text(stringResource(R.string.sharing_receive_short)) }
                         }
-                        if (showProxy) {
-                            CopyField(stringResource(R.string.sharing_address), host.address)
-                            CopyField(stringResource(R.string.sharing_port), host.proxyPort.toString())
-                            Text(stringResource(R.string.sharing_proxy_note), style = MaterialTheme.typography.bodySmall)
-                            Text(stringResource(R.string.sharing_proxy_limit), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            OutlinedButton(enabled = host.ready && !probeRunning, onClick = {
-                                val checked = host
-                                probeRunning = true
-                                scope.launch {
-                                    try {
-                                        val result = testProxy(checked.address, checked.proxyPort)
-                                        if (SharingStateStore.state.value.host == checked) probeResult = result
-                                    } finally { probeRunning = false }
-                                }
-                            }) { Text(stringResource(if (probeRunning) R.string.sharing_checking else R.string.sharing_check_proxy)) }
-                            probeResult?.let { Text(stringResource(if (it) R.string.sharing_check_ok else R.string.sharing_check_failed)) }
-                            Text(stringResource(R.string.sharing_choose_device), fontWeight = FontWeight.SemiBold)
-                            ProxyRecipient.entries.forEach { choice ->
-                                TextButton(onClick = { recipient = choice }, modifier = Modifier.fillMaxWidth()) {
-                                    Text((if (recipient == choice) "✓ " else "") + stringResource(choice.title))
-                                }
-                            }
-                            HorizontalDivider()
-                            Text(stringResource(R.string.sharing_help), style = MaterialTheme.typography.titleMedium)
-                            stringArrayResource(recipient.steps).forEachIndexed { index, step -> Text("${index + 1}. $step") }
-                            Text(stringResource(R.string.sharing_guide_version), style = MaterialTheme.typography.bodySmall)
-                            Text(stringResource(R.string.sharing_restore_title), fontWeight = FontWeight.SemiBold)
-                            Text(stringResource(R.string.sharing_restore_note))
-                            Text(stringResource(recipient.restore))
-                            Text(stringResource(R.string.sharing_troubleshooting), style = MaterialTheme.typography.bodySmall)
-                        } else {
-                            Text(stringResource(R.string.sharing_invite_title), fontWeight = FontWeight.SemiBold)
-                            Text(stringResource(R.string.sharing_invite_note))
-                            if (host.ready) {
-                                val qr = remember(host.invitation) { activationQrBitmap(host.invitation, size = 768).asImageBitmap() }
-                                Image(qr, contentDescription = stringResource(R.string.sharing_invite_qr),
-                                    modifier = Modifier.align(Alignment.CenterHorizontally).size(248.dp).background(Color.White).padding(8.dp))
-                                OutlinedButton(onClick = { copy(context, host.invitation, sensitive = true) }) { Text(stringResource(R.string.sharing_copy_invite)) }
-                            }
-                            Text(stringResource(R.string.sharing_invite_secret), style = MaterialTheme.typography.bodySmall)
-                        }
-                        Button(onClick = { confirmStop = true }) { Text(stringResource(R.string.sharing_stop)) }
                     }
-                    receive -> {
-                        Text(stringResource(R.string.sharing_receive), style = MaterialTheme.typography.titleMedium)
-                        Text(stringResource(R.string.sharing_guest_steps))
-                        OutlinedTextField(value = invitation, onValueChange = { if (it.length <= 2048) invitation = it },
-                            modifier = Modifier.fillMaxWidth(), label = { Text(stringResource(R.string.sharing_invite_field)) },
-                            visualTransformation = PasswordVisualTransformation(), maxLines = 3)
-                        OutlinedButton(onClick = onScan, enabled = !snapshot.busy) { Text(stringResource(R.string.sharing_scan)) }
-                        Button(enabled = invitation.isNotBlank() && !snapshot.busy, onClick = {
-                            localError = null
-                            confirmInvite = try { SharingInvitation.parse(invitation) } catch (_: Exception) { localError = invalid; null }
-                        }) { Text(stringResource(R.string.sharing_join)) }
-                        Text(stringResource(R.string.sharing_guest_limit), style = MaterialTheme.typography.bodySmall)
-                    }
-                    else -> {
-                        Text(stringResource(R.string.sharing_host_steps))
-                        if (!ownerConnected) Text(stringResource(R.string.sharing_host_requires_vpn), color = MaterialTheme.colorScheme.error)
-                        OutlinedButton(onClick = {
-                            val opened = runCatching { context.startActivity(Intent("android.settings.TETHER_SETTINGS")); true }.getOrDefault(false)
-                            if (!opened && runCatching { context.startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS)); true }.getOrDefault(false).not()) localError = noSettings
-                        }) { Text(stringResource(R.string.sharing_hotspot_settings)) }
-                        OutlinedButton(onClick = {
-                            addresses = SharingNetworks.localAddresses()
-                            if (address !in addresses) address = addresses.singleOrNull().orEmpty()
-                            trusted = false
-                        }) { Text(stringResource(R.string.sharing_refresh)) }
-                        if (addresses.isEmpty()) Text(stringResource(R.string.sharing_network_empty)) else {
-                            Text(stringResource(R.string.sharing_network_label), fontWeight = FontWeight.SemiBold)
-                            addresses.forEach { candidate ->
-                                OutlinedButton(onClick = { address = candidate; trusted = false }, modifier = Modifier.fillMaxWidth()) {
-                                    Text((if (candidate == address) "✓ " else "") + candidate)
-                                }
+                    (localError ?: snapshot.error)?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    if (snapshot.busy) Text(stringResource(R.string.sharing_preparing))
+
+                    val guest = snapshot.guest
+                    val host = snapshot.host
+                    when {
+                        guest != null -> {
+                            Text(stringResource(R.string.sharing_guest_active, guest.name), style = MaterialTheme.typography.titleMedium)
+                            Text(stringResource(if (guest.connected) R.string.sharing_guest_connected else R.string.sharing_guest_waiting))
+                            Text(stringResource(R.string.sharing_until, time(guest.expiresAt)))
+                            Text(stringResource(R.string.sharing_guest_limit), style = MaterialTheme.typography.bodySmall)
+                            Button(onClick = { act { SharingController.disconnectGuest(context) } }) { Text(stringResource(R.string.sharing_leave)) }
+                        }
+                        host != null -> {
+                            Text(stringResource(if (host.ready) R.string.sharing_ready else R.string.sharing_not_ready), fontWeight = FontWeight.SemiBold)
+                            Text(stringResource(R.string.sharing_until, time(host.expiresAt)))
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(onClick = { showProxy = true }) { Text(stringResource(R.string.sharing_without_app)) }
+                                OutlinedButton(onClick = { showProxy = false }) { Text(stringResource(R.string.sharing_with_app)) }
                             }
-                            Text(stringResource(R.string.sharing_network_note), style = MaterialTheme.typography.bodySmall)
+                            if (showProxy) {
+                                CopyField(stringResource(R.string.sharing_address), host.address)
+                                CopyField(stringResource(R.string.sharing_port), host.proxyPort.toString())
+                                Text(stringResource(R.string.sharing_proxy_note), style = MaterialTheme.typography.bodySmall)
+                                Text(stringResource(R.string.sharing_proxy_limit), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                OutlinedButton(enabled = host.ready && !probeRunning, onClick = {
+                                    val checked = host
+                                    probeRunning = true
+                                    scope.launch {
+                                        try {
+                                            val result = testProxy(checked.address, checked.proxyPort)
+                                            if (SharingStateStore.state.value.host == checked) probeResult = result
+                                        } finally { probeRunning = false }
+                                    }
+                                }) { Text(stringResource(if (probeRunning) R.string.sharing_checking else R.string.sharing_check_proxy)) }
+                                probeResult?.let { Text(stringResource(if (it) R.string.sharing_check_ok else R.string.sharing_check_failed)) }
+                                Text(stringResource(R.string.sharing_choose_device), fontWeight = FontWeight.SemiBold)
+                                ProxyRecipient.entries.forEach { choice ->
+                                    TextButton(onClick = { recipient = choice }, modifier = Modifier.fillMaxWidth()) {
+                                        Text((if (recipient == choice) "✓ " else "") + stringResource(choice.title))
+                                    }
+                                }
+                                HorizontalDivider()
+                                Text(stringResource(R.string.sharing_help), style = MaterialTheme.typography.titleMedium)
+                                stringArrayResource(recipient.steps).forEachIndexed { index, step -> Text("${index + 1}. $step") }
+                                Text(stringResource(R.string.sharing_guide_version), style = MaterialTheme.typography.bodySmall)
+                                Text(stringResource(R.string.sharing_restore_title), fontWeight = FontWeight.SemiBold)
+                                Text(stringResource(R.string.sharing_restore_note))
+                                Text(stringResource(recipient.restore))
+                                Text(stringResource(R.string.sharing_troubleshooting), style = MaterialTheme.typography.bodySmall)
+                            } else {
+                                Text(stringResource(R.string.sharing_invite_title), fontWeight = FontWeight.SemiBold)
+                                Text(stringResource(R.string.sharing_invite_note))
+                                if (host.ready) {
+                                    val qr = remember(host.invitation) { activationQrBitmap(host.invitation, size = 768).asImageBitmap() }
+                                    Image(qr, contentDescription = stringResource(R.string.sharing_invite_qr),
+                                        modifier = Modifier.align(Alignment.CenterHorizontally).size(248.dp).background(Color.White).padding(8.dp))
+                                    OutlinedButton(onClick = { copy(context, host.invitation, sensitive = true) }) { Text(stringResource(R.string.sharing_copy_invite)) }
+                                }
+                                Text(stringResource(R.string.sharing_invite_secret), style = MaterialTheme.typography.bodySmall)
+                            }
+                            Button(onClick = { confirmStop = true }) { Text(stringResource(R.string.sharing_stop)) }
                         }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(checked = trusted, onCheckedChange = { trusted = it })
-                            Text(stringResource(R.string.sharing_trusted), style = MaterialTheme.typography.bodySmall)
+                        receive -> {
+                            Text(stringResource(R.string.sharing_receive), style = MaterialTheme.typography.titleMedium)
+                            Text(stringResource(R.string.sharing_guest_steps))
+                            OutlinedTextField(value = invitation, onValueChange = { if (it.length <= 2048) invitation = it },
+                                modifier = Modifier.fillMaxWidth(), label = { Text(stringResource(R.string.sharing_invite_field)) },
+                                visualTransformation = PasswordVisualTransformation(), maxLines = 3)
+                            OutlinedButton(onClick = onScan, enabled = !snapshot.busy) { Text(stringResource(R.string.sharing_scan)) }
+                            Button(enabled = invitation.isNotBlank() && !snapshot.busy, onClick = {
+                                localError = null
+                                confirmInvite = try { SharingInvitation.parse(invitation) } catch (_: Exception) { localError = invalid; null }
+                            }) { Text(stringResource(R.string.sharing_join)) }
+                            Text(stringResource(R.string.sharing_guest_limit), style = MaterialTheme.typography.bodySmall)
                         }
-                        Text(stringResource(R.string.sharing_restart_notice), style = MaterialTheme.typography.bodySmall)
-                        Button(enabled = ownerConnected && trusted && address in addresses && !snapshot.busy,
-                            onClick = { act { SharingController.startHost(context, address) } }) { Text(stringResource(R.string.sharing_start)) }
+                        else -> {
+                            Text(stringResource(R.string.sharing_host_steps))
+                            if (!ownerConnected) Text(stringResource(R.string.sharing_host_requires_vpn), color = MaterialTheme.colorScheme.error)
+                            OutlinedButton(onClick = {
+                                val opened = runCatching { context.startActivity(Intent("android.settings.TETHER_SETTINGS")); true }.getOrDefault(false)
+                                if (!opened && runCatching { context.startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS)); true }.getOrDefault(false).not()) localError = noSettings
+                            }) { Text(stringResource(R.string.sharing_hotspot_settings)) }
+                            OutlinedButton(onClick = {
+                                addresses = SharingNetworks.localAddresses()
+                                if (address !in addresses) address = addresses.singleOrNull().orEmpty()
+                                trusted = false
+                            }) { Text(stringResource(R.string.sharing_refresh)) }
+                            if (addresses.isEmpty()) Text(stringResource(R.string.sharing_network_empty)) else {
+                                Text(stringResource(R.string.sharing_network_label), fontWeight = FontWeight.SemiBold)
+                                addresses.forEach { candidate ->
+                                    OutlinedButton(onClick = { address = candidate; trusted = false }, modifier = Modifier.fillMaxWidth()) {
+                                        Text((if (candidate == address) "✓ " else "") + candidate)
+                                    }
+                                }
+                                Text(stringResource(R.string.sharing_network_note), style = MaterialTheme.typography.bodySmall)
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(checked = trusted, onCheckedChange = { trusted = it })
+                                Text(stringResource(R.string.sharing_trusted), style = MaterialTheme.typography.bodySmall)
+                            }
+                            Text(stringResource(R.string.sharing_restart_notice), style = MaterialTheme.typography.bodySmall)
+                            Button(enabled = ownerConnected && trusted && address in addresses && !snapshot.busy,
+                                onClick = { act { SharingController.startHost(context, address) } }) { Text(stringResource(R.string.sharing_start)) }
+                        }
                     }
+                }
+                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
+                    Text(stringResource(R.string.sharing_close))
                 }
             }
         }
