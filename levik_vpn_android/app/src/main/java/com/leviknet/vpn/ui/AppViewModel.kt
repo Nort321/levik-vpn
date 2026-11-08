@@ -98,6 +98,7 @@ import com.leviknet.vpn.vpn.telemetryProtocol
 import com.leviknet.vpn.vpn.isAllowlistMobileServer
 import com.leviknet.vpn.vpn.isMobileServer
 import com.leviknet.vpn.vpn.isStandardMobileServer
+import com.leviknet.vpn.vpn.storedVkSession
 import java.time.Instant
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -1608,7 +1609,7 @@ class AppViewModel(
                 }
                 val selectedServer = profile.servers.firstOrNull { it.id == selected }
                 if (selectedServer?.engine == TunnelEngineKind.LEVIK_RELAY &&
-                    selectedServer.id !in explainedRelayServerIds
+                    !settings.automaticServer.value && selectedServer.id !in explainedRelayServerIds && !storedVkSession()
                 ) {
                     pendingRelayIntroduction = PendingRelayIntroduction.Connect(selectedServer.id, profile.subscriptionId)
                     mutableState.update { it.copy(showRelayIntroduction = true) }
@@ -1781,7 +1782,7 @@ class AppViewModel(
     private fun selectServer(serverId: String, showIntroduction: Boolean) {
         val profile = mutableState.value.profile ?: return
         val server = profile.servers.firstOrNull { it.id == serverId } ?: return
-        if (showIntroduction && server.engine == TunnelEngineKind.LEVIK_RELAY) {
+        if (showIntroduction && server.engine == TunnelEngineKind.LEVIK_RELAY && !storedVkSession()) {
             pendingRelayIntroduction = PendingRelayIntroduction.SelectServer(serverId)
             mutableState.update { it.copy(showRelayIntroduction = true) }
             return

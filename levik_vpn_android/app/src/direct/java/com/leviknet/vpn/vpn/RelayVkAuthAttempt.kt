@@ -8,6 +8,7 @@ import java.util.concurrent.atomic.AtomicReference
 internal sealed interface RelayVkAuthResult {
     data class Success(val credentials: RelayTurnCredentials) : RelayVkAuthResult
     data class Failure(val error: Throwable) : RelayVkAuthResult
+    data object LoginRequired : RelayVkAuthResult
 }
 
 /** A late WebView result or destruction belongs only to the attempt that opened it. */
@@ -22,6 +23,8 @@ internal class RelayVkAuthAttempt(val hash: String) {
     fun complete(credentials: RelayTurnCredentials): Boolean = finish(RelayVkAuthResult.Success(credentials))
 
     fun cancel(error: Throwable): Boolean = finish(RelayVkAuthResult.Failure(error))
+
+    fun requireLogin(): Boolean = finish(RelayVkAuthResult.LoginRequired)
 
     fun await(timeoutMs: Long): RelayVkAuthResult? {
         finished.await(timeoutMs.coerceAtLeast(0L), TimeUnit.MILLISECONDS)
@@ -47,10 +50,28 @@ internal class RelayVkAuthAttempt(val hash: String) {
 
 internal class RelayVkAuthException(val stableCode: String) : IllegalStateException(stableCode)
 
+/** A timeout or a broken call page says nothing about whether the user is signed in. */
+internal fun resolveVkAuth(
+    hasSession: Boolean,
+    allowInteractive: Boolean,
+    silent: () -> RelayVkAuthResult?,
+    interactive: () -> RelayVkAuthResult?,
+): RelayTurnCredentials {
+    val silentResult = if (hasSession) silent() else RelayVkAuthResult.LoginRequired
+    val result = if (silentResult == RelayVkAuthResult.LoginRequired && allowInteractive) interactive() else silentResult
+    return when (result) {
+        is RelayVkAuthResult.Success -> result.credentials
+        is RelayVkAuthResult.Failure -> throw result.error
+        RelayVkAuthResult.LoginRequired -> throw RelayVkAuthException("relay_vk_auth_required")
+        null -> throw RelayVkAuthException("relay_vk_auth_timeout")
+    }
+}
+
 internal object RelayVkAuthTiming {
     // Stay below the native account request's five-minute deadline, including silent login.
     const val TOTAL_TIMEOUT_MS = 285_000L
     const val HEADLESS_TIMEOUT_MS = 45_000L
+    const val AUTOMATIC_HEADLESS_TIMEOUT_MS = 20_000L
 
     fun remaining(startedAtMs: Long, nowMs: Long, credentialDeadlineMs: Long = Long.MAX_VALUE): Long =
         minOf(

@@ -644,7 +644,7 @@ class LevikVpnService : VpnService() {
                 connectionJob?.cancel()
                 connectionJob = serviceScope.launch {
                     stopConnection(stopService = false)
-                    connect(required)
+                    connect(required, userSelected = action == ACTION_SWITCH_SERVER && newServerId != null)
                 }
             }
             else -> {
@@ -681,7 +681,7 @@ class LevikVpnService : VpnService() {
                 }
                 showForeground(VpnConnectionState.CONNECTING, null)
                 connectionJob = serviceScope.launch {
-                    connect()
+                    connect(userSelected = sessionTrigger(intent) == SessionTrigger.USER)
                 }
             }
         }
@@ -845,21 +845,22 @@ class LevikVpnService : VpnService() {
         }
     }
 
-    private suspend fun connect(required: RequiredConnectionTarget? = null) {
+    private suspend fun connect(required: RequiredConnectionTarget? = null, userSelected: Boolean = false) {
         // A quick OFF/ON must wait for the old core and TUN to finish closing. The stop job
         // belongs to the service, so cancelling this connection cannot cancel that cleanup.
         serviceCommands.awaitPendingStop()
         coroutineContext.ensureActive()
         if (serviceCommands.connectionGeneration == null) return
-        connectAfterStop(required)
+        connectAfterStop(required, userSelected)
     }
 
-    private suspend fun connectAfterStop(required: RequiredConnectionTarget? = null): Unit = connectionMutex.withLock connection@{
+    private suspend fun connectAfterStop(required: RequiredConnectionTarget?, userSelected: Boolean): Unit = connectionMutex.withLock connection@{
         if (sharingGuest != null) return@connection
         coroutineContext.ensureActive()
         val generation = serviceCommands.connectionGeneration ?: return@connection
         if (destroyed.get()) return@connection
         val fallbackAttempt = pendingAutoFallback
+        val manualConnection = userSelected && !container.settings.automaticServer.value
         var attemptedServerId: String? = null
         if (lockdownActive) {
             // A fresh connect attempt always replaces the Kill Switch lockdown TUN.
@@ -880,6 +881,7 @@ class LevikVpnService : VpnService() {
             checkDisclosureConsent()
             var profile = readPreparedProfile()
             val selectedId = required?.serverId ?: fallbackAttempt?.targetServerId ?: readSelectedServerId()
+            attemptedServerId = selectedId
             val cachedSelected = profile.servers.firstOrNull { it.id == selectedId }
             if (cachedSelected?.engine == TunnelEngineKind.LEVIK_RELAY) {
                 progress.reach(AttemptStage.PROFILE, "relay_access_refresh")
@@ -898,7 +900,6 @@ class LevikVpnService : VpnService() {
             if (required != null) require(hotSwitchReconnectTargetExists(profile, required.subscriptionId, required.serverId)) {
                 "Selected HotSwitch server is no longer available"
             }
-            attemptedServerId = selectedId
             val selected = if (fallbackAttempt != null || required != null) {
                 profile.servers.firstOrNull { it.id == selectedId }
                     ?: error("Auto-failover server is no longer present in the tunnel profile")
@@ -1141,6 +1142,7 @@ class LevikVpnService : VpnService() {
                     config = requireNotNull(selected.relayConfig) {
                         "Relay server has no bootstrap configuration"
                     },
+                    allowInteractiveVkAuth = manualConnection,
                     configFactory = RelayXrayConfigFactory { tunFileDescriptor, proxy ->
                         XrayConfigBuilder(container.json).buildRelayProxy(
                             profile = profile,
@@ -1353,6 +1355,7 @@ class LevikVpnService : VpnService() {
             stopCoreAndTun()
             throw error
         } catch (error: Throwable) {
+            val failedNetwork = currentNetwork ?: networkMonitor.activeNetwork()
             preserveHandoverBarrier()
             stopCoreAndTun()
             coroutineContext.ensureActive()
@@ -1395,24 +1398,27 @@ class LevikVpnService : VpnService() {
                 return@connection
             }
             val failedAllowlistServer = attemptedServerId
-                ?.takeIf { fallbackAttempt == null && lastWhitelistMode == WhitelistMode.ACTIVE && allowlistSessionActive() }
+                ?.takeIf { fallbackAttempt == null && !manualConnection && allowlistSessionActive() }
                 ?.let { id -> runCatching { readPreparedProfile() }.getOrNull()?.servers?.firstOrNull { it.id == id } }
                 ?.takeIf(TunnelServer::isMobileServer)
-            if (failedAllowlistServer != null && !allowlistLadder.exhausted()) {
-                // Under allowlists the server left behind carries nothing: the next mobile server first.
-                VpnStateStore.update(coreOwner) {
-                    it.copy(state = VpnConnectionState.RECONNECTING, failure = null)
-                }
-                showForeground(VpnConnectionState.RECONNECTING, null)
-                val network = networkMonitor.activeNetwork()
-                connectionJob = serviceScope.launch {
-                    if (advanceAllowlist(failedAllowlistServer, network, requireRunning = false) == null) {
-                        rollBackAllowlistSwitch()
+            if (failedAllowlistServer != null && failedNetwork != null && networkMonitor.isCellular(failedNetwork) &&
+                (lastWhitelistMode == WhitelistMode.ACTIVE || allowlistsActive(failedNetwork, forceRefresh = false))
+            ) {
+                // The initial Auto selection may fail before the service's own detector starts.
+                lastWhitelistMode = WhitelistMode.ACTIVE
+                tunnelHealthPolicy.markCandidateFailed(failedAllowlistServer.id, SystemClock.elapsedRealtime())
+                if (advanceAllowlist(failedAllowlistServer, failedNetwork, requireRunning = false) != null) {
+                    VpnStateStore.update(coreOwner) {
+                        it.copy(state = VpnConnectionState.RECONNECTING, failure = null)
                     }
-                    delay(AUTOMATIC_SWITCH_ROLLBACK_DELAY_MS)
-                    connect()
+                    showForeground(VpnConnectionState.RECONNECTING, null)
+                    connectionJob = serviceScope.launch {
+                        delay(AUTOMATIC_SWITCH_ROLLBACK_DELAY_MS)
+                        connect()
+                    }
+                    return@connection
                 }
-                return@connection
+                // No untried route: use the ordinary rollback/error path once.
             }
             val rollbackServerId = automaticRollbackServerId
                 ?.takeIf { automaticTargetServerId == readSelectedServerId() }
@@ -2242,16 +2248,6 @@ class LevikVpnService : VpnService() {
         return target
     }
 
-    /** Every mobile server failed to start: back to the server used before allowlists. */
-    private fun rollBackAllowlistSwitch() {
-        val rollbackServerId = automaticRollbackServerId ?: return
-        automaticRollbackServerId = null
-        automaticTargetServerId = null
-        container.secureStore.put(SecureFileStore.SELECTED_SERVER, rollbackServerId.encodeToByteArray())
-        telemetry.record { it.recovery(RecoveryAction.ROLLBACK) }
-        nextAttemptCause = AttemptCause.ROLLBACK
-    }
-
     private fun readSecureString(key: String): String? {
         val bytes = runCatching { container.secureStore.get(key) }.getOrNull() ?: return null
         return try {
@@ -2574,7 +2570,7 @@ class LevikVpnService : VpnService() {
                         require(relayCredentialHasSameBinding(originalRequest.config, replacement)) {
                             "Relay credential binding changed"
                         }
-                        originalRequest.copy(config = replacement)
+                        originalRequest.copy(config = replacement, allowInteractiveVkAuth = false)
                     } else originalRequest
                     val relayCredentialRenewed = originalRequest is TunnelEngineRequest.Relay &&
                         request is TunnelEngineRequest.Relay &&
@@ -3096,6 +3092,7 @@ class LevikVpnService : VpnService() {
 
     private fun relayFailureDetail(code: String): String = when (code) {
         "relay_credential_expired" -> getString(R.string.relay_credential_expired)
+        "relay_vk_auth_required" -> getString(R.string.relay_auth_required)
         "relay_vk_auth_timeout" -> getString(R.string.relay_auth_timeout)
         "relay_vk_auth_cancelled" -> getString(R.string.relay_auth_cancelled)
         "relay_vk_auth_failed", "relay_vk_auth_network_unavailable" -> getString(R.string.relay_auth_failed)
@@ -3365,9 +3362,9 @@ class LevikVpnService : VpnService() {
         }
     }
 
-    private suspend fun allowlistsActive(network: Network): Boolean =
+    private suspend fun allowlistsActive(network: Network, forceRefresh: Boolean = true): Boolean =
         allowlistHeld(network) || try {
-            container.whitelistDetector.detect(network, forceRefresh = true) == WhitelistMode.ACTIVE
+            container.whitelistDetector.detect(network, forceRefresh = forceRefresh) == WhitelistMode.ACTIVE
         } catch (error: CancellationException) {
             throw error
         } catch (_: Throwable) {

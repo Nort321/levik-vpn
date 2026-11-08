@@ -14,6 +14,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -66,6 +67,42 @@ class RelayVkAuthAttemptTest {
         assertEquals(0L, RelayVkAuthTiming.remaining(1_000L, 286_000L))
         assertEquals(10_000L, RelayVkAuthTiming.remaining(1_000L, 46_000L, 56_000L))
         assertEquals(0L, RelayVkAuthTiming.remaining(1_000L, 46_000L, 40_000L))
+    }
+
+    @Test
+    fun `Auto uses the saved VK login without opening a window`() {
+        val resolved = resolveVkAuth(
+            hasSession = true, allowInteractive = false,
+            silent = { RelayVkAuthResult.Success(credentials) },
+            interactive = { error("Auto must not open VK login") },
+        )
+        assertEquals(credentials, resolved)
+    }
+
+    @Test
+    fun `a failed or timed out VK call cannot trigger a login even for a manual selection`() {
+        val networkFailure = RelayVkAuthException("relay_vk_auth_failed")
+        for ((result, code) in listOf(null to "relay_vk_auth_timeout", RelayVkAuthResult.Failure(networkFailure) to networkFailure.stableCode)) {
+            val error = assertThrows(RelayVkAuthException::class.java) {
+                resolveVkAuth(true, true, silent = { result }, interactive = { error("No sign-in page was seen") })
+            }
+            assertEquals(code, error.stableCode)
+        }
+    }
+
+    @Test
+    fun `missing or expired VK login can open a window only after a manual selection`() {
+        for (hasSession in listOf(false, true)) {
+            val silent = {
+                check(hasSession) { "There is no saved session to reuse" }
+                RelayVkAuthResult.LoginRequired
+            }
+            val error = assertThrows(RelayVkAuthException::class.java) {
+                resolveVkAuth(hasSession, false, silent, interactive = { error("Auto must try the next route") })
+            }
+            assertEquals("relay_vk_auth_required", error.stableCode)
+            assertEquals(credentials, resolveVkAuth(hasSession, true, silent) { RelayVkAuthResult.Success(credentials) })
+        }
     }
 
     @Test

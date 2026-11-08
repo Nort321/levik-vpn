@@ -122,6 +122,7 @@ sealed interface TunnelEngineRequest {
         val config: RelayServerConfig,
         val configFactory: RelayXrayConfigFactory,
         val tunPlan: TunPlan,
+        val allowInteractiveVkAuth: Boolean,
     ) : TunnelEngineRequest
 
     data class Yandex(

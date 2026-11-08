@@ -889,9 +889,10 @@
     <string name="diagnosis_action_connect">Connect the VPN</string>
     <string name="diagnosis_action_best_server">Switch to the best server</string>
     <string name="diagnosis_action_mobile_servers">Choose a server</string>
-    <string name="relay_auth_timeout">Sign-in did not finish in time. Reconnect and complete the sign-in.</string>
+    <string name="relay_auth_timeout">The connection through VK took too long. Check your mobile connection and try again.</string>
     <string name="relay_auth_cancelled">Sign-in was cancelled. Reconnect when you are ready.</string>
     <string name="relay_auth_failed">Sign-in could not be completed. Check your mobile connection and try again.</string>
+    <string name="relay_auth_required">Choose the server with VK sign-in in the Allowlists category and sign in to VK.</string>
 
     <!-- LevikDrop, docs/levik-drop.md -->
     <string name="drop_title">File transfer</string>

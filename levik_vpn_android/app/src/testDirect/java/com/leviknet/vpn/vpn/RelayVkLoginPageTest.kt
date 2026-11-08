@@ -17,6 +17,9 @@ class RelayVkLoginPageTest {
     fun `keeps the call join page and unrelated URLs`() {
         assertFalse(isVkLoginPage("https://m.vk.com/call/join/abcdefghijklmnop"))
         assertFalse(isVkLoginPage("https://vk.com/feed"))
+        assertFalse(isVkLoginPage("https://example.com/login"))
+        assertFalse(isVkLoginPage("https://id.vk.com.example.com/auth"))
+        assertFalse(isVkLoginPage("http://id.vk.com/auth"))
         assertFalse(isVkLoginPage("not a url"))
     }
 }

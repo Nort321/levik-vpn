@@ -39,11 +39,12 @@ internal fun interface RelayNativeSessionFactory {
     fun create(
         config: RelayServerConfig,
         environment: TunnelEngineEnvironment,
+        allowInteractiveVkAuth: Boolean,
     ): RelayNativeSession
 }
 
 internal fun interface RelayVkTurnProvider {
-    fun obtain(hash: String, network: Network, deadlineElapsedMs: Long): RelayTurnCredentials
+    fun obtain(hash: String, network: Network, deadlineElapsedMs: Long, allowInteractive: Boolean): RelayTurnCredentials
 }
 
 internal interface RelayNativeSession {
@@ -90,7 +91,7 @@ internal class RelayTunnelEngineAdapter(
         val relay = request as? TunnelEngineRequest.Relay
             ?: throw IllegalArgumentException("Invalid relay engine request")
         if (environment.network == null) engineFailure("relay_network_required")
-        val nativeSession = sessionFactory.create(relay.config, environment)
+        val nativeSession = sessionFactory.create(relay.config, environment, relay.allowInteractiveVkAuth)
         val active = ActiveRelaySession(nativeSession)
         synchronized(lock) {
             if (owner !in owners) engineFailure("relay_owner_inactive")
@@ -236,11 +237,13 @@ internal class AndroidRelayNativeSessionFactory(
     override fun create(
         config: RelayServerConfig,
         environment: TunnelEngineEnvironment,
+        allowInteractiveVkAuth: Boolean,
     ): RelayNativeSession = AndroidRelayNativeSession(
         executablePath = executablePath,
         config = config,
         environment = environment,
         vkTurnProvider = vkTurnProvider,
+        allowInteractiveVkAuth = allowInteractiveVkAuth,
     )
 }
 
@@ -249,6 +252,7 @@ private class AndroidRelayNativeSession(
     private val config: RelayServerConfig,
     private val environment: TunnelEngineEnvironment,
     private val vkTurnProvider: RelayVkTurnProvider,
+    private val allowInteractiveVkAuth: Boolean,
 ) : RelayNativeSession {
     private val codec = RelayControlCodec()
     private val stateMachine = RelayControlStateMachine(codec)
@@ -288,7 +292,7 @@ private class AndroidRelayNativeSession(
             val prepareTimeout = RelayPreparationTimeout(
                 nowMs = SystemClock.elapsedRealtime(),
                 credentialDeadlineMs = credentialDeadline.deadlineElapsedMs,
-                transportTimeoutMs = PREPARE_TIMEOUT_MS,
+                transportTimeoutMs = if (allowInteractiveVkAuth) PREPARE_TIMEOUT_MS else AUTOMATIC_PREPARE_TIMEOUT_MS,
             )
             if (credentialDeadline.isExpired(SystemClock.elapsedRealtime())) {
                 engineFailure("relay_credential_expired")
@@ -333,9 +337,14 @@ private class AndroidRelayNativeSession(
                     is RelayControlAction.RequestVkAuth -> {
                         val authStartedAt = SystemClock.elapsedRealtime()
                         try {
-                            runInterruptible { provideVkCredentials(action.request) }
+                            val authDeadline = if (allowInteractiveVkAuth) credentialDeadline.deadlineElapsedMs
+                                else prepareTimeout.deadlineMs
+                            runInterruptible { provideVkCredentials(action.request, allowInteractiveVkAuth, authDeadline) }
                         } finally {
-                            prepareTimeout.accountForAuthentication(authStartedAt, SystemClock.elapsedRealtime())
+                            // Only a user-initiated sign-in can pause the transport budget.
+                            if (allowInteractiveVkAuth) {
+                                prepareTimeout.accountForAuthentication(authStartedAt, SystemClock.elapsedRealtime())
+                            }
                         }
                     }
                     is RelayControlAction.PreparedProxy -> preparedProxy = LocalProxyEndpoint(
@@ -562,7 +571,7 @@ private class AndroidRelayNativeSession(
                     }
                     if (action is RelayControlAction.RequestVkAuth) {
                         try {
-                            provideVkCredentials(action.request)
+                            provideVkCredentials(action.request, allowInteractive = false)
                         } catch (error: TunnelEngineFailureException) {
                             recordBackgroundFailure(error.code)
                             return@submit
@@ -657,13 +666,18 @@ private class AndroidRelayNativeSession(
         }
     }
 
-    private fun provideVkCredentials(request: RelayVkAuthRequest) {
+    private fun provideVkCredentials(
+        request: RelayVkAuthRequest,
+        allowInteractive: Boolean,
+        deadlineElapsedMs: Long = credentialDeadline.deadlineElapsedMs,
+    ) {
         authenticating.set(true)
         val credentials = try {
             vkTurnProvider.obtain(
                 request.hash,
                 environment.network ?: engineFailure("relay_network_required"),
-                credentialDeadline.deadlineElapsedMs,
+                deadlineElapsedMs,
+                allowInteractive,
             )
         } catch (error: CancellationException) {
             throw error
@@ -791,6 +805,7 @@ private class AndroidRelayNativeSession(
         const val CONNECT_RETRY_DELAY_MS = 25L
         const val CHANNEL_CONNECT_TIMEOUT_MS = 10_000L
         const val PREPARE_TIMEOUT_MS = 120_000L
+        const val AUTOMATIC_PREPARE_TIMEOUT_MS = 45_000L
         const val STOP_DESTROY_TIMEOUT_MS = 1_000L
         const val STOP_FORCIBLE_TIMEOUT_MS = 1_000L
         const val WORKER_SHUTDOWN_TIMEOUT_MS = 1_000L
