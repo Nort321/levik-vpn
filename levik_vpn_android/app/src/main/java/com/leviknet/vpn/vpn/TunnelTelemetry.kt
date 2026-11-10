@@ -14,7 +14,7 @@ internal fun TunnelServer.telemetryProtocol(): TelemetryProtocol = when (engine)
     TunnelEngineKind.LEVIK_RELAY -> TelemetryProtocol.RELAY
     TunnelEngineKind.LEVIK_YANDEX -> TelemetryProtocol.YANDEX
     // The telemetry schema has no Game code yet; "other" keeps the ingest contract.
-    TunnelEngineKind.LEVIK_GAME -> TelemetryProtocol.OTHER
+    TunnelEngineKind.LEVIK_GAME, TunnelEngineKind.LEVIK_TRUSTTUNNEL -> TelemetryProtocol.OTHER
     TunnelEngineKind.XRAY -> xrayTelemetryProtocol(outbound)
 }
 

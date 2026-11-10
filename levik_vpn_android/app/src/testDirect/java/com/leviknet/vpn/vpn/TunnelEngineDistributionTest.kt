@@ -16,7 +16,7 @@ class TunnelEngineDistributionTest {
         assertEquals(
             setOf(
                 TunnelEngineKind.XRAY, TunnelEngineKind.LEVIK_RELAY, TunnelEngineKind.LEVIK_YANDEX, TunnelEngineKind.LEVIK_TUIC,
-                TunnelEngineKind.LEVIK_GAME,
+                TunnelEngineKind.LEVIK_GAME, TunnelEngineKind.LEVIK_TRUSTTUNNEL,
             ),
             registry.supportedProfileEngines,
         )

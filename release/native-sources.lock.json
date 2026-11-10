@@ -94,6 +94,51 @@
       "size": 1985133,
       "sha256": "67dd8f8c37ecaaadcfcafad1f0827eed4b034c963b86fd3aa5c0d7a36876845d",
       "license": "GPL-3.0-or-later"
+    },
+    {
+      "name": "trusttunnel-sing-box",
+      "version": "v1.14.4-lx.31",
+      "commit": "c406c61c4514cada10b4dc251eafa4c9671ab54e",
+      "url": "https://codeload.github.com/Leadaxe/sing-box-lx/tar.gz/refs/tags/v1.14.4-lx.31",
+      "size": 6963877,
+      "sha256": "c78eb77830b2fe84facd16bc867095fcbb1cae603f8ff15dd9e4909f15943c56",
+      "license": "GPL-3.0-or-later"
+    },
+    {
+      "name": "trusttunnel-utls",
+      "version": "ad69b19",
+      "commit": "ad69b191e2f83367ec0ac5f3a1a61310732c43b9",
+      "url": "https://codeload.github.com/Leadaxe/utls-lx/tar.gz/ad69b191e2f83367ec0ac5f3a1a61310732c43b9",
+      "size": 752482,
+      "sha256": "5fb1ca008850537e691b2b22b777ad6519063d8bd518b75bba1b259a6fb74c76",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "trusttunnel-sing-tun",
+      "version": "94280f6",
+      "commit": "94280f68f97bd4a296fa6a8648bcf312f304f69f",
+      "url": "https://codeload.github.com/Leadaxe/sing-tun-lx/tar.gz/94280f68f97bd4a296fa6a8648bcf312f304f69f",
+      "size": 987769,
+      "sha256": "ef67ab344ad3a9a070d0420f47d61b1f562b9f9a2dbaa05e688780f0d888a3ff",
+      "license": "GPL-3.0-or-later"
+    },
+    {
+      "name": "trusttunnel-gvisor",
+      "version": "117243a",
+      "commit": "117243aa02fa2915cb53d1d4549bfca3a3ebf238",
+      "url": "https://codeload.github.com/Leadaxe/gvisor-lx/tar.gz/117243aa02fa2915cb53d1d4549bfca3a3ebf238",
+      "size": 1091140,
+      "sha256": "9a9256c7f27c47e28a46610450e09637a6674c8d50b35ba3b1627d6cfff82cc2",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "trusttunnel-wireguard-go",
+      "version": "9115d90",
+      "commit": "9115d9022cd0b2606ca1967d9b189d4c5936b543",
+      "url": "https://codeload.github.com/Leadaxe/wireguard-go-awg2-lx/tar.gz/9115d9022cd0b2606ca1967d9b189d4c5936b543",
+      "size": 140144,
+      "sha256": "2f31b55fb816adc2c50a7ed1f980ffff2cbea9eada546596752a11274932f266",
+      "license": "MIT"
     }
   ],
   "relayArtifact": {
@@ -119,5 +164,14 @@
     "command": "./cmd/levik-tuic",
     "commandSource": "levik_vpn_android/native/tuic/source/levik-tuic/main.go",
     "upstreamCommit": "af6e64c3b69e6132ebaee0e1a3d24e93903f6709"
+  },
+  "trustTunnelArtifact": {
+    "name": "libleviktrusttunnel.so",
+    "version": "v1.14.4-lx.31",
+    "embeddedGoVersion": "go1.26.9",
+    "license": "GPL-3.0-or-later",
+    "sourceArchive": "trusttunnel-sing-box",
+    "command": "./cmd/sing-box",
+    "buildScript": "levik_vpn_android/native/trusttunnel/build-android-helper.sh"
   }
 }

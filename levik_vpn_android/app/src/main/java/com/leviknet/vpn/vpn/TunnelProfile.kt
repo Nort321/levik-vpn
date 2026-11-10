@@ -44,6 +44,9 @@ enum class TunnelEngineKind {
     @SerialName("levik-tuic")
     LEVIK_TUIC,
 
+    @SerialName("levik-trusttunnel")
+    LEVIK_TRUSTTUNNEL,
+
     /** Levik Game: only the selected games, their UDP through the Direct-only Game sidecar. */
     @SerialName("levik-game")
     LEVIK_GAME,
@@ -181,6 +184,16 @@ data class TuicServerConfig(
 )
 
 @Serializable
+data class TrustTunnelServerConfig(
+    val address: String,
+    val port: Int,
+    val username: String,
+    val password: String,
+    val serverName: String,
+    val quic: Boolean,
+)
+
+@Serializable
 data class YandexServerConfig(
     val bootstrap: YandexBootstrap? = null,
     val routing: TunnelRouting? = null,
@@ -225,6 +238,7 @@ data class TunnelServer(
     val yandexConfig: YandexServerConfig? = null,
     val tuicConfig: TuicServerConfig? = null,
     val gameConfig: GameServerConfig? = null,
+    val trustTunnelConfig: TrustTunnelServerConfig? = null,
 )
 
 fun TunnelServer.effectiveCategory(): TunnelServerCategory = category ?: legacyCategory()

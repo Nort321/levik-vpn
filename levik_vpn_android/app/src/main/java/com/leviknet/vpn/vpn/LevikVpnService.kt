@@ -1108,6 +1108,17 @@ class LevikVpnService : VpnService() {
                         secondaryDns = secondaryDns,
                     ),
                 )
+                TunnelEngineKind.LEVIK_TRUSTTUNNEL -> TunnelEngineRequest.TrustTunnel(
+                    config = requireNotNull(selected.trustTunnelConfig) { "TrustTunnel server has no configuration" },
+                    configFactory = RelayXrayConfigFactory { fd, proxy ->
+                        regularXrayConfig(
+                            XrayConfigBuilder(container.json).withSocksProxy(profile, selected.id, selected.engine, proxy),
+                            fd,
+                            antiDpiEnabled = false,
+                        )
+                    },
+                    tunPlan = xrayTunPlan(primaryDns = primaryDns, secondaryDns = secondaryDns),
+                )
                 TunnelEngineKind.LEVIK_GAME -> {
                     val gameConfig = requireNotNull(selected.gameConfig) {
                         "Levik Game server has no configuration"
@@ -2649,7 +2660,7 @@ class LevikVpnService : VpnService() {
                         is TunnelEngineRequest.Xray -> request.tunPlan
                         is TunnelEngineRequest.Relay -> request.tunPlan
                         is TunnelEngineRequest.Yandex -> request.tunPlan
-                        is TunnelEngineRequest.Tuic -> request.tunPlan
+                        is TunnelEngineRequest.Socks -> request.tunPlan
                         is TunnelEngineRequest.Game -> request.tunPlan
                     }
                     val activeTun = if (prepared.tunPlan == previousTunPlan) {

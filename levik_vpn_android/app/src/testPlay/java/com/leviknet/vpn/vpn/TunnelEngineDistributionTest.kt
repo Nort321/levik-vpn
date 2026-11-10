@@ -7,14 +7,14 @@ import org.junit.Test
 
 class TunnelEngineDistributionTest {
     @Test
-    fun `play distribution announces only xray profile engine`() {
+    fun `play distribution announces xray and trusttunnel engines`() {
         val registry = createTunnelEngineRegistry(
             xrayRuntime = XrayRuntime(Json),
             nativeLibraryDir = "/data/app/lib",
         )
 
         assertEquals(
-            setOf(TunnelEngineKind.XRAY),
+            setOf(TunnelEngineKind.XRAY, TunnelEngineKind.LEVIK_TRUSTTUNNEL),
             registry.supportedProfileEngines,
         )
         assertThrows(TunnelEngineUnavailableException::class.java) {

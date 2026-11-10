@@ -89,7 +89,7 @@ object TuicLinkParser {
         server.tuicConfig?.address ?: (server.outbound["settings"] as? kotlinx.serialization.json.JsonObject)
             ?.get("address")?.let { (it as? JsonPrimitive)?.content }
 
-    private fun decodeSource(source: String): String {
+    internal fun decodeSource(source: String): String {
         val trimmed = source.trim()
         if (trimmed.contains("://") || trimmed.startsWith("{")) return trimmed
         val compact = trimmed.filterNot(Char::isWhitespace)
@@ -110,16 +110,16 @@ object TuicLinkParser {
         return "-----BEGIN CERTIFICATE-----\n$body\n-----END CERTIFICATE-----\n"
     }
 
-    private fun parseQuery(raw: String): Map<String, String> = raw.split('&')
+    internal fun parseQuery(raw: String): Map<String, String> = raw.split('&')
         .filter(String::isNotEmpty)
         .associate { part ->
             val index = part.indexOf('=')
             if (index < 0) decode(part) to "" else decode(part.substring(0, index)) to decode(part.substring(index + 1))
         }
 
-    private fun decode(value: String): String = URLDecoder.decode(value, Charsets.UTF_8.name())
+    internal fun decode(value: String): String = URLDecoder.decode(value, Charsets.UTF_8.name())
 
-    private fun stripLeadingFlags(value: String): String {
+    internal fun stripLeadingFlags(value: String): String {
         var index = 0
         while (index < value.length) {
             val codePoint = value.codePointAt(index)
@@ -132,7 +132,7 @@ object TuicLinkParser {
         return value.substring(index).trim()
     }
 
-    private fun countryCodeFromFlag(value: String): String? {
+    internal fun countryCodeFromFlag(value: String): String? {
         val codePoints = value.codePoints().toArray()
         for (index in 0 until codePoints.lastIndex) {
             val first = codePoints[index]
@@ -156,8 +156,8 @@ object TuicLinkParser {
     private const val REGIONAL_INDICATOR_END = 0x1F1FF
     private val UUID = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
     private val PASSWORD = Regex("[A-Za-z0-9_-]{16,128}")
-    private val IPV4 = Regex("(?:(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)\\.){3}(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)")
-    private val DNS_NAME = Regex("(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+")
+    internal val IPV4 = Regex("(?:(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)\\.){3}(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)")
+    internal val DNS_NAME = Regex("(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+")
     private val ALPN = Regex("[A-Za-z0-9./-]{1,32}")
     private val BASE64URL = Regex("[A-Za-z0-9_-]+")
     private val CONGESTION_CONTROLS = setOf("bbr", "cubic", "new_reno")

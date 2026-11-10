@@ -80,11 +80,18 @@ class XrayConfigBuilder(
         profile: PreparedTunnelProfile,
         tuicServerId: String,
         proxy: LocalProxyEndpoint,
+    ): PreparedTunnelProfile = withSocksProxy(profile, tuicServerId, TunnelEngineKind.LEVIK_TUIC, proxy)
+
+    fun withSocksProxy(
+        profile: PreparedTunnelProfile,
+        serverId: String,
+        kind: TunnelEngineKind,
+        proxy: LocalProxyEndpoint,
     ): PreparedTunnelProfile {
-        val tuicServer = profile.servers.firstOrNull { it.id == tuicServerId && it.engine == TunnelEngineKind.LEVIK_TUIC }
-            ?: throw IllegalArgumentException("Selected TUIC server is unavailable")
+        val server = profile.servers.firstOrNull { it.id == serverId && it.engine == kind }
+            ?: throw IllegalArgumentException("Selected sidecar server is unavailable")
         val proxyOutbound = buildJsonObject {
-            put("tag", tuicServer.tag)
+            put("tag", server.tag)
             put("protocol", "socks")
             put("settings", buildJsonObject {
                 put("address", proxy.address)
@@ -93,7 +100,7 @@ class XrayConfigBuilder(
                 put("pass", proxy.password)
             })
         }
-        val proxied = tuicServer.copy(engine = TunnelEngineKind.XRAY, outbound = proxyOutbound, tuicConfig = null)
+        val proxied = server.copy(engine = TunnelEngineKind.XRAY, outbound = proxyOutbound, tuicConfig = null, trustTunnelConfig = null)
         return profile.copy(servers = listOf(proxied) + profile.servers.filter { it.engine == TunnelEngineKind.XRAY })
     }
 

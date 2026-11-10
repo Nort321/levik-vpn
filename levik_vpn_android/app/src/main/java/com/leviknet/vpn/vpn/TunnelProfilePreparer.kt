@@ -9,6 +9,7 @@ class TunnelProfilePreparer(
     private val includeTuic: Boolean = false,
     /** True only where the Game sidecar is packaged (Direct). */
     private val includeGame: Boolean = false,
+    private val includeTrustTunnel: Boolean = false,
 ) {
     fun prepare(profile: TunnelProfile): PreparedTunnelProfile {
         val converted = xrayRuntime.convertProfile(profile)
@@ -43,7 +44,11 @@ class TunnelProfilePreparer(
         val (placeholders, xrayServers) = converted.servers.partition { it.isSubscriptionPlaceholder() }
         // Game node links never become ordinary servers; Direct makes them one Levik Game server.
         val game = GameProfile.split(xrayServers + tuicServers, profile.game, includeGame)
-        val servers = game.ordinary + listOfNotNull(game.game) + relayServers + yandexServers + telemostServers
+        val baseServers = game.ordinary + listOfNotNull(game.game) + relayServers + yandexServers + telemostServers
+        val availablePairs = (MAX_SERVERS - baseServers.size).coerceAtLeast(0) / 2
+        val trustTunnelServers = profile.source?.takeIf { includeTrustTunnel && game.game?.gameConfig?.only != true }
+            ?.let { TrustTunnelLinkParser.parse(it.content).take(availablePairs * 2) }.orEmpty()
+        val servers = baseServers + trustTunnelServers
 
         if (servers.isEmpty() && placeholders.isNotEmpty()) {
             throw SubscriptionNoticeException(subscriptionNotice(placeholders.first().name))

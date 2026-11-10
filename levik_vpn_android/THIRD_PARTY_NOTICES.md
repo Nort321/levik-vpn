@@ -13,6 +13,12 @@ Direct APK содержит TUIC-клиент `libleviktuic.so`: команда
 против его `go.mod`/`go.sum` (TUIC-клиент sing-quic и SOCKS5-сервер sing),
 см. `native/tuic/`. Google Play flavor этот бинарник не содержит.
 
+## sing-box-lx — TrustTunnel (Direct и Play)
+
+- Исходники: [sing-box-lx v1.14.4-lx.31](https://github.com/Leadaxe/sing-box-lx/tree/v1.14.4-lx.31)
+- Лицензия: GPL-3.0-or-later
+- Отдельный процесс `libleviktrusttunnel.so` собирается из этих исходников сценарием в `native/trusttunnel/`. Сценарий фиксирует ревизии и SHA-256 архивов.
+
 ## Levik WhiteList Relay / WDTT Plus v15 (только Direct)
 
 - Проект: <https://github.com/Ivan4537/WDTT-Plus>

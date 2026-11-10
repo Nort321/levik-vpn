@@ -15,7 +15,11 @@ internal object PlayTunnelSecurity {
         "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305",
     )
 
-    fun validate(config: String) {
+    fun validate(config: String) = validate(config, null)
+
+    fun validateTrustTunnel(config: String, proxy: LocalProxyEndpoint) = validate(config, proxy)
+
+    private fun validate(config: String, proxy: LocalProxyEndpoint?) {
         val root = Json.parseToJsonElement(config) as? JsonObject
             ?: throw IllegalArgumentException("Invalid VPN configuration")
         val outbounds = root["outbounds"] as? JsonArray
@@ -31,6 +35,13 @@ internal object PlayTunnelSecurity {
             require(!hasInsecureVerification(outbound)) { "VPN certificate verification is required" }
             val encryptedTransport = stream?.text("security") in setOf("tls", "reality")
             val settings = outbound["settings"] as? JsonObject
+            if (proxy != null && protocol == "socks" && settings != null &&
+                settings.keys == setOf("address", "port", "user", "pass") &&
+                settings["address"] == JsonPrimitive("127.0.0.1") &&
+                settings["port"] == JsonPrimitive(proxy.port) &&
+                settings["user"] == JsonPrimitive(proxy.username) &&
+                settings["pass"] == JsonPrimitive(proxy.password)
+            ) return@forEach
             val encryptedProtocol = when (protocol) {
                 "vmess" -> settings != null && vmessEncrypted(settings)
                 "shadowsocks" -> settings != null && shadowsocksEncrypted(settings)

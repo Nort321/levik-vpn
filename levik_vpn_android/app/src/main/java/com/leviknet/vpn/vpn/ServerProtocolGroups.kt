@@ -8,6 +8,8 @@ enum class ServerProtocol(val label: String) {
     VLESS("VLESS"),
     HYSTERIA("Hysteria 2"),
     TUIC("TUIC"),
+    TRUSTTUNNEL_H2("TrustTunnel H2"),
+    TRUSTTUNNEL_H3("TrustTunnel H3"),
     OTHER(""),
 }
 
@@ -25,6 +27,7 @@ data class ServerProtocolGroup(
 
 fun TunnelServer.protocol(): ServerProtocol {
     if (engine == TunnelEngineKind.LEVIK_TUIC) return ServerProtocol.TUIC
+    trustTunnelConfig?.let { return if (it.quic) ServerProtocol.TRUSTTUNNEL_H3 else ServerProtocol.TRUSTTUNNEL_H2 }
     if (engine != TunnelEngineKind.XRAY) return ServerProtocol.OTHER
     return when ((outbound["protocol"] as? JsonPrimitive)?.content?.lowercase()) {
         "vless" -> ServerProtocol.VLESS

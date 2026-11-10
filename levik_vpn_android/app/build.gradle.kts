@@ -107,6 +107,8 @@ val yandexNativeProjectDir = rootProject.file("native/yandex")
 val yandexNativeJniDir = yandexNativeProjectDir.resolve("build/android/jniLibs")
 val tuicNativeProjectDir = rootProject.file("native/tuic")
 val tuicNativeJniDir = tuicNativeProjectDir.resolve("build/android/jniLibs")
+val trustTunnelNativeProjectDir = rootProject.file("native/trusttunnel")
+val trustTunnelNativeJniDir = trustTunnelNativeProjectDir.resolve("build/android/jniLibs")
 val gameNativeProjectDir = rootProject.file("native/game")
 val gameNativeJniDir = gameNativeProjectDir.resolve("build/android/jniLibs")
 val relayNativeProjectDir = rootProject.file("../levik_whitelist_relay")
@@ -182,7 +184,7 @@ android {
         applicationId = "com.leviknet.vpn"
         minSdk = 26
         targetSdk = 36
-        versionCode = 111
+        versionCode = 112
         versionName = rootProject.version.toString()
 
         buildConfigField("String", "CABINET_BASE_URL", "\"${cabinetBaseUrl.trimEnd('/')}\"")
@@ -275,6 +277,7 @@ android {
         }
     }
 
+    sourceSets.getByName("main").jniLibs.srcDir(trustTunnelNativeJniDir)
     sourceSets.getByName("direct").jniLibs.srcDirs(relayNativeJniDir, yandexNativeJniDir, tuicNativeJniDir, gameNativeJniDir)
 
     buildFeatures {
@@ -451,6 +454,31 @@ val validateDirectTuicNativeRuntime by tasks.registering {
     doLast {
         relayNativeAbis.forEach { (abi, expected) ->
             validateRelayElf(tuicNativeJniDir.resolve("$abi/libleviktuic.so"), abi, expected.first, expected.second)
+        }
+    }
+}
+
+val buildTrustTunnelNative by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Builds the protected TrustTunnel helper for Android Direct and Play."
+    workingDir(trustTunnelNativeProjectDir)
+    val goBinary = providers.environmentVariable("TRUSTTUNNEL_GO_BIN")
+        .orElse(providers.environmentVariable("GO_BIN")).orElse("go")
+    environment("GO_BIN", goBinary.get())
+    environment("ANDROID_NDK_HOME", androidComponents.sdkComponents.ndkDirectory.get().asFile.absolutePath)
+    val script = trustTunnelNativeProjectDir.resolve("build-android-helper.sh")
+    inputs.file(script)
+    inputs.property("trustTunnelGoBinary", goBinary)
+    outputs.dir(trustTunnelNativeJniDir)
+    commandLine("bash", script.absolutePath)
+}
+
+val validateTrustTunnelNativeRuntime by tasks.registering {
+    group = "verification"
+    dependsOn(buildTrustTunnelNative)
+    doLast {
+        relayNativeAbis.forEach { (abi, expected) ->
+            validateRelayElf(trustTunnelNativeJniDir.resolve("$abi/libleviktrusttunnel.so"), abi, expected.first, expected.second)
         }
     }
 }
@@ -675,6 +703,11 @@ tasks.configureEach {
     }
     if (name.startsWith("mergePlay") && name.endsWith("NativeLibs")) {
         dependsOn(verifyPlayRelayExclusion)
+    }
+    if ((name.startsWith("mergePlay") || name.startsWith("mergeDirect")) &&
+        (name.endsWith("JniLibFolders") || name.endsWith("NativeLibs"))
+    ) {
+        dependsOn(validateTrustTunnelNativeRuntime)
     }
     if (name.startsWith("mergeDirect") &&
         (name.endsWith("JniLibFolders") || name.endsWith("NativeLibs"))

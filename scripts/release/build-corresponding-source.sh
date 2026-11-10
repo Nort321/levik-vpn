@@ -394,6 +394,43 @@ for tuic_abi in arm64-v8a armeabi-v7a x86_64; do
       >"${EVIDENCE_DIRECTORY}/libleviktuic-${tuic_abi}-build-info.txt"
 done
 
+readonly TRUSTTUNNEL_SOURCE="${TEMPORARY_DIRECTORY}/trusttunnel-sing-box"
+for module in sing-box utls sing-tun gvisor wireguard-go; do
+  module_archives=("${UPSTREAM_ARCHIVES}"/*-trusttunnel-"${module}"-*.tar.gz)
+  if [[ "${#module_archives[@]}" != "1" || ! -f "${module_archives[0]}" || -L "${module_archives[0]}" ]]; then
+    printf 'ERROR: digest-locked TrustTunnel source archive is missing for %s.\n' "${module}" >&2
+    exit 1
+  fi
+  module_directory="${TRUSTTUNNEL_SOURCE}"
+  if [[ "${module}" != "sing-box" ]]; then
+    module_directory="${TRUSTTUNNEL_SOURCE}/submodules/${module}"
+  fi
+  mkdir -p -- "${module_directory}"
+  tar -xzf "${module_archives[0]}" --strip-components=1 -C "${module_directory}"
+done
+capture_go_module_graph \
+  trusttunnel-android-client \
+  "${TRUSTTUNNEL_SOURCE}" \
+  "${MODULE_CACHE}/trusttunnel-android-client" \
+  "${VENDOR_SOURCE}/trusttunnel-android-client" \
+  "${EVIDENCE_DIRECTORY}/go-modules-trusttunnel-android-client.json"
+
+for abi in arm64-v8a armeabi-v7a x86_64; do
+  library="${REPOSITORY_ROOT}/levik_vpn_android/native/trusttunnel/build/android/jniLibs/${abi}/libleviktrusttunnel.so"
+  if [[ ! -f "${library}" || -L "${library}" ]]; then
+    printf 'ERROR: verified TrustTunnel binary is missing for %s.\n' "${abi}" >&2
+    exit 1
+  fi
+  build_info="${EVIDENCE_DIRECTORY}/libleviktrusttunnel-${abi}-build-info.txt"
+  go version -m "${library}" |
+    sed -E "1s#^.*: (go[0-9]+(\\.[0-9]+)+)\$#libleviktrusttunnel-${abi}.so: \\1#" >"${build_info}"
+  if ! grep -F -- "${REQUIRED_GO_VERSION}" "${build_info}" >/dev/null ||
+     ! grep -F -- '-tags=with_quic,with_trusttunnel,with_utls' "${build_info}" >/dev/null; then
+    printf 'ERROR: TrustTunnel build metadata is incomplete for %s.\n' "${abi}" >&2
+    exit 1
+  fi
+done
+
 unzip -p "${NATIVE_AAR}" jni/arm64-v8a/libgojni.so \
   >"${TEMPORARY_DIRECTORY}/libgojni.so"
 go version -m "${TEMPORARY_DIRECTORY}/libgojni.so" |
@@ -452,6 +489,7 @@ manifest = {
     "sourceDateEpoch": int(epoch),
     "generatedAt": datetime.fromtimestamp(int(epoch), timezone.utc).isoformat().replace("+00:00", "Z"),
     "nativeArtifact": lock["nativeArtifact"],
+    "trustTunnelArtifact": lock["trustTunnelArtifact"],
     "sourceArchives": lock["sourceArchives"],
     "contents": {
         "application": "Git archive of the exact Android repository commit",

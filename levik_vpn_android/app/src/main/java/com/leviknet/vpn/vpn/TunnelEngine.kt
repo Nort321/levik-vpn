@@ -131,11 +131,22 @@ sealed interface TunnelEngineRequest {
         val tunPlan: TunPlan,
     ) : TunnelEngineRequest
 
+    sealed interface Socks : TunnelEngineRequest {
+        val configFactory: RelayXrayConfigFactory
+        val tunPlan: TunPlan
+    }
+
     data class Tuic(
         val config: TuicServerConfig,
-        val configFactory: RelayXrayConfigFactory,
-        val tunPlan: TunPlan,
-    ) : TunnelEngineRequest
+        override val configFactory: RelayXrayConfigFactory,
+        override val tunPlan: TunPlan,
+    ) : Socks
+
+    data class TrustTunnel(
+        val config: TrustTunnelServerConfig,
+        override val configFactory: RelayXrayConfigFactory,
+        override val tunPlan: TunPlan,
+    ) : Socks
 
     data class Game(
         val config: GameServerConfig,

@@ -23,11 +23,10 @@ internal fun createTunnelEngineRegistry(
             xrayRuntime,
         ),
         TuicTunnelEngineAdapter(
-            AndroidTuicNativeSessionFactory(
-                java.io.File(nativeLibraryDir, "libleviktuic.so").absolutePath,
-            ),
+            java.io.File(nativeLibraryDir, "libleviktuic.so").absolutePath,
             xrayRuntime,
         ),
+        TrustTunnelEngineAdapter(java.io.File(nativeLibraryDir, "libleviktrusttunnel.so").absolutePath, xrayRuntime),
         GameTunnelEngineAdapter(
             AndroidGameNativeSessionFactory(
                 java.io.File(nativeLibraryDir, "liblevikgame.so").absolutePath,
