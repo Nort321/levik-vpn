@@ -811,7 +811,7 @@ class MobileApiClient(
         private const val ORDER_CREATE_PATH = "/api/mobile/v1/orders/create"
         private const val ORDER_PAYMENT_PATH = "/api/mobile/v1/orders/payment"
         private const val TUNNEL_PROFILE_PATH = "/api/mobile/v1/tunnel-profile"
-        private val TRUSTTUNNEL_PROFILE_HEADERS = mapOf("X-Levik-TrustTunnel" to "1")
+        private val TRUSTTUNNEL_PROFILE_HEADERS = mapOf("X-Levik-TrustTunnel" to "2")
         private val DIRECT_PROFILE_HEADERS = TRUSTTUNNEL_PROFILE_HEADERS + mapOf("X-Levik-Road" to "1", "X-Levik-Game" to "android-1")
         private val SUPPORTED_TUNNEL_ENGINES = setOf("xray", "levik-relay")
         private const val CHECK_IP_PATH = "/api/check"

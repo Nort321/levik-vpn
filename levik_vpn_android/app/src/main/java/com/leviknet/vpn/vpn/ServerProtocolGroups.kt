@@ -44,14 +44,16 @@ fun TunnelServer.protocol(): ServerProtocol {
 fun groupProtocolVariants(servers: List<TunnelServer>): List<ServerProtocolGroup> {
     val groups = mutableListOf<MutableList<TunnelServer>>()
     val hosts = mutableListOf<String?>()
-    servers.forEach { server ->
+    val (anchored, ordinary) = servers.partition { it.trustTunnelConfig?.groupWithVless != null }
+    (ordinary + anchored).forEach { server ->
         val protocol = server.protocol()
+        val anchor = server.trustTunnelConfig?.groupWithVless
         val host = server.endpointHost()?.takeIf {
             protocol != ServerProtocol.OTHER && server.effectiveCategory() == TunnelServerCategory.REGULAR
         }
         val index = if (host == null) -1 else groups.indices.firstOrNull { index ->
-            hosts[index] == host &&
-                groups[index].first().countryCode.equals(server.countryCode, ignoreCase = true) &&
+            groups[index].first().countryCode.equals(server.countryCode, ignoreCase = true) &&
+                (if (anchor == null) hosts[index] == host else groups[index].any { it.matchesVlessAnchor(anchor) }) &&
                 groups[index].none { it.protocol() == protocol }
         } ?: -1
         if (index >= 0) {
@@ -62,6 +64,11 @@ fun groupProtocolVariants(servers: List<TunnelServer>): List<ServerProtocolGroup
         }
     }
     return groups.map { variants -> ServerProtocolGroup(variants.sortedBy { it.protocol().ordinal }) }
+}
+
+private fun TunnelServer.matchesVlessAnchor(anchor: TrustTunnelVlessEndpoint): Boolean {
+    trustTunnelConfig?.groupWithVless?.let { return it == anchor }
+    return protocol() == ServerProtocol.VLESS && syncHost() == anchor.host && syncPort() == anchor.port
 }
 
 /** The host that names this server across the user's apps (FavoriteNodes); null for Yandex. */

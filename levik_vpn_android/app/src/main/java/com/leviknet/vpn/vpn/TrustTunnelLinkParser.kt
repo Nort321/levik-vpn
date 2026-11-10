@@ -25,7 +25,18 @@ internal object TrustTunnelLinkParser {
         val query = TuicLinkParser.parseQuery(link.rawQuery.orEmpty())
         val mode = query["mode"] ?: return null
         val serverName = query["sni"] ?: return null
-        if (link.rawPath.isNotEmpty() || query.keys != setOf("mode", "sni") ||
+        val groupWithVless = when (query.keys) {
+            setOf("mode", "sni") -> null
+            setOf("mode", "sni", "sourceHost", "sourcePort") -> {
+                val host = query.getValue("sourceHost")
+                val port = query.getValue("sourcePort").toIntOrNull() ?: return null
+                if ((!TuicLinkParser.IPV4.matches(host) && !TuicLinkParser.DNS_NAME.matches(host)) ||
+                    port !in 1..65535) return null
+                TrustTunnelVlessEndpoint(host, port)
+            }
+            else -> return null
+        }
+        if (link.rawPath.isNotEmpty() ||
             credentials.size != 2 || !usernamePattern.matches(credentials[0]) ||
             !passwordPattern.matches(credentials[1]) || !TuicLinkParser.IPV4.matches(address) ||
             link.port !in 1..65535 || !TuicLinkParser.DNS_NAME.matches(serverName) ||
@@ -48,7 +59,9 @@ internal object TrustTunnelLinkParser {
             },
             engine = TunnelEngineKind.LEVIK_TRUSTTUNNEL,
             category = TunnelServerCategory.REGULAR,
-            trustTunnelConfig = TrustTunnelServerConfig(address, link.port, credentials[0], credentials[1], serverName, mode == "h3"),
+            trustTunnelConfig = TrustTunnelServerConfig(
+                address, link.port, credentials[0], credentials[1], serverName, mode == "h3", groupWithVless,
+            ),
         )
     }.getOrNull()
 }

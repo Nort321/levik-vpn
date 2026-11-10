@@ -191,6 +191,13 @@ data class TrustTunnelServerConfig(
     val password: String,
     val serverName: String,
     val quic: Boolean,
+    val groupWithVless: TrustTunnelVlessEndpoint? = null,
+)
+
+@Serializable
+data class TrustTunnelVlessEndpoint(
+    val host: String,
+    val port: Int,
 )
 
 @Serializable

@@ -10,6 +10,23 @@ import org.junit.Test
 
 class ServerCountryGroupsTest {
     @Test
+    fun `attaches both TrustTunnel modes to the VLESS card when their addresses differ`() {
+        val name = "🇵🇱 Польша · Prime"
+        val vless = server("pl", name, "pl.example.net", countryCode = "PL")
+        val username = "0".repeat(32)
+        val password = "a".repeat(43)
+        val variants = TrustTunnelLinkParser.parse(listOf("h2", "h3").joinToString("\n") { mode ->
+            "levik-trusttunnel://$username:$password@192.0.2.10:443?sni=trust.example&mode=$mode" +
+                "&sourceHost=pl.example.net&sourcePort=443#%F0%9F%87%B5%F0%9F%87%B1%20Poland"
+        })
+        val card = groupByCountry(variants + vless).single().nodes.single()
+        assertEquals(
+            listOf(ServerProtocol.VLESS, ServerProtocol.TRUSTTUNNEL_H2, ServerProtocol.TRUSTTUNNEL_H3),
+            card.group.variants.map { it.protocol() },
+        )
+    }
+
+    @Test
     fun `reads the server label from the host remark`() {
         assertEquals("Франкфурт", serverLabel("🇩🇪 Германия · Франкфурт", "DE"))
         assertEquals("Нюрнберг 2", serverLabel("🇩🇪 Германия | Нюрнберг 2", "DE"))
