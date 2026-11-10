@@ -408,6 +408,9 @@ for module in sing-box utls sing-tun gvisor wireguard-go; do
   mkdir -p -- "${module_directory}"
   tar -xzf "${module_archives[0]}" --strip-components=1 -C "${module_directory}"
 done
+mkdir -p -- "${TRUSTTUNNEL_SOURCE}/cmd/levik-trusttunnel"
+cp -- "${APPLICATION_SOURCE}/levik_vpn_android/native/trusttunnel/source/levik-trusttunnel/main.go" \
+  "${TRUSTTUNNEL_SOURCE}/cmd/levik-trusttunnel/main.go"
 capture_go_module_graph \
   trusttunnel-android-client \
   "${TRUSTTUNNEL_SOURCE}" \
@@ -425,6 +428,7 @@ for abi in arm64-v8a armeabi-v7a x86_64; do
   go version -m "${library}" |
     sed -E "1s#^.*: (go[0-9]+(\\.[0-9]+)+)\$#libleviktrusttunnel-${abi}.so: \\1#" >"${build_info}"
   if ! grep -F -- "${REQUIRED_GO_VERSION}" "${build_info}" >/dev/null ||
+     ! grep -Fxq -- $'\tpath\tgithub.com/sagernet/sing-box/cmd/levik-trusttunnel' "${build_info}" ||
      ! grep -F -- '-tags=with_quic,with_trusttunnel,with_utls' "${build_info}" >/dev/null; then
     printf 'ERROR: TrustTunnel build metadata is incomplete for %s.\n' "${abi}" >&2
     exit 1

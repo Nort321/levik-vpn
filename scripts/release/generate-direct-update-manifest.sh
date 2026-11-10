@@ -79,7 +79,8 @@ PY
 
 readonly APK_SIZE="$(wc -c <"${APK_PATH}" | tr -d '[:space:]')"
 if [[ ! "${APK_SIZE}" =~ ^[0-9]+$ || "${APK_SIZE}" -lt 1048576 || "${APK_SIZE}" -gt "${MAX_APK_SIZE_BYTES}" ]]; then
-  printf 'ERROR: Direct APK size is outside the allowed release bounds.\n' >&2
+  printf 'ERROR: Direct APK size (%s bytes) is outside the allowed release bounds (1 MiB to %s bytes).\n' \
+    "${APK_SIZE}" "${MAX_APK_SIZE_BYTES}" >&2
   exit 1
 fi
 
@@ -89,10 +90,7 @@ import sys
 import zipfile
 
 apk_path = pathlib.Path(sys.argv[1])
-expected_libxray_entries = {
-    f"lib/{abi}/libgojni.so"
-    for abi in ("arm64-v8a", "armeabi-v7a", "x86_64")
-}
+supported_abis = ("arm64-v8a", "armeabi-v7a", "x86_64")
 with zipfile.ZipFile(apk_path) as archive:
     native_entries = {
         info.filename: info
@@ -100,11 +98,11 @@ with zipfile.ZipFile(apk_path) as archive:
         if info.filename.startswith("lib/") and info.filename.endswith(".so")
     }
 
-actual_libxray_entries = {
-    name for name in native_entries if name.endswith("/libgojni.so")
-}
-if actual_libxray_entries != expected_libxray_entries:
-    raise SystemExit("Direct APK does not contain libXray for every supported ABI")
+for library in ("libgojni.so", "libleviktrusttunnel.so"):
+    expected = {f"lib/{abi}/{library}" for abi in supported_abis}
+    actual = {name for name in native_entries if name.endswith(f"/{library}")}
+    if actual != expected:
+        raise SystemExit(f"Direct APK does not contain {library} for every supported ABI")
 if not native_entries or any(
     info.compress_type != zipfile.ZIP_DEFLATED for info in native_entries.values()
 ):

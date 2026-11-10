@@ -49,6 +49,10 @@ gvisor gvisor-lx 117243aa02fa2915cb53d1d4549bfca3a3ebf238 9a9256c7f27c47e28a4661
 wireguard-go wireguard-go-awg2-lx 9115d9022cd0b2606ca1967d9b189d4c5936b543 2f31b55fb816adc2c50a7ed1f980ffff2cbea9eada546596752a11274932f266
 SOURCES
 
+helper_dir="${source_dir}/cmd/levik-trusttunnel"
+mkdir -p "${helper_dir}"
+cp "${project_dir}/source/levik-trusttunnel/main.go" "${helper_dir}/main.go"
+
 build_abi() {
     local abi="$1" goarch="$2" compiler="$3" goarm="${4:-}"
     local output="${output_dir}/${abi}/libleviktrusttunnel.so"
@@ -60,7 +64,7 @@ build_abi() {
             "${go_bin}" build -buildvcs=false -buildmode=pie -trimpath \
             -tags with_quic,with_trusttunnel,with_utls \
             -ldflags '-s -w -buildid= -linkmode=external -extldflags=-Wl,-z,max-page-size=16384' \
-            -o "${output}.next" ./cmd/sing-box
+            -o "${output}.next" ./cmd/levik-trusttunnel
     )
     "${toolchain}/llvm-readelf" -lW "${output}.next" | awk \
         '/ LOAD / { seen=1; if ($NF != "0x4000") bad=1 } END { exit (!seen || bad) }'

@@ -184,7 +184,7 @@ android {
         applicationId = "com.leviknet.vpn"
         minSdk = 26
         targetSdk = 36
-        versionCode = 112
+        versionCode = 113
         versionName = rootProject.version.toString()
 
         buildConfigField("String", "CABINET_BASE_URL", "\"${cabinetBaseUrl.trimEnd('/')}\"")
@@ -467,7 +467,7 @@ val buildTrustTunnelNative by tasks.registering(Exec::class) {
     environment("GO_BIN", goBinary.get())
     environment("ANDROID_NDK_HOME", androidComponents.sdkComponents.ndkDirectory.get().asFile.absolutePath)
     val script = trustTunnelNativeProjectDir.resolve("build-android-helper.sh")
-    inputs.file(script)
+    inputs.files(script, trustTunnelNativeProjectDir.resolve("source/levik-trusttunnel/main.go"))
     inputs.property("trustTunnelGoBinary", goBinary)
     outputs.dir(trustTunnelNativeJniDir)
     commandLine("bash", script.absolutePath)
