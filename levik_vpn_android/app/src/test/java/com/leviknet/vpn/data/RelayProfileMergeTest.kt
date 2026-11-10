@@ -14,10 +14,13 @@ import com.leviknet.vpn.vpn.RelayPolicy
 import com.leviknet.vpn.vpn.RelayServerConfig
 import com.leviknet.vpn.vpn.RelayTrafficAccountingPolicy
 import com.leviknet.vpn.vpn.RelayTransport
+import com.leviknet.vpn.vpn.ServerProtocol
+import com.leviknet.vpn.vpn.TrustTunnelLinkParser
 import com.leviknet.vpn.vpn.TunnelEngineKind
 import com.leviknet.vpn.vpn.TunnelNetworkRequirement
 import com.leviknet.vpn.vpn.TunnelServer
 import com.leviknet.vpn.vpn.TunnelServerCategory
+import com.leviknet.vpn.vpn.protocol
 import java.time.Instant
 import java.io.IOException
 import kotlinx.serialization.json.JsonObject
@@ -56,7 +59,16 @@ class RelayProfileMergeTest {
     }
 
     @Test
-    fun `relay merge keeps TUIC servers of the regular profile`() {
+    fun `relay merge keeps TUIC and both TrustTunnel modes of the regular profile`() {
+        val username = "0".repeat(32)
+        val password = "a".repeat(43)
+        val trustTunnel = TrustTunnelLinkParser.parse(listOf("h2", "h3").joinToString("\n") { mode ->
+            "levik-trusttunnel://$username:$password@192.0.2.10:443?sni=vpn.example&mode=$mode"
+        })
+        assertEquals(
+            listOf(ServerProtocol.TRUSTTUNNEL_H2, ServerProtocol.TRUSTTUNNEL_H3),
+            trustTunnel.map { it.protocol() },
+        )
         val xray = profile(
             version = 1,
             profileId = "xray-profile",
@@ -64,7 +76,7 @@ class RelayProfileMergeTest {
             servers = listOf(
                 server("xray-1", TunnelEngineKind.XRAY),
                 server("tuic-1", TunnelEngineKind.LEVIK_TUIC),
-            ),
+            ) + trustTunnel,
         )
         val relay = profile(
             version = 2,
@@ -75,8 +87,8 @@ class RelayProfileMergeTest {
         )
 
         assertEquals(
-            listOf("xray-1", "tuic-1", "relay:de-1"),
-            mergePreparedProfiles(xray, relay).servers.map { it.id },
+            xray.servers + relay.servers,
+            mergePreparedProfiles(xray, relay).servers,
         )
     }
 
