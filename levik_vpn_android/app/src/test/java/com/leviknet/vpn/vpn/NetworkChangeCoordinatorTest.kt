@@ -7,6 +7,29 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class NetworkChangeCoordinatorTest {
+    @Test fun `VK relay ignores repeated carrier updates but reconnects when its DNS changes`() = runTest {
+        val admittedDns = "10.45.0.1:53"
+        val owner = NetworkChangeCoordinator<Pair<String, String?>>()
+        val admitted = requireNotNull(owner.begin(1, "cellular" to admittedDns))
+        val work = launch { CompletableDeferred<Unit>().await() }
+        owner.track(admitted, work)
+
+        fun carrierUpdate(dns: String) = "cellular" to dns.takeIf {
+            usesPhysicalBootstrapDns(TunnelEngineKind.LEVIK_RELAY, smartAutoLive = false)
+        }
+
+        // Capability and TCP buffer updates leave the network and resolver unchanged.
+        repeat(10) { assertNull(owner.begin(1, carrierUpdate(admittedDns))) }
+        assertFalse(work.isCancelled)
+        assertTrue(owner.current(admitted))
+
+        val changed = requireNotNull(owner.begin(1, carrierUpdate("10.45.0.2:53")))
+        assertTrue(work.isCancelled)
+        assertFalse(owner.current(admitted))
+        assertTrue(owner.current(changed))
+        owner.reset()
+    }
+
     @Test fun `changing wifi target supersedes return while the cellular carrier stays retained`() = runTest {
         val owner = NetworkChangeCoordinator<String?>()
         val first = requireNotNull(owner.begin(1, networkHandoverTarget("cellular", "wifi-a", true)))

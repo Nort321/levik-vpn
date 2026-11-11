@@ -1965,7 +1965,7 @@ class LevikVpnService : VpnService() {
     }
 
     private suspend fun resolveBootstrapDnsServer(server: TunnelServer, network: Network): String? {
-        if (server.engine != TunnelEngineKind.XRAY && server.engine != TunnelEngineKind.LEVIK_RELAY && smartAutoLiveConfig == null) return null
+        if (!usesPhysicalBootstrapDns(server.engine, smartAutoLiveConfig != null)) return null
         val dnsServer = networkMonitor.awaitBootstrapDnsServer(network)
         if (dnsServer == null && server.engine != TunnelEngineKind.LEVIK_RELAY &&
             requiresBootstrapDns(ServerPinger.extractEndpoint(server.outbound)?.first)
@@ -2296,7 +2296,7 @@ class LevikVpnService : VpnService() {
         val preferred = networkMonitor.activeNetwork()
         val returningToRegular = preferred != null && shouldReturnToRegularNetwork(preferred)
         val selected = networkMonitor.activeNetwork(source.networkRequirement)
-        val selectedDns = selected?.takeIf { source.engine == TunnelEngineKind.XRAY || smartAutoLiveConfig != null }
+        val selectedDns = selected?.takeIf { usesPhysicalBootstrapDns(source.engine, smartAutoLiveConfig != null) }
             ?.let(networkMonitor::bootstrapDnsServer)
         if (!returningToRegular && selected == currentNetwork && selectedDns == currentBootstrapDnsServer &&
             (coreRunning || reconnectJob?.isActive == true || connectionJob?.isActive == true)) return
@@ -2342,7 +2342,7 @@ class LevikVpnService : VpnService() {
                     return@withLock
                 }
                 val replacement = networkMonitor.activeNetwork(server.networkRequirement)
-                val replacementDns = replacement?.takeIf { server.engine == TunnelEngineKind.XRAY || smartAutoLiveConfig != null }
+                val replacementDns = replacement?.takeIf { usesPhysicalBootstrapDns(server.engine, smartAutoLiveConfig != null) }
                     ?.let(networkMonitor::bootstrapDnsServer)
                 if (replacement == currentNetwork && replacementDns == currentBootstrapDnsServer && coreRunning) {
                     return@withLock

@@ -3,6 +3,10 @@ package com.leviknet.vpn.vpn
 import java.net.Inet6Address
 import java.net.InetAddress
 
+/** Startup and network-change detection must track the same physical resolver. */
+internal fun usesPhysicalBootstrapDns(engine: TunnelEngineKind, smartAutoLive: Boolean): Boolean =
+    engine == TunnelEngineKind.XRAY || engine == TunnelEngineKind.LEVIK_RELAY || smartAutoLive
+
 /** The resolver belongs to the physical network, independently of DNS inside the VPN. */
 internal fun selectBootstrapDnsServer(dnsServers: List<InetAddress>): String? =
     dnsServers.firstNotNullOfOrNull { address ->
