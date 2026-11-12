@@ -135,10 +135,11 @@ class XrayConfigBuilder(
         }
         val selected = profile.servers.firstOrNull { it.id == selectedServerId }
             ?: throw IllegalArgumentException("Selected server is unavailable")
+        require(selected.id != EXTERNAL_AUTO_ID) { "External route must be checked before connecting" }
         require(selected.engine == TunnelEngineKind.XRAY) {
             "Selected server does not use the Xray engine"
         }
-        val xrayServers = profile.servers.filter { it.engine == TunnelEngineKind.XRAY }
+        val xrayServers = profile.servers.filter { it.engine == TunnelEngineKind.XRAY && it.id != EXTERNAL_AUTO_ID }
         validateServers(xrayServers)
 
         val orderedServers = (listOf(selected) + xrayServers.filterNot { it.id == selected.id })

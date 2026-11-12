@@ -20,7 +20,7 @@ class SecureFileStore(context: Context) {
     private val lock = Any()
 
     fun put(name: String, plaintext: ByteArray) {
-        require(plaintext.size <= MAX_PLAINTEXT_BYTES) { "Secure value is too large" }
+        require(plaintext.size <= if (name == TUNNEL_PROFILE) 32 * 1024 * 1024 else MAX_PLAINTEXT_BYTES) { "Secure value is too large" }
         val cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION).apply {
             init(Cipher.ENCRYPT_MODE, secretKey())
             updateAAD(storageAad(name))
@@ -63,7 +63,7 @@ class SecureFileStore(context: Context) {
                     check(ivSize == GCM_IV_BYTES) { "Invalid secure storage IV" }
                     val iv = ByteArray(ivSize).also(input::readFully)
                     val encryptedSize = input.readInt()
-                    check(encryptedSize in GCM_TAG_BYTES..MAX_CIPHERTEXT_BYTES) {
+                    check(encryptedSize in GCM_TAG_BYTES..(if (name == TUNNEL_PROFILE) 32 * 1024 * 1024 + GCM_TAG_BYTES else MAX_CIPHERTEXT_BYTES)) {
                         "Invalid secure storage ciphertext"
                     }
                     val encrypted = ByteArray(encryptedSize).also(input::readFully)

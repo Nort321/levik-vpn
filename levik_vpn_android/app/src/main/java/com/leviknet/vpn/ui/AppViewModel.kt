@@ -3646,6 +3646,8 @@ internal fun shouldShowConnectionTelemetryNotice(state: AppUiState): Boolean =
         )
 
 internal fun displayedServerId(state: AppUiState): String? {
+    if (state.selectedServerId == com.leviknet.vpn.vpn.EXTERNAL_AUTO_ID &&
+        (state.vpn.externalPoolProgress != null || state.vpn.serverId?.startsWith("external:") == true)) return state.selectedServerId
     if (!state.vpn.mainSelectionCertain && state.vpn.state !in setOf(VpnConnectionState.DISCONNECTED, VpnConnectionState.ERROR)) return null
     return state.vpn.serverId.takeIf {
         state.vpn.state !in setOf(VpnConnectionState.DISCONNECTED, VpnConnectionState.ERROR)

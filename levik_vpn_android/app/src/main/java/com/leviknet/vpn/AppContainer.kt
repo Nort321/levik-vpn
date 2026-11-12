@@ -172,6 +172,7 @@ class AppContainer(application: Application) {
             includeTuic = TunnelEngineKind.LEVIK_TUIC in tunnelEngineRegistry.supportedProfileEngines,
             includeGame = TunnelEngineKind.LEVIK_GAME in tunnelEngineRegistry.supportedProfileEngines,
             includeTrustTunnel = TunnelEngineKind.LEVIK_TRUSTTUNNEL in tunnelEngineRegistry.supportedProfileEngines,
+            includeExternalPool = !BuildConfig.IS_PLAY_DISTRIBUTION,
         ),
         supportedTunnelEngines = tunnelEngineRegistry.supportedProfileEngines,
         json = json,

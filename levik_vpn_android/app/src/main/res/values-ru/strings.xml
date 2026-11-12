@@ -1083,4 +1083,10 @@
     <string name="smart_auto_connected">Подключено. Проверяем качество соединения в фоне.</string>
     <string name="smart_auto_recovering">Восстанавливаем соединение через доступный маршрут…</string>
     <string name="smart_auto_paused">Пауза. Автоматический выбор продолжится вместе с VPN.</string>
+    <string name="external_pool_title">Безлимитные серверы</string>
+    <string name="external_pool_description">Автовыбор с проверкой интернета · список сохранён</string>
+    <string name="external_pool_checking">Ищем рабочий маршрут</string>
+    <string name="external_pool_checking_hint">Проверяем передачу данных через серверы. Это может занять несколько минут.</string>
+    <string name="external_pool_progress">Проверено %1$d из %2$d серверов</string>
+    <string name="external_pool_cancel">Нажмите кнопку питания, чтобы отменить проверку</string>
 </resources>

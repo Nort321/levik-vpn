@@ -561,8 +561,10 @@ class AppRepository(
             val profile = withContext(Dispatchers.Default) {
                 profileParser.parse(plaintext, subscriptionId, expectedDeviceId)
             }
+            val previous = _tunnelProfile.value ?: cachedTunnel()
             withContext(Dispatchers.Default) {
-                tunnelProfilePreparer.prepare(profile)
+                val prepared = tunnelProfilePreparer.prepare(profile)
+                com.leviknet.vpn.vpn.retainExternalPool(prepared, previous)
             }
         } finally {
             plaintext.fill(0)

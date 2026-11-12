@@ -845,6 +845,83 @@ class LevikVpnService : VpnService() {
         }
     }
 
+    private var lastExternalServerId: String? = null
+
+    private suspend fun checkExternalServers(profile: PreparedTunnelProfile, network: Network, generation: Long, dns: String?): TunnelServer {
+        val servers = profile.externalPool?.validated()?.servers.orEmpty().sortedBy { it.id != lastExternalServerId }
+        require(servers.isNotEmpty()) { "Нет сохранённого списка безлимитных серверов. Обновите подписку при доступном интернете." }
+        val checked = mutableSetOf<String>()
+        fun progress() { VpnStateStore.update(coreOwner) { it.copy(externalPoolProgress = ExternalPoolProgress(checked.size, servers.size)) } }
+        progress()
+        suspend fun probe(batch: List<TunnelServer>): TunnelServer? {
+            coroutineContext.ensureActive()
+            check(serviceCommands.permitsConnection(generation)) { "Connection was superseded" }
+            SmartRouteProbeConfig(batch, filesDir).use { config ->
+                // The same transport transforms as the final core, stripped of its TUN and listeners below.
+                val base = container.json.parseToJsonElement(XrayConfigBuilder(container.json).build(
+                    profile = profile.copy(servers = batch, serviceRoutes = null, serviceRouteOwner = null),
+                    selectedServerId = batch.first().id, tunFileDescriptor = 0,
+                    antiDpiEnabled = container.settings.antiDpiEnabled.value,
+                    antiDpiPackets = container.settings.antiDpiPackets.value,
+                    antiDpiLength = container.settings.antiDpiLength.value,
+                    antiDpiInterval = container.settings.antiDpiInterval.value,
+                    xhttpMuxHosts = container.appPlatform.xhttpMuxHosts(),
+                )).jsonObject
+                val protector = fileDescriptorProtector(network, batch.first())
+                val controller = object : libXray.DialerController {
+                    override fun protectFd(fd: Long): Boolean = protector.protectAndBind(fd)
+                }
+                val lease = lifecycleGate.withLock {
+                    check(!destroyed.get() && serviceCommands.permitsConnection(generation)) { "Connection was superseded" }
+                    container.xrayRuntime.start(coreOwner, container.json.encodeToString(JsonObject.serializer(), config.apply(base)),
+                        controller, dns, replaceActive = false,
+                        listenerController = object : libXray.DialerController {
+                            override fun protectFd(fd: Long): Boolean = protectUnboundTunnelSocket(fd, ::protect)
+                        })
+                }
+                try {
+                    SmartRouteProber(config.candidates).use { prober ->
+                        return supervisorScope {
+                            val answers = Channel<Pair<TunnelServer, Boolean>>(Channel.UNLIMITED)
+                            val jobs = batch.map { server -> launch {
+                                val passed = try { withTimeoutOrNull(6_000L) { prober.verifyData(server.id) } == true }
+                                    catch (error: CancellationException) { throw error } catch (_: Exception) { false }
+                                answers.send(server to passed)
+                            } }
+                            try {
+                                repeat(batch.size) {
+                                    val (server, passed) = answers.receive()
+                                    checked.add(server.id); progress()
+                                    if (passed) return@supervisorScope server
+                                }
+                                null
+                            } finally { jobs.forEach { it.cancel() } }
+                        }
+                    }
+                } finally { container.xrayRuntime.stop(coreOwner, lease) }
+            }
+        }
+        try {
+            for (batch in servers.chunked(4)) {
+                coroutineContext.ensureActive()
+                val winner = try { probe(batch) }
+                catch (error: CancellationException) { throw error }
+                catch (_: Exception) {
+                    // One unsupported source must not invalidate its three otherwise valid neighbours.
+                    var result: TunnelServer? = null
+                    for (server in batch) {
+                        result = try { probe(listOf(server)) } catch (error: CancellationException) { throw error }
+                            catch (_: Exception) { checked.add(server.id); progress(); null }
+                        if (result != null) break
+                    }
+                    result
+                }
+                if (winner != null) { lastExternalServerId = winner.id; return winner }
+            }
+            error("Проверили сохранённые серверы: ни один не передаёт трафик. Обновите список или повторите позже.")
+        } finally { VpnStateStore.update(coreOwner) { it.copy(externalPoolProgress = null) } }
+    }
+
     private suspend fun connect(required: RequiredConnectionTarget? = null, userSelected: Boolean = false) {
         // A quick OFF/ON must wait for the old core and TUN to finish closing. The stop job
         // belongs to the service, so cancelling this connection cannot cancel that cleanup.
@@ -900,7 +977,7 @@ class LevikVpnService : VpnService() {
             if (required != null) require(hotSwitchReconnectTargetExists(profile, required.subscriptionId, required.serverId)) {
                 "Selected HotSwitch server is no longer available"
             }
-            val selected = if (fallbackAttempt != null || required != null) {
+            var selected = if (fallbackAttempt != null || required != null) {
                 profile.servers.firstOrNull { it.id == selectedId }
                     ?: error("Auto-failover server is no longer present in the tunnel profile")
             } else {
@@ -959,6 +1036,13 @@ class LevikVpnService : VpnService() {
             prepareTelemetryNetwork(network)
             var bootstrapDnsServer = resolveBootstrapDnsServer(selected, network)
             currentBootstrapDnsServer = bootstrapDnsServer
+            if (selected.id == EXTERNAL_AUTO_ID) {
+                selected = checkExternalServers(profile, network, generation, bootstrapDnsServer)
+                // Only the chosen route enters the long-lived core; the catalog stays in the encrypted cache.
+                profile = profile.copy(servers = listOf(selected), serviceRoutes = null, serviceRouteOwner = null)
+                connectingServer = selected
+                handoverServer = selected
+            }
             // Keep observing physical changes during startup, not only after the core is ready.
             lifecycleGate.withLock {
                 check(!destroyed.get()) { "VPN service was destroyed during startup" }
@@ -988,8 +1072,10 @@ class LevikVpnService : VpnService() {
             // Smart Auto connects at once to the ranked choice (cached full-route measurements first)
             // and measures every route afterwards through the running core, see SmartAutoLiveRuntime.
             // Load endpoint-specific routing only after the actual complete route has been chosen.
-            profile = container.repository.prepareServiceRoutes(profile, selected, container.appPlatform.flagEnabled("service_routes"),
-                reuseExisting = handoverTun.get() != null || attemptCause == AttemptCause.NETWORK_CHANGE)
+            if (!selected.id.startsWith("external:")) {
+                profile = container.repository.prepareServiceRoutes(profile, selected, container.appPlatform.flagEnabled("service_routes"),
+                    reuseExisting = handoverTun.get() != null || attemptCause == AttemptCause.NETWORK_CHANGE)
+            }
             val routes = ServiceRouteConfig.prepare(profile, selected, filesDir, container.settings.autoFallbackServer.value)
             serviceRouteConfig = routes
             telemetry.record { it.attempt(selected.name, selected.telemetryProtocol(), attemptCause) }

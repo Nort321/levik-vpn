@@ -178,6 +178,8 @@ import com.leviknet.vpn.vpn.TunnelServer
 import com.leviknet.vpn.vpn.TunnelServerCategory
 import com.leviknet.vpn.vpn.VpnConnectionState
 import com.leviknet.vpn.vpn.VpnFailure
+import com.leviknet.vpn.vpn.EXTERNAL_AUTO_ID
+import com.leviknet.vpn.vpn.ExternalPoolProgress
 import com.leviknet.vpn.vpn.VpnSnapshot
 import com.leviknet.vpn.vpn.HotSwitchPhase
 import com.leviknet.vpn.vpn.countryFlag
@@ -2810,6 +2812,7 @@ private fun PowerButton(
 
         // Status title & subtitle
         val statusTitle = when {
+            vpn.externalPoolProgress != null -> stringResource(R.string.external_pool_checking)
             isConnected -> stringResource(R.string.status_connected)
             isTransitioning -> stringResource(R.string.status_connecting)
             isPaused -> stringResource(R.string.status_paused, "")
@@ -2824,6 +2827,7 @@ private fun PowerButton(
             else -> MaterialTheme.colorScheme.onSurface
         }
         val statusSubtitle = when {
+            vpn.externalPoolProgress != null -> stringResource(R.string.external_pool_checking_hint)
             isConnected && !vpn.mainSelectionCertain && vpn.hotSwitch?.phase == HotSwitchPhase.PREPARING ->
                 stringResource(R.string.hot_switch_preparing_unknown_desc)
             isConnected && !vpn.mainSelectionCertain -> stringResource(R.string.hot_switch_uncertain_desc)
@@ -2850,6 +2854,30 @@ private fun PowerButton(
             fontSize = 14.sp,
             textAlign = TextAlign.Center,
         )
+        vpn.externalPoolProgress?.let { progress ->
+            Spacer(Modifier.height(16.dp))
+            ExternalPoolCheck(progress)
+        }
+    }
+}
+
+@Composable
+private fun ExternalPoolCheck(progress: ExternalPoolProgress) {
+    val fraction by animateFloatAsState(
+        targetValue = progress.checked.toFloat() / progress.total.coerceAtLeast(1),
+        animationSpec = tween(240), label = "externalPoolProgress",
+    )
+    Surface(modifier = Modifier.widthIn(max = 390.dp).fillMaxWidth(), shape = RoundedCornerShape(20.dp),
+        color = LevikBlue.copy(alpha = 0.07f), border = androidx.compose.foundation.BorderStroke(1.dp, LevikBlue.copy(alpha = 0.2f))) {
+        Column(Modifier.padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth(), color = LevikBlue)
+            Spacer(Modifier.height(10.dp))
+            Text(stringResource(R.string.external_pool_progress, progress.checked, progress.total),
+                style = MaterialTheme.typography.bodyMedium, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+            Spacer(Modifier.height(4.dp))
+            Text(stringResource(R.string.external_pool_cancel), style = MaterialTheme.typography.bodySmall,
+                textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
@@ -3455,12 +3483,15 @@ private fun ServersScreen(
                         server.name.lowercase().contains(query) ||
                         server.countryCode.lowercase().contains(query)
                     val matchesFilter = filterType.matches(server, favoriteServerIds)
-                    matchesQuery && matchesFilter
+                    server.id != EXTERNAL_AUTO_ID && matchesQuery && matchesFilter
                 }
 
                 if (filterType == ServerFilterType.FASTEST) {
                     filtered = filtered.sortedBy { serverPings[it.id] ?: Long.MAX_VALUE }
                 }
+
+                val showExternalPool = servers.any { it.id == EXTERNAL_AUTO_ID } && filterType in setOf(ServerFilterType.ALL, ServerFilterType.REGULAR) &&
+                    (query.isEmpty() || "безлимитные серверы автовыбор unlimited".contains(query))
 
                 LazyColumn(
                     contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
@@ -3532,7 +3563,26 @@ private fun ServersScreen(
                         }
                     }
 
-                    if (filtered.isEmpty()) {
+                    if (showExternalPool) {
+                        item(key = EXTERNAL_AUTO_ID) {
+                            Surface(onClick = { onServerSelection(EXTERNAL_AUTO_ID) },
+                                shape = RoundedCornerShape(18.dp),
+                                color = if (!automaticServer && selectedServerId == EXTERNAL_AUTO_ID) LevikBlue.copy(alpha = 0.10f) else MaterialTheme.colorScheme.surface,
+                                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {
+                                Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(painterResource(R.drawable.ic_servers), null, tint = LevikBlue, modifier = Modifier.size(28.dp))
+                                    Spacer(Modifier.width(14.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(stringResource(R.string.external_pool_title), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                        Text(stringResource(R.string.external_pool_description), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    RadioButton(selected = !automaticServer && selectedServerId == EXTERNAL_AUTO_ID, onClick = null)
+                                }
+                            }
+                        }
+                    }
+
+                    if (filtered.isEmpty() && !showExternalPool) {
                         item {
                             Box(
                                 modifier = Modifier

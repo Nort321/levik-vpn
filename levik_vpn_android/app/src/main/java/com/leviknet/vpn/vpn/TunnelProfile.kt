@@ -21,6 +21,7 @@ data class TunnelProfile(
     val routing: TunnelRouting? = null,
     /** Levik Game access: which links of [source] are game nodes (GameProfile.kt). */
     val game: TunnelGameAccess? = null,
+    val externalPool: ExternalServerPool? = null,
 )
 
 @Serializable
@@ -228,6 +229,7 @@ data class PreparedTunnelProfile(
     val serviceRoutes: ServiceRouteProfile? = null,
     /** Local session binding; never sent as part of the server policy. */
     val serviceRouteOwner: String? = null,
+    val externalPool: ExternalServerPool? = null,
 )
 
 @Serializable
@@ -301,6 +303,7 @@ fun TunnelServer.isHomeRoadServer(): Boolean = name.trimStart().startsWith("\uD8
 
 // A home exit is only ever the user's own choice. TUIC is a rung of Smart Auto's protocol ladder.
 fun TunnelServer.isEligibleForAutomaticSelection(): Boolean =
-    engine in AUTOMATIC_ENGINES && !isHomeRoadServer() && (!isRussianServer() || isStandardMobileServer())
+    id != EXTERNAL_AUTO_ID && !id.startsWith("external:") &&
+        engine in AUTOMATIC_ENGINES && !isHomeRoadServer() && (!isRussianServer() || isStandardMobileServer())
 
 private val AUTOMATIC_ENGINES = setOf(TunnelEngineKind.XRAY, TunnelEngineKind.LEVIK_TUIC)

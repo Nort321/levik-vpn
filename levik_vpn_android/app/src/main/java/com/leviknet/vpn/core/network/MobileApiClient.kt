@@ -731,6 +731,7 @@ class MobileApiClient(
             val responseBody = readBounded(
                 stream,
                 connection.contentLengthLong,
+                if (path == TUNNEL_PROFILE_PATH) 36 * 1024 * 1024 else MAX_RESPONSE_BYTES,
             )
 
             if (status !in 200..299) {
@@ -766,15 +767,15 @@ class MobileApiClient(
         }
     }
 
-    private fun readBounded(input: java.io.InputStream?, contentLength: Long): ByteArray {
+    private fun readBounded(input: java.io.InputStream?, contentLength: Long, maxBytes: Int): ByteArray {
         if (input == null) return ByteArray(0)
-        if (contentLength > MAX_RESPONSE_BYTES) {
+        if (contentLength > maxBytes) {
             throw ApiException.InvalidResponse("Mobile API response is too large")
         }
 
         return input.use { stream ->
             val output = ByteArrayOutputStream(
-                contentLength.coerceIn(0, MAX_RESPONSE_BYTES.toLong()).toInt(),
+                contentLength.coerceIn(0, maxBytes.toLong()).toInt(),
             )
             val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
             var total = 0
@@ -782,7 +783,7 @@ class MobileApiClient(
                 val read = stream.read(buffer)
                 if (read < 0) break
                 total += read
-                if (total > MAX_RESPONSE_BYTES) {
+                if (total > maxBytes) {
                     throw ApiException.InvalidResponse("Mobile API response is too large")
                 }
                 output.write(buffer, 0, read)
@@ -812,7 +813,7 @@ class MobileApiClient(
         private const val ORDER_PAYMENT_PATH = "/api/mobile/v1/orders/payment"
         private const val TUNNEL_PROFILE_PATH = "/api/mobile/v1/tunnel-profile"
         private val TRUSTTUNNEL_PROFILE_HEADERS = mapOf("X-Levik-TrustTunnel" to "2")
-        private val DIRECT_PROFILE_HEADERS = TRUSTTUNNEL_PROFILE_HEADERS + mapOf("X-Levik-Road" to "1", "X-Levik-Game" to "android-1")
+        private val DIRECT_PROFILE_HEADERS = TRUSTTUNNEL_PROFILE_HEADERS + mapOf("X-Levik-Road" to "1", "X-Levik-Game" to "android-1", "X-Levik-External-Pool" to "1")
         private val SUPPORTED_TUNNEL_ENGINES = setOf("xray", "levik-relay")
         private const val CHECK_IP_PATH = "/api/check"
         private const val STATUS_PATH = "/api/status"

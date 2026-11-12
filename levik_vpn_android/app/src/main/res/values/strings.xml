@@ -1079,4 +1079,10 @@
     <string name="smart_auto_connected">Connected. Connection quality is monitored in the background.</string>
     <string name="smart_auto_recovering">Restoring the connection using an available route…</string>
     <string name="smart_auto_paused">Paused. Automatic selection resumes with your VPN.</string>
+    <string name="external_pool_title">Unlimited servers</string>
+    <string name="external_pool_description">Auto selection with an internet check · saved list</string>
+    <string name="external_pool_checking">Finding a working route</string>
+    <string name="external_pool_checking_hint">Checking real data transfer. This may take a few minutes.</string>
+    <string name="external_pool_progress">Checked %1$d of %2$d servers</string>
+    <string name="external_pool_cancel">Tap the power button to cancel</string>
 </resources>

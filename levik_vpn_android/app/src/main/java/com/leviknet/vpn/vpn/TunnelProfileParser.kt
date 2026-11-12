@@ -331,7 +331,7 @@ class TunnelProfileParser(
             "bootstrap",
             "routing",
         )
-        private const val MAX_PROFILE_BYTES = 4 * 1024 * 1024
+        private const val MAX_PROFILE_BYTES = 24 * 1024 * 1024
         private const val MAX_SOURCE_CHARS = 3 * 1024 * 1024
         private const val MAX_MEDIA_TYPE_LENGTH = 128
         private const val MAX_CLOCK_SKEW_SECONDS = 5 * 60L

@@ -55,6 +55,7 @@ data class VpnSnapshot(
     val pausedAtHome: String? = null,
     val failure: VpnFailure? = null,
     val failureDetail: String? = null,
+    val externalPoolProgress: ExternalPoolProgress? = null,
     /** The main route is acknowledged separately from the live VPN interface. */
     val mainSelectionCertain: Boolean = true,
     val hotSwitch: HotSwitchSnapshot? = null,

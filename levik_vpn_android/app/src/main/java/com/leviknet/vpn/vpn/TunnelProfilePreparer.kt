@@ -10,6 +10,7 @@ class TunnelProfilePreparer(
     /** True only where the Game sidecar is packaged (Direct). */
     private val includeGame: Boolean = false,
     private val includeTrustTunnel: Boolean = false,
+    private val includeExternalPool: Boolean = false,
 ) {
     fun prepare(profile: TunnelProfile): PreparedTunnelProfile {
         val converted = xrayRuntime.convertProfile(profile)
@@ -48,13 +49,14 @@ class TunnelProfilePreparer(
         val availablePairs = (MAX_SERVERS - baseServers.size).coerceAtLeast(0) / 2
         val trustTunnelServers = profile.source?.takeIf { includeTrustTunnel && game.game?.gameConfig?.only != true }
             ?.let { TrustTunnelLinkParser.parse(it.content).take(availablePairs * 2) }.orEmpty()
-        val servers = baseServers + trustTunnelServers
+        val externalPool = profile.externalPool?.takeIf { includeExternalPool && game.game?.gameConfig?.only != true }?.validated()
+        val servers = baseServers + trustTunnelServers + if (externalPool?.servers?.isNotEmpty() == true) listOf(externalAutoServer()) else emptyList()
 
         if (servers.isEmpty() && placeholders.isNotEmpty()) {
             throw SubscriptionNoticeException(subscriptionNotice(placeholders.first().name))
         }
         require(servers.isNotEmpty()) { "Tunnel profile has no servers" }
-        require(servers.size <= MAX_SERVERS) { "Tunnel profile has too many servers" }
+        require(servers.count { it.id != EXTERNAL_AUTO_ID } <= MAX_SERVERS) { "Tunnel profile has too many servers" }
         require(servers.map(TunnelServer::id).distinct().size == servers.size) {
             "Tunnel profile contains duplicate server identifiers"
         }
@@ -66,6 +68,7 @@ class TunnelProfilePreparer(
             relayCredentialExpiresAt = profile.bootstrap?.expiresAt,
             servers = servers,
             gameOnly = game.game?.gameConfig?.only == true,
+            externalPool = externalPool,
         )
     }
 

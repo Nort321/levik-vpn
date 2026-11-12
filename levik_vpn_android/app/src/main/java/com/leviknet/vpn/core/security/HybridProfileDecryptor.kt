@@ -60,7 +60,7 @@ class HybridProfileDecryptor(
         private const val GCM_IV_BYTES = 12
         private const val GCM_TAG_BYTES = 16
         private const val GCM_TAG_BITS = GCM_TAG_BYTES * 8
-        private const val MAX_PROFILE_CIPHERTEXT_BYTES = 4 * 1024 * 1024
+        private const val MAX_PROFILE_CIPHERTEXT_BYTES = 24 * 1024 * 1024 + GCM_TAG_BYTES
         private const val MAX_AAD_BYTES = 2048
     }
 }
