@@ -3483,15 +3483,12 @@ private fun ServersScreen(
                         server.name.lowercase().contains(query) ||
                         server.countryCode.lowercase().contains(query)
                     val matchesFilter = filterType.matches(server, favoriteServerIds)
-                    server.id != EXTERNAL_AUTO_ID && matchesQuery && matchesFilter
+                    matchesQuery && matchesFilter
                 }
 
                 if (filterType == ServerFilterType.FASTEST) {
                     filtered = filtered.sortedBy { serverPings[it.id] ?: Long.MAX_VALUE }
                 }
-
-                val showExternalPool = servers.any { it.id == EXTERNAL_AUTO_ID } && filterType in setOf(ServerFilterType.ALL, ServerFilterType.REGULAR) &&
-                    (query.isEmpty() || "безлимитные серверы автовыбор unlimited".contains(query))
 
                 LazyColumn(
                     contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
@@ -3563,26 +3560,7 @@ private fun ServersScreen(
                         }
                     }
 
-                    if (showExternalPool) {
-                        item(key = EXTERNAL_AUTO_ID) {
-                            Surface(onClick = { onServerSelection(EXTERNAL_AUTO_ID) },
-                                shape = RoundedCornerShape(18.dp),
-                                color = if (!automaticServer && selectedServerId == EXTERNAL_AUTO_ID) LevikBlue.copy(alpha = 0.10f) else MaterialTheme.colorScheme.surface,
-                                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {
-                                Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(painterResource(R.drawable.ic_servers), null, tint = LevikBlue, modifier = Modifier.size(28.dp))
-                                    Spacer(Modifier.width(14.dp))
-                                    Column(Modifier.weight(1f)) {
-                                        Text(stringResource(R.string.external_pool_title), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                                        Text(stringResource(R.string.external_pool_description), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
-                                    RadioButton(selected = !automaticServer && selectedServerId == EXTERNAL_AUTO_ID, onClick = null)
-                                }
-                            }
-                        }
-                    }
-
-                    if (filtered.isEmpty() && !showExternalPool) {
+                    if (filtered.isEmpty()) {
                         item {
                             Box(
                                 modifier = Modifier
@@ -3661,7 +3639,22 @@ private fun ServersScreen(
                                         )
                                     }
                                     items(trafficServers, key = TunnelServer::id) { server ->
-                                        ServerItemCard(
+                                        if (server.id == EXTERNAL_AUTO_ID) {
+                                            Surface(onClick = { onServerSelection(EXTERNAL_AUTO_ID) },
+                                                shape = RoundedCornerShape(18.dp),
+                                                color = if (!automaticServer && selectedServerId == EXTERNAL_AUTO_ID) LevikBlue.copy(alpha = 0.10f) else MaterialTheme.colorScheme.surface,
+                                                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {
+                                                Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                    Icon(painterResource(R.drawable.ic_servers), null, tint = LevikBlue, modifier = Modifier.size(28.dp))
+                                                    Spacer(Modifier.width(14.dp))
+                                                    Column(Modifier.weight(1f)) {
+                                                        Text(stringResource(R.string.external_pool_title), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                                        Text(stringResource(R.string.external_pool_description), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                    }
+                                                    RadioButton(selected = !automaticServer && selectedServerId == EXTERNAL_AUTO_ID, onClick = null)
+                                                }
+                                            }
+                                        } else ServerItemCard(
                                             server = server,
                                             trafficDescription = if (unlimited) {
                                                 stringResource(R.string.servers_traffic_unlimited_label)

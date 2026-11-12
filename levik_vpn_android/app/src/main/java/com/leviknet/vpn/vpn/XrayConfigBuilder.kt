@@ -136,6 +136,7 @@ class XrayConfigBuilder(
         val selected = profile.servers.firstOrNull { it.id == selectedServerId }
             ?: throw IllegalArgumentException("Selected server is unavailable")
         require(selected.id != EXTERNAL_AUTO_ID) { "External route must be checked before connecting" }
+        val externalRoute = selected.id.startsWith("external:")
         require(selected.engine == TunnelEngineKind.XRAY) {
             "Selected server does not use the Xray engine"
         }
@@ -206,6 +207,11 @@ class XrayConfigBuilder(
         }
 
         val additionalOutbounds = buildList {
+            if (externalRoute) add(buildJsonObject {
+                put("tag", "levik-external-dns")
+                put("protocol", "dns")
+                put("settings", buildJsonObject {})
+            })
             if (antiDpiEnabled) {
                 val sanitizedPackets = sanitizeAntiDpiParam(antiDpiPackets, DEFAULT_ANTI_DPI_PACKETS)
                 val sanitizedLength = sanitizeAntiDpiParam(antiDpiLength, DEFAULT_ANTI_DPI_LENGTH)
@@ -252,12 +258,17 @@ class XrayConfigBuilder(
             })
             put("dns", buildJsonObject {
                 put("queryStrategy", "UseIPv4")
+                if (externalRoute) put("tag", "levik-external-dns-query")
                 put("servers", buildJsonArray {
-                    if (!dohEndpoint.isNullOrBlank()) {
-                        add(JsonPrimitive(dohEndpoint.trim()))
+                    if (externalRoute) {
+                        // Public pools often carry TCP only. DNS must use the same proven TCP tunnel.
+                        add(JsonPrimitive(dohEndpoint?.trim()?.takeIf(String::isNotEmpty) ?: "https://1.1.1.1/dns-query"))
+                        add(JsonPrimitive("https://8.8.8.8/dns-query"))
+                    } else {
+                        if (!dohEndpoint.isNullOrBlank()) add(JsonPrimitive(dohEndpoint.trim()))
+                        add(JsonPrimitive(primaryDnsIp))
+                        add(JsonPrimitive(secondaryDnsIp))
                     }
-                    add(JsonPrimitive(primaryDnsIp))
-                    add(JsonPrimitive(secondaryDnsIp))
                 })
             })
             put("inbounds", buildJsonArray {
@@ -299,6 +310,20 @@ class XrayConfigBuilder(
                         })
                         put("outboundTag", BLOCK_TAG)
                     })
+                    if (externalRoute) {
+                        add(buildJsonObject {
+                            put("type", "field")
+                            put("inboundTag", buildJsonArray { add(JsonPrimitive("levik-external-dns-query")) })
+                            put("outboundTag", selected.tag)
+                        })
+                        add(buildJsonObject {
+                            put("type", "field")
+                            put("inboundTag", buildJsonArray { add(JsonPrimitive(TUN_INBOUND_TAG)) })
+                            put("port", "53")
+                            put("network", "tcp,udp")
+                            put("outboundTag", "levik-external-dns")
+                        })
+                    }
                     if (proxyDomains.isNotEmpty()) {
                         add(buildJsonObject {
                             put("type", "field")

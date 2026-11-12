@@ -31,7 +31,7 @@ internal fun interface SmartRouteProbeTransport {
     suspend fun exchange(id: String, request: Request, bytes: Int, uploadBytes: Int): SmartRouteExchange?
 }
 
-internal data class SmartRouteExchange(val responseMs: Double, val transferMs: Double) {
+internal data class SmartRouteExchange(val responseMs: Double, val transferMs: Double, val bodySha256: String? = null) {
     fun mbps(bytes: Int): Double = bytes * 8.0 / (transferMs.coerceAtLeast(1.0) * 1000.0)
 }
 
@@ -39,6 +39,7 @@ internal class SmartRouteProber(
     private val candidates: List<SmartRouteProbeConfig.Candidate>,
     private val transport: SmartRouteProbeTransport? = null,
     targets: List<String> = DEFAULT_TARGETS,
+    requestTimeoutMs: Long = 4_000L,
 ) : AutoCloseable {
     private val targets = targets.distinctBy { java.net.URI(it).host }.take(4).ifEmpty { DEFAULT_TARGETS }
     private val sockets = if (transport != null) emptyMap() else candidates.associate {
@@ -48,8 +49,23 @@ internal class SmartRouteProber(
         .socketFactory(sockets.getValue(candidate.id))
         .proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", 9)))
         .followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
-        .connectTimeout(2, TimeUnit.SECONDS).readTimeout(3, TimeUnit.SECONDS).writeTimeout(3, TimeUnit.SECONDS)
-        .callTimeout(4, TimeUnit.SECONDS).build() }
+        .connectTimeout(requestTimeoutMs / 2, TimeUnit.MILLISECONDS)
+        .readTimeout(requestTimeoutMs * 3 / 4, TimeUnit.MILLISECONDS).writeTimeout(requestTimeoutMs * 3 / 4, TimeUnit.MILLISECONDS)
+        .callTimeout(requestTimeoutMs, TimeUnit.MILLISECONDS).build() }
+
+    /** The external catalog uses independent, fixed-size payloads instead of a speed-test service. */
+    suspend fun verifyExternalData(id: String): Boolean = coroutineScope {
+        val answers = Channel<Boolean>(Channel.UNLIMITED)
+        val jobs = EXTERNAL_DATA_TARGETS.map { url -> launch {
+            val reply = withTimeoutOrNull(10_000L) {
+                exchange(id, Request.Builder().url(url).header("Accept-Encoding", "identity")
+                    .header("Cache-Control", "no-cache, no-store").build(), EXTERNAL_DATA_BYTES)
+            }
+            answers.send(reply?.bodySha256 == EXTERNAL_DATA_SHA256)
+        } }
+        try { repeat(jobs.size) { if (answers.receive()) return@coroutineScope true }; false }
+        finally { jobs.forEach { it.cancel() } }
+    }
 
     suspend fun measureLatency(light: Boolean = false, rounds: Int = 6, onMeasurement: (String, SmartRouteMeasurement) -> Unit) = coroutineScope {
         val limit = Semaphore(8)
@@ -152,6 +168,7 @@ internal class SmartRouteProber(
                                 val input = response.body.byteStream()
                                 val buffer = ByteArray(8192)
                                 var received = 0
+                                val digest = java.security.MessageDigest.getInstance("SHA-256")
                                 if (uploadBytes > 0) {
                                     // Acknowledgement proves the body reached the remote service.
                                     while (true) {
@@ -163,6 +180,7 @@ internal class SmartRouteProber(
                                 } else while (received < bytes) {
                                     val count = input.read(buffer, 0, minOf(buffer.size, bytes - received))
                                     if (count < 0) break
+                                    digest.update(buffer, 0, count)
                                     received += count
                                 }
                                 if (uploadBytes == 0 && received < bytes) null else {
@@ -170,7 +188,8 @@ internal class SmartRouteProber(
                                     val start = if (uploadBytes > 0) bodyStartedAt.takeIf { it > 0L } ?: sentAt else sentAt
                                     // A mirror may ignore Range. Do not drain a large body just to reuse its connection.
                                     if (uploadBytes == 0 && response.body.contentLength() != bytes.toLong()) call.cancel()
-                                    SmartRouteExchange((headersAt - sentAt) / 1_000_000.0, (done - start) / 1_000_000.0)
+                                    SmartRouteExchange((headersAt - sentAt) / 1_000_000.0, (done - start) / 1_000_000.0,
+                                        if (uploadBytes == 0) digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) } else null)
                                 }
                             }
                         }
@@ -194,6 +213,12 @@ internal class SmartRouteProber(
     }
 
     companion object {
+        internal const val EXTERNAL_DATA_BYTES = 32 * 1024
+        internal const val EXTERNAL_DATA_SHA256 = "10c00e77fabd5fa2446577db35aaae5fb68f774edf98a0d3491064d3f68b32f2"
+        private val EXTERNAL_DATA_TARGETS = listOf(
+            "https://leviknet.org/probes/external-traffic-v1.bin",
+            "https://raw.githubusercontent.com/Nort321/levik-vpn/main/levik_vpn_android/probes/external-traffic-v1.bin",
+        )
         private const val DOWNLOAD_BYTES = 512 * 1024
         private const val UPLOAD_BYTES = 128 * 1024
         private const val DEFAULT_DATA_BACKUP = "https://proof.ovh.net/files/1Mb.dat"

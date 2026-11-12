@@ -250,7 +250,8 @@ data class TunnelServer(
     val trustTunnelConfig: TrustTunnelServerConfig? = null,
 )
 
-fun TunnelServer.effectiveCategory(): TunnelServerCategory = category ?: legacyCategory()
+fun TunnelServer.effectiveCategory(): TunnelServerCategory =
+    if (id == EXTERNAL_AUTO_ID) TunnelServerCategory.MOBILE_ALLOWLIST else category ?: legacyCategory()
 
 fun TunnelServer.isMobileServer(): Boolean = effectiveCategory() in setOf(
     TunnelServerCategory.MOBILE,

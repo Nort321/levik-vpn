@@ -11,6 +11,22 @@ import org.junit.Test
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class SmartRouteProberTest {
+    @Test fun `external traffic uses independent controlled bodies and cancels the slow target`() = runTest {
+        var cancelled = 0
+        val candidate = SmartRouteProbeConfig.Candidate("external-fixture", "fixture", "/tmp/external-fixture.sock")
+        SmartRouteProber(listOf(candidate), SmartRouteProbeTransport { _, request, bytes, _ ->
+            assertEquals(32768, bytes)
+            if (request.url.host == "leviknet.org") try { delay(100_000); null } finally { cancelled++ }
+            else { delay(10); SmartRouteExchange(30.0, 50.0, SmartRouteProber.EXTERNAL_DATA_SHA256) }
+        }).use { prober -> assertTrue(prober.verifyExternalData(candidate.id)) }
+        assertEquals(1, cancelled)
+    }
+    @Test fun `external traffic rejects a successful HTTP response with the wrong body`() = runTest {
+        val candidate = SmartRouteProbeConfig.Candidate("external-fixture", "fixture", "/tmp/external-fixture.sock")
+        SmartRouteProber(listOf(candidate), SmartRouteProbeTransport { _, _, _, _ ->
+            SmartRouteExchange(30.0, 50.0, "0".repeat(64))
+        }).use { prober -> assertTrue(!prober.verifyExternalData(candidate.id)) }
+    }
     private val candidates = (0..2).map { SmartRouteProbeConfig.Candidate("r$it", "r$it", "/unused-$it") }
 
     @Test fun `background RTT rounds stay tiny and failed data body cannot verify a candidate`() = runTest {

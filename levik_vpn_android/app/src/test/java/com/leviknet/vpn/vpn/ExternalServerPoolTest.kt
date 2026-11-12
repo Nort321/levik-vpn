@@ -4,8 +4,28 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.*
 import org.junit.Test
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.test.runTest
 
 class ExternalServerPoolTest {
+    @Test fun `external card belongs to white lists including cached profiles without category`() {
+        val card = externalAutoServer()
+        assertTrue(card.isAllowlistMobileServer())
+        assertTrue(card.copy(category = null).isAllowlistMobileServer())
+        assertTrue(card.hasUnlimitedTraffic())
+    }
+    @Test fun `first verified route wins immediately and cancels unfinished routes`() = runTest {
+        var cancelled = 0
+        val checked = mutableListOf<String>()
+        val servers = (1..4).map { server(it) }
+        val winner = firstVerifiedExternalServer(servers, verify = { candidate ->
+            if (candidate.id == servers[1].id) { delay(10); true }
+            else try { delay(100_000); false } finally { cancelled++ }
+        }, onChecked = { checked.add(it.id) })
+        assertEquals(servers[1], winner)
+        assertEquals(listOf(servers[1].id), checked)
+        assertEquals(3, cancelled)
+    }
     private fun server(index: Int = 1, address: String = "8.8.8.8"): TunnelServer {
         val fingerprint = index.toString(16).padStart(64, '0')
         val tag = "external-node-$fingerprint"

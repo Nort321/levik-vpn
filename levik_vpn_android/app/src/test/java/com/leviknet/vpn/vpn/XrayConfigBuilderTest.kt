@@ -19,6 +19,19 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class XrayConfigBuilderTest {
+    @Test fun `external TCP-only routes intercept device DNS and use HTTPS through the chosen proxy`() {
+        val selected = server("external:" + "a".repeat(64), "external-node-fixture")
+        val profile = PreparedTunnelProfile(1, "profile", "subscription", "2026-07-29T11:59:00Z", servers = listOf(selected))
+        val config = json.parseToJsonElement(XrayConfigBuilder(json).build(profile, selected.id, 42)).jsonObject
+        assertEquals(listOf("https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"),
+            config.getValue("dns").jsonObject.getValue("servers").jsonArray.map { it.jsonPrimitive.content })
+        val outbounds = config.getValue("outbounds").jsonArray.map { it.jsonObject }
+        assertTrue(outbounds.any { it["tag"]?.jsonPrimitive?.content == "levik-external-dns" && it["protocol"]?.jsonPrimitive?.content == "dns" })
+        val rules = config.getValue("routing").jsonObject.getValue("rules").jsonArray.map { it.jsonObject }
+        assertTrue(rules.any { it["port"]?.jsonPrimitive?.content == "53" && it["outboundTag"]?.jsonPrimitive?.content == "levik-external-dns" })
+        assertTrue(rules.any { it["inboundTag"]?.jsonArray?.any { tag -> tag.jsonPrimitive.content == "levik-external-dns-query" } == true &&
+            it["outboundTag"]?.jsonPrimitive?.content == selected.tag })
+    }
     private val json = Json
     private val builder = XrayConfigBuilder(
         json = json,

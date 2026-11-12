@@ -880,23 +880,10 @@ class LevikVpnService : VpnService() {
                         })
                 }
                 try {
-                    SmartRouteProber(config.candidates).use { prober ->
-                        return supervisorScope {
-                            val answers = Channel<Pair<TunnelServer, Boolean>>(Channel.UNLIMITED)
-                            val jobs = batch.map { server -> launch {
-                                val passed = try { withTimeoutOrNull(6_000L) { prober.verifyData(server.id) } == true }
-                                    catch (error: CancellationException) { throw error } catch (_: Exception) { false }
-                                answers.send(server to passed)
-                            } }
-                            try {
-                                repeat(batch.size) {
-                                    val (server, passed) = answers.receive()
-                                    checked.add(server.id); progress()
-                                    if (passed) return@supervisorScope server
-                                }
-                                null
-                            } finally { jobs.forEach { it.cancel() } }
-                        }
+                    SmartRouteProber(config.candidates, requestTimeoutMs = 12_000L).use { prober ->
+                        return firstVerifiedExternalServer(batch,
+                            verify = { server -> withTimeoutOrNull(12_000L) { prober.verifyExternalData(server.id) } == true },
+                            onChecked = { server -> checked.add(server.id); progress() })
                     }
                 } finally { container.xrayRuntime.stop(coreOwner, lease) }
             }

@@ -8,6 +8,10 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 
 const val EXTERNAL_AUTO_ID = "levik-external-auto"
 
@@ -69,10 +73,32 @@ internal fun publicExternalAddress(value: String): Boolean {
 
 fun externalAutoServer() = TunnelServer(
     id = EXTERNAL_AUTO_ID, tag = EXTERNAL_AUTO_ID, name = "Безлимитные серверы", countryCode = "XX",
+    category = TunnelServerCategory.MOBILE_ALLOWLIST,
     outbound = JsonObject(mapOf("tag" to JsonPrimitive(EXTERNAL_AUTO_ID), "protocol" to JsonPrimitive("blackhole"))),
 )
 
 data class ExternalPoolProgress(val checked: Int, val total: Int)
+
+/** Return on the first completed transfer; pending checks are cancelled before the tunnel starts. */
+internal suspend fun firstVerifiedExternalServer(
+    servers: List<TunnelServer>,
+    verify: suspend (TunnelServer) -> Boolean,
+    onChecked: (TunnelServer) -> Unit,
+): TunnelServer? = supervisorScope {
+    val answers = Channel<Pair<TunnelServer, Boolean>>(Channel.UNLIMITED)
+    val jobs = servers.map { server -> launch {
+        val passed = try { verify(server) } catch (error: CancellationException) { throw error } catch (_: Exception) { false }
+        answers.send(server to passed)
+    } }
+    try {
+        repeat(servers.size) {
+            val (server, passed) = answers.receive()
+            onChecked(server)
+            if (passed) return@supervisorScope server
+        }
+        null
+    } finally { jobs.forEach { it.cancel() } }
+}
 
 internal fun retainExternalPool(incoming: PreparedTunnelProfile, previous: PreparedTunnelProfile?): PreparedTunnelProfile =
     if (incoming.version == 1 && incoming.externalPool?.servers.isNullOrEmpty() && !incoming.gameOnly &&
