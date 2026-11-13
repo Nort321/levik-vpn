@@ -257,6 +257,14 @@ class AppViewModel(
         }
         viewModelScope.launch {
             repository.tunnelProfile.collect { profile ->
+                val active = vpnController.state.value
+                val externalActive = active.serverId?.let {
+                    it == com.leviknet.vpn.vpn.EXTERNAL_AUTO_ID || it.startsWith("external:")
+                } == true
+                if (externalActive && (profile == null ||
+                        (active.subscriptionId == profile.subscriptionId && !profile.externalPoolAllowed))) {
+                    vpnController.disconnect(SessionEnd(EndBy.SYSTEM, null))
+                }
                 val selected = repository.selectedServerId()
                     ?.takeIf { id -> profile?.servers?.any { it.id == id } == true }
                     ?: profile?.servers?.firstOrNull(TunnelServer::isEligibleForAutomaticSelection)?.id

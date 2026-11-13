@@ -12,9 +12,10 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 
-class XrayConfigBuilder(
+internal class XrayConfigBuilder(
     private val json: Json,
     private val clock: Clock = Clock.systemUTC(),
+    private val geminiAppRouting: GeminiAppRouting = GeminiAppRouting(),
 ) {
     fun buildRelayProxy(
         profile: PreparedTunnelProfile,
@@ -375,7 +376,7 @@ class XrayConfigBuilder(
             "Service route control session is unavailable"
         }
         val effective = if (servicePolicy != null) requireNotNull(serviceRouteSession).apply(config) else config
-        return json.encodeToString(JsonObject.serializer(), effective)
+        return json.encodeToString(JsonObject.serializer(), geminiAppRouting.apply(effective))
     }
 
     /**

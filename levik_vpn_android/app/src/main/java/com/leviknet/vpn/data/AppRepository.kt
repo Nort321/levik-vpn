@@ -601,12 +601,12 @@ class AppRepository(
 
         return try {
             val decoded = json.decodeFromString<PreparedTunnelProfile>(bytes.decodeToString())
-            val sanitized = decoded.copy(servers = decoded.servers.filter {
+            val sanitized = com.leviknet.vpn.vpn.enforceExternalPoolAccess(decoded.copy(servers = decoded.servers.filter {
                 it.engine in supportedTunnelEngines &&
                     (it.engine != TunnelEngineKind.LEVIK_YANDEX || supportsYandex()) &&
                     // Caches from before 2.8.3 may hold Remnawave's stub link as a server.
                     !it.isSubscriptionPlaceholder()
-            })
+            }))
             if (sanitized != decoded) persistPreparedTunnelBlocking(sanitized)
             sanitized
         } catch (_: Exception) {
@@ -1177,10 +1177,11 @@ class AppRepository(
         val relayUnavailable = !subscription.capabilities.whitelistRelay ||
             TunnelEngineKind.LEVIK_RELAY !in supportedTunnelEngines
         val yandexUnavailable = !subscription.capabilities.yandexRelay || !supportsYandex()
-        val sanitized = cached.copy(servers = cached.servers.filter {
+        val filtered = cached.copy(servers = cached.servers.filter {
             (it.engine != TunnelEngineKind.LEVIK_RELAY || !relayUnavailable) &&
                 (it.engine != TunnelEngineKind.LEVIK_YANDEX || !yandexUnavailable)
         }, relayCredentialExpiresAt = if (relayUnavailable) null else cached.relayCredentialExpiresAt)
+        val sanitized = if (relayUnavailable) com.leviknet.vpn.vpn.withoutExternalPool(filtered) else filtered
         if (sanitized != cached) {
             persistPreparedTunnel(sanitized)
             val selected = selectedServerId()

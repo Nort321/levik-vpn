@@ -49,7 +49,7 @@ class TunnelProfilePreparer(
         val availablePairs = (MAX_SERVERS - baseServers.size).coerceAtLeast(0) / 2
         val trustTunnelServers = profile.source?.takeIf { includeTrustTunnel && game.game?.gameConfig?.only != true }
             ?.let { TrustTunnelLinkParser.parse(it.content).take(availablePairs * 2) }.orEmpty()
-        val externalPool = profile.externalPool?.takeIf { includeExternalPool && game.game?.gameConfig?.only != true }?.validated()
+        val externalPool = profile.externalPool?.takeIf { profile.externalPoolAllowed && includeExternalPool && game.game?.gameConfig?.only != true }?.validated()
         val servers = baseServers + trustTunnelServers + if (externalPool?.servers?.isNotEmpty() == true) listOf(externalAutoServer()) else emptyList()
 
         if (servers.isEmpty() && placeholders.isNotEmpty()) {
@@ -69,6 +69,7 @@ class TunnelProfilePreparer(
             servers = servers,
             gameOnly = game.game?.gameConfig?.only == true,
             externalPool = externalPool,
+            externalPoolAllowed = profile.externalPoolAllowed && includeExternalPool && game.game?.gameConfig?.only != true,
         )
     }
 

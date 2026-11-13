@@ -22,6 +22,7 @@ data class TunnelProfile(
     /** Levik Game access: which links of [source] are game nodes (GameProfile.kt). */
     val game: TunnelGameAccess? = null,
     val externalPool: ExternalServerPool? = null,
+    val externalPoolAllowed: Boolean = false,
 )
 
 @Serializable
@@ -230,6 +231,7 @@ data class PreparedTunnelProfile(
     /** Local session binding; never sent as part of the server policy. */
     val serviceRouteOwner: String? = null,
     val externalPool: ExternalServerPool? = null,
+    val externalPoolAllowed: Boolean = false,
 )
 
 @Serializable

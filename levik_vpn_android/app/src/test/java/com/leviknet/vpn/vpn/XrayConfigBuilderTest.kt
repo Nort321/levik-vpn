@@ -32,6 +32,42 @@ class XrayConfigBuilderTest {
         assertTrue(rules.any { it["inboundTag"]?.jsonArray?.any { tag -> tag.jsonPrimitive.content == "levik-external-dns-query" } == true &&
             it["outboundTag"]?.jsonPrimitive?.content == selected.tag })
     }
+    @Test fun `Gemini QUIC fallback is scoped to its UID and Google app Gemini backends`() {
+        val selected = server("a".repeat(64), "server-a")
+        val profile = PreparedTunnelProfile(1, "profile", "subscription", "2026-07-29T11:59:00Z", servers = listOf(selected))
+        val builder = XrayConfigBuilder(json, geminiAppRouting = GeminiAppRouting(10101, 10102))
+        val config = json.parseToJsonElement(builder.build(profile, selected.id, 42)).jsonObject
+        val rules = config.getValue("routing").jsonObject.getValue("rules").jsonArray.map { it.jsonObject }
+        val scoped = rules.filter { "process" in it }
+        assertEquals(2, scoped.size)
+        for (rule in scoped) {
+            assertEquals("udp", rule.getValue("network").jsonPrimitive.content)
+            assertEquals("443", rule.getValue("port").jsonPrimitive.content)
+            assertEquals("levik-block", rule.getValue("outboundTag").jsonPrimitive.content)
+            assertEquals(config.getValue("inbounds").jsonArray.single().jsonObject.getValue("tag"),
+                rule.getValue("inboundTag").jsonArray.single())
+        }
+        assertEquals(listOf("10101"), scoped.first().getValue("process").jsonArray.map { it.jsonPrimitive.content })
+        assertFalse("domain" in scoped.first())
+        val googleRule = scoped.last()
+        assertEquals("10102", googleRule.getValue("process").jsonArray.single().jsonPrimitive.content)
+        val domains = googleRule.getValue("domain").jsonArray.map { it.jsonPrimitive.content }
+        assertTrue("full:robinfrontend-pa.googleapis.com" in domains)
+        assertFalse(domains.any { it in setOf("domain:google.com", "domain:googleapis.com", "domain:gstatic.com") })
+        assertEquals(scoped, rules.take(2))
+        assertEquals(selected.tag, config.getValue("outbounds").jsonArray.first().jsonObject.getValue("tag").jsonPrimitive.content)
+    }
+
+    @Test fun `missing or shared application UID never installs a broad UDP block`() {
+        val selected = server("a".repeat(64), "server-a")
+        val profile = PreparedTunnelProfile(1, "profile", "subscription", "2026-07-29T11:59:00Z", servers = listOf(selected))
+        for (policy in listOf(GeminiAppRouting(), GeminiAppRouting(-1, -1), GeminiAppRouting(10102, 10102))) {
+            val config = json.parseToJsonElement(XrayConfigBuilder(json, geminiAppRouting = policy).build(profile, selected.id, 42)).jsonObject
+            val scoped = config.getValue("routing").jsonObject.getValue("rules").jsonArray.map { it.jsonObject }.filter { "process" in it }
+            assertTrue(scoped.all { "domain" in it })
+        }
+    }
+
     private val json = Json
     private val builder = XrayConfigBuilder(
         json = json,

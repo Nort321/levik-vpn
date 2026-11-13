@@ -3,6 +3,7 @@ package com.leviknet.vpn.vpn
 import com.leviknet.vpn.core.security.DeviceIdentity
 import libXray.DialerController
 import libXray.LibXray
+import libXray.ProcessFinder
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -21,12 +22,15 @@ import kotlin.concurrent.withLock
 
 class XrayRuntime(
     private val json: Json,
+    processFinder: ProcessFinder? = null,
+    processFinderSdk: Long = 0,
 ) {
     init {
         // libXray's generated Java wrapper does not load the Go JNI library itself.
         // Load it before the first static/native method call.
         if (System.getProperty("java.vm.name")?.contains("Dalvik", ignoreCase = true) == true) {
             System.loadLibrary("gojni")
+            if (processFinder != null) LibXray.registerProcessFinder(processFinder, processFinderSdk)
         }
     }
 

@@ -848,6 +848,7 @@ class LevikVpnService : VpnService() {
     private var lastExternalServerId: String? = null
 
     private suspend fun checkExternalServers(profile: PreparedTunnelProfile, network: Network, generation: Long, dns: String?): TunnelServer {
+        require(profile.externalPoolAllowed) { "Безлимитные серверы доступны только с LTE-подпиской" }
         val servers = profile.externalPool?.validated()?.servers.orEmpty().sortedBy { it.id != lastExternalServerId }
         require(servers.isNotEmpty()) { "Нет сохранённого списка безлимитных серверов. Обновите подписку при доступном интернете." }
         val checked = mutableSetOf<String>()
@@ -858,7 +859,7 @@ class LevikVpnService : VpnService() {
             check(serviceCommands.permitsConnection(generation)) { "Connection was superseded" }
             SmartRouteProbeConfig(batch, filesDir).use { config ->
                 // The same transport transforms as the final core, stripped of its TUN and listeners below.
-                val base = container.json.parseToJsonElement(XrayConfigBuilder(container.json).build(
+                val base = container.json.parseToJsonElement(XrayConfigBuilder(container.json, geminiAppRouting = geminiAppRouting(this@LevikVpnService)).build(
                     profile = profile.copy(servers = batch, serviceRoutes = null, serviceRouteOwner = null),
                     selectedServerId = batch.first().id, tunFileDescriptor = 0,
                     antiDpiEnabled = container.settings.antiDpiEnabled.value,
@@ -1088,7 +1089,7 @@ class LevikVpnService : VpnService() {
                                 else { smartAutoNativeProbes = smartAutoNativeProbes + prepared; true }
                             }
                             if (!accepted) { prepared.close(); throw CancellationException("Connection was superseded during probe setup") }
-                            converted += XrayConfigBuilder(container.json).withTuicProxy(profile, candidate.id, prepared.proxy).servers.first()
+                            converted += XrayConfigBuilder(container.json, geminiAppRouting = geminiAppRouting(this@LevikVpnService)).withTuicProxy(profile, candidate.id, prepared.proxy).servers.first()
                         }
                     }
                 }
@@ -1114,7 +1115,7 @@ class LevikVpnService : VpnService() {
                 tunFileDescriptor: Int,
                 antiDpiEnabled: Boolean,
             ): String {
-                val base = XrayConfigBuilder(container.json).build(
+                val base = XrayConfigBuilder(container.json, geminiAppRouting = geminiAppRouting(this@LevikVpnService)).build(
                 profile = buildProfile,
                 selectedServerId = selected.id,
                 tunFileDescriptor = tunFileDescriptor,
@@ -1171,7 +1172,7 @@ class LevikVpnService : VpnService() {
                     configFactory = RelayXrayConfigFactory { tunFileDescriptor, proxy ->
                         // TLS fragmentation applies to TCP; the QUIC sidecar hop never uses it.
                         regularXrayConfig(
-                            XrayConfigBuilder(container.json).withTuicProxy(profile, selected.id, proxy),
+                            XrayConfigBuilder(container.json, geminiAppRouting = geminiAppRouting(this@LevikVpnService)).withTuicProxy(profile, selected.id, proxy),
                             tunFileDescriptor,
                             antiDpiEnabled = false,
                         )
@@ -1185,7 +1186,7 @@ class LevikVpnService : VpnService() {
                     config = requireNotNull(selected.trustTunnelConfig) { "TrustTunnel server has no configuration" },
                     configFactory = RelayXrayConfigFactory { fd, proxy ->
                         regularXrayConfig(
-                            XrayConfigBuilder(container.json).withSocksProxy(profile, selected.id, selected.engine, proxy),
+                            XrayConfigBuilder(container.json, geminiAppRouting = geminiAppRouting(this@LevikVpnService)).withSocksProxy(profile, selected.id, selected.engine, proxy),
                             fd,
                             antiDpiEnabled = false,
                         )
@@ -1205,7 +1206,7 @@ class LevikVpnService : VpnService() {
                     config = gameConfig,
                     preferredExitId = container.settings.gameExitId.value,
                     configFactory = GameXrayConfigFactory { tunFileDescriptor, endpoint ->
-                        XrayConfigBuilder(container.json).buildGame(
+                        XrayConfigBuilder(container.json, geminiAppRouting = geminiAppRouting(this@LevikVpnService)).buildGame(
                             config = gameConfig,
                             tunFileDescriptor = tunFileDescriptor,
                             endpoint = endpoint,
@@ -1228,7 +1229,7 @@ class LevikVpnService : VpnService() {
                     },
                     allowInteractiveVkAuth = manualConnection,
                     configFactory = RelayXrayConfigFactory { tunFileDescriptor, proxy ->
-                        XrayConfigBuilder(container.json).buildRelayProxy(
+                        XrayConfigBuilder(container.json, geminiAppRouting = geminiAppRouting(this@LevikVpnService)).buildRelayProxy(
                             profile = profile,
                             tunFileDescriptor = tunFileDescriptor,
                             proxy = proxy,
@@ -1255,7 +1256,7 @@ class LevikVpnService : VpnService() {
                         "Yandex server has no bootstrap configuration"
                     },
                     configFactory = RelayXrayConfigFactory { tunFileDescriptor, proxy ->
-                        XrayConfigBuilder(container.json).buildRelayProxy(
+                        XrayConfigBuilder(container.json, geminiAppRouting = geminiAppRouting(this@LevikVpnService)).buildRelayProxy(
                             profile = profile,
                             resolveTargets = true,
                             tunFileDescriptor = tunFileDescriptor,
@@ -3214,7 +3215,7 @@ class LevikVpnService : VpnService() {
             val dnsProvider = DnsProvider.CLOUDFLARE
             val request = TunnelEngineRequest.Xray(
                 configFactory = XrayConfigFactory { tunFileDescriptor ->
-                    XrayConfigBuilder(container.json).buildKillSwitchConfig(tunFileDescriptor)
+                    XrayConfigBuilder(container.json, geminiAppRouting = geminiAppRouting(this@LevikVpnService)).buildKillSwitchConfig(tunFileDescriptor)
                 },
                 tunPlan = xrayTunPlan(
                     primaryDns = dnsProvider.primaryIpv4,

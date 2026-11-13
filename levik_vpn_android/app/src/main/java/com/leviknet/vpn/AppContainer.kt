@@ -83,7 +83,9 @@ class AppContainer(application: Application) {
     val settings = AppSettings(application)
     val russianRoutingData = RussianRoutingData(application)
     val lteRoutingData = LteRoutingData(application)
-    val xrayRuntime = XrayRuntime(json)
+    val xrayRuntime = XrayRuntime(
+        json, com.leviknet.vpn.vpn.AndroidProcessFinder(application), android.os.Build.VERSION.SDK_INT.toLong(),
+    )
     val tunnelEngineRegistry = createTunnelEngineRegistry(
         xrayRuntime = xrayRuntime,
         nativeLibraryDir = application.applicationInfo.nativeLibraryDir.orEmpty(),

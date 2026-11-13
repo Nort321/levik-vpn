@@ -35,9 +35,20 @@ class ExternalServerPoolTest {
     }
     private fun pool(servers: List<TunnelServer>) = ExternalServerPool(1, "2", "2026-11-12T00:00:00Z", servers)
 
+    @Test fun `explicit denial removes the host and credentials and cannot restore old cache`() {
+        val previous = PreparedTunnelProfile(1, "p", "s", "2026-11-12T00:00:00Z",
+            servers = listOf(externalAutoServer()), externalPool = pool(listOf(server())), externalPoolAllowed = true)
+        val denied = retainExternalPool(previous.copy(externalPoolAllowed = false, externalPool = null), previous)
+        assertNull(denied.externalPool)
+        assertTrue(denied.servers.isEmpty())
+        assertFalse(denied.externalPoolAllowed)
+        assertNull(retainExternalPool(denied, previous).externalPool)
+        assertNull(enforceExternalPoolAccess(previous.copy(externalPoolAllowed = false)).externalPool)
+    }
+
     @Test fun `the full 326-node catalog survives saved profile serialization outside the visible list`() {
         val catalog = pool((0 until 326).map { server(it) }).validated()
-        val prepared = PreparedTunnelProfile(1, "p", "s", "2026-11-12T00:00:00Z", servers = listOf(externalAutoServer()), externalPool = catalog)
+        val prepared = PreparedTunnelProfile(1, "p", "s", "2026-11-12T00:00:00Z", servers = listOf(externalAutoServer()), externalPool = catalog, externalPoolAllowed = true)
         val restored = Json.decodeFromString<PreparedTunnelProfile>(Json.encodeToString(PreparedTunnelProfile.serializer(), prepared))
         assertEquals(326, restored.externalPool?.servers?.size)
         assertEquals(listOf(EXTERNAL_AUTO_ID), restored.servers.map { it.id })
@@ -62,7 +73,7 @@ class ExternalServerPoolTest {
         assertTrue(pool(listOf(unsafe)).validated().servers.isEmpty())
     }
     @Test fun `a refresh without a pool preserves the saved list for the same subscription only`() {
-        val previous = PreparedTunnelProfile(1, "p", "one", "2026-11-12T00:00:00Z", servers = listOf(externalAutoServer()), externalPool = pool(listOf(server())))
+        val previous = PreparedTunnelProfile(1, "p", "one", "2026-11-12T00:00:00Z", servers = listOf(externalAutoServer()), externalPool = pool(listOf(server())), externalPoolAllowed = true)
         val refreshed = previous.copy(profileId = "new", servers = listOf(server(2)), externalPool = null)
         val retained = retainExternalPool(refreshed, previous)
         assertEquals(previous.externalPool, retained.externalPool)
@@ -72,7 +83,7 @@ class ExternalServerPoolTest {
     }
     @Test fun `external selection is available independently of Game engine support`() {
         val raw = TunnelProfile(1, profileId = "p", subscriptionId = "one", issuedAt = "2026-11-12T00:00:00Z",
-            externalPool = pool((0 until 326).map { server(it) }))
+            externalPool = pool((0 until 326).map { server(it) }), externalPoolAllowed = true)
         val prepared = TunnelProfilePreparer(XrayRuntime(Json), includeExternalPool = true).prepare(raw)
         assertEquals(listOf(EXTERNAL_AUTO_ID), prepared.servers.map { it.id })
         assertEquals(326, prepared.externalPool?.servers?.size)

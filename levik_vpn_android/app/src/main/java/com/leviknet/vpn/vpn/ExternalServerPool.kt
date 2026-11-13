@@ -100,9 +100,18 @@ internal suspend fun firstVerifiedExternalServer(
     } finally { jobs.forEach { it.cancel() } }
 }
 
+internal fun withoutExternalPool(profile: PreparedTunnelProfile): PreparedTunnelProfile = profile.copy(
+    externalPoolAllowed = false, externalPool = null,
+    servers = profile.servers.filter { it.id != EXTERNAL_AUTO_ID && !it.id.startsWith("external:") },
+)
+
+internal fun enforceExternalPoolAccess(profile: PreparedTunnelProfile): PreparedTunnelProfile =
+    if (!profile.externalPoolAllowed || profile.gameOnly) withoutExternalPool(profile) else profile
+
 internal fun retainExternalPool(incoming: PreparedTunnelProfile, previous: PreparedTunnelProfile?): PreparedTunnelProfile =
-    if (incoming.version == 1 && incoming.externalPool?.servers.isNullOrEmpty() && !incoming.gameOnly &&
-        previous?.subscriptionId == incoming.subscriptionId && !previous.externalPool?.servers.isNullOrEmpty()) {
+    if (!incoming.externalPoolAllowed || incoming.gameOnly) withoutExternalPool(incoming)
+    else if (incoming.version == 1 && incoming.externalPool?.servers.isNullOrEmpty() &&
+        previous?.externalPoolAllowed == true && previous.subscriptionId == incoming.subscriptionId && !previous.externalPool?.servers.isNullOrEmpty()) {
         incoming.copy(externalPool = previous.externalPool,
             servers = incoming.servers.filter { it.id != EXTERNAL_AUTO_ID } + externalAutoServer())
     } else incoming
