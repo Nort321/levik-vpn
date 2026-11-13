@@ -67,13 +67,24 @@ jobs:
             printf 'ERROR: checkout does not match the release tag.\n' >&2
             exit 1
           fi
+          readonly release_commit="$(git rev-parse HEAD)"
+          if ! git merge-base --is-ancestor "${release_commit}" origin/main; then
+            printf 'ERROR: release commit does not belong to main.\n' >&2
+            exit 1
+          fi
           release_json="$(gh release view "${RELEASE_TAG}" --json assets,isDraft,isPrerelease,tagName,targetCommitish)"
-          python3 - "${release_json}" "${RELEASE_TAG}" <<'PY'
+          python3 - "${release_json}" "${RELEASE_TAG}" "${release_commit}" <<'PY'
           import json
           import sys
 
           release = json.loads(sys.argv[1])
           tag = sys.argv[2]
+          commit = sys.argv[3]
+          # Immutable releases may pin target_commitish to the tag's exact commit.
+          # The tag, main ancestry and signed build provenance bind publication to it.
+          target = release.pop("targetCommitish", None)
+          if target not in {"main", commit}:
+              raise SystemExit("release target does not match main or the immutable tag")
           assets = release.pop("assets", [])
           expected_apk = f"LevikVPN-direct-{tag.removeprefix('v')}.apk"
           if [asset.get("name") for asset in assets] != [expected_apk]:
@@ -82,7 +93,6 @@ jobs:
               "isDraft": False,
               "isPrerelease": False,
               "tagName": tag,
-              "targetCommitish": "main",
           }:
               raise SystemExit("release is not an approved published stable main release")
           PY
